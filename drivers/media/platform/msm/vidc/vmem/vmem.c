@@ -343,8 +343,10 @@ int vmem_allocate(size_t size, phys_addr_t *addr)
 			pr_err("Found bank %d in a wrong state, expected %d, was %d\n",
 					c, BANK_STATE_SLEEP_NO_RET,
 					curr_bank_state);
+			/*
 			rc = -EIO;
 			goto disable_clocks;
+			*/
 		}
 	}
 
@@ -360,9 +362,10 @@ int vmem_allocate(size_t size, phys_addr_t *addr)
 	atomic_inc(&vmem->alloc_count);
 	*addr = (phys_addr_t)vmem->mem.resource->start;
 	return 0;
-
+/*
 disable_clocks:
 	__power_off(vmem);
+*/
 exit:
 	return rc;
 }
