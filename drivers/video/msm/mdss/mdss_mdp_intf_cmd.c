@@ -686,12 +686,12 @@ int mdss_mdp_resource_control(struct mdss_mdp_ctl *ctl, u32 sw_event)
 		break;
 	case MDP_RSRC_CTL_EVENT_EARLY_WAKE_UP:
 		/*
-		 * 1. If the current state is ON, stay in ON and cancel any
-		 *    pending GATE work item.
-		 * 2. If the current state is GATED, stay at GATED and cancel
-		 *    any pending POWER-OFF work item.
-		 * 3. If the current state is POWER-OFF, Schedule a work item to
-		 *    POWER-ON.
+		 * Cancel any work item pending and:
+		 * 1. If the current state is ON, stay in ON.
+		 * 2. If the current state is GATED, stay at GATED.
+		 * 3. If the current state is POWER-OFF, POWER-ON and
+		 *	schedule a work item to POWER-OFF if no
+		 *	kickoffs get scheduled.
 		 */
 
 		/* if panels are off, do not process early wake up */
@@ -699,17 +699,19 @@ int mdss_mdp_resource_control(struct mdss_mdp_ctl *ctl, u32 sw_event)
 			(sctx && __mdss_mdp_cmd_is_panel_power_off(sctx)))
 			break;
 
-		mutex_lock(&ctl->rsrc_lock);
-		if (mdp5_data->resources_state != MDP_RSRC_CTL_STATE_OFF) {
-			if (cancel_work_sync(&ctx->gate_clk_work))
-				pr_debug("%s: %s - gate_work cancelled\n",
-					 __func__, get_sw_event_name(sw_event));
+		/* Cancel GATE Work Item */
+		if (cancel_work_sync(&ctx->gate_clk_work))
+			pr_debug("%s: %s - gate_work cancelled\n",
+				 __func__, get_sw_event_name(sw_event));
 
-			if (cancel_delayed_work_sync(
-					&ctx->delayed_off_clk_work))
-				pr_debug("%s: %s - off work cancelled\n",
-					 __func__, get_sw_event_name(sw_event));
-		} else {
+		/* Cancel OFF Work Item */
+		if (cancel_delayed_work_sync(
+				&ctx->delayed_off_clk_work))
+			pr_debug("%s: %s - off work cancelled\n",
+				 __func__, get_sw_event_name(sw_event));
+
+		mutex_lock(&ctl->rsrc_lock);
+		if (mdp5_data->resources_state == MDP_RSRC_CTL_STATE_OFF) {
 			mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
 			mdss_mdp_ctl_intf_event(ctx->ctl,
 						MDSS_EVENT_PANEL_CLK_CTRL,
@@ -966,11 +968,15 @@ static void clk_ctrl_delayed_off_work(struct work_struct *work)
 		get_clk_pwr_state_name
 		(mdp5_data->resources_state));
 
+	mutex_lock(&ctl->rsrc_lock);
+
 	if (ctl->mfd->split_mode == MDP_DUAL_LM_DUAL_DISPLAY) {
+		mutex_lock(&cmd_clk_mtx);
+
 		if (mdss_mdp_get_split_display_ctls(&ctl, &sctl)) {
 			/* error when getting both controllers, just returnr */
 			pr_err("cannot get both controllers for the split display\n");
-			return;
+			goto exit;
 		}
 
 		/* re-assign to have the correct order in the context */
@@ -979,12 +985,9 @@ static void clk_ctrl_delayed_off_work(struct work_struct *work)
 		if (!ctx || !sctx) {
 			pr_err("invalid %s %s\n",
 				ctx?"":"ctx", sctx?"":"sctx");
-			return;
+			goto exit;
 		}
-		mutex_lock(&cmd_clk_mtx);
 	}
-
-	mutex_lock(&ctl->rsrc_lock);
 
 	if (ctx->autorefresh_init) {
 		/*
@@ -1020,11 +1023,11 @@ static void clk_ctrl_delayed_off_work(struct work_struct *work)
 	mdp5_data->resources_state = MDP_RSRC_CTL_STATE_OFF;
 
 exit:
-	mutex_unlock(&ctl->rsrc_lock);
-
 	/* do this at the end, so we can also protect the global power state*/
 	if (ctl->mfd->split_mode == MDP_DUAL_LM_DUAL_DISPLAY)
 		mutex_unlock(&cmd_clk_mtx);
+
+	mutex_unlock(&ctl->rsrc_lock);
 
 	ATRACE_END(__func__);
 }
@@ -1059,12 +1062,16 @@ static void clk_ctrl_gate_work(struct work_struct *work)
 		ctl->num, get_clk_pwr_state_name
 		(mdp5_data->resources_state));
 
+	mutex_lock(&ctl->rsrc_lock);
+
 	if (ctl->mfd->split_mode == MDP_DUAL_LM_DUAL_DISPLAY) {
+		mutex_lock(&cmd_clk_mtx);
+
 		if (mdss_mdp_get_split_display_ctls(&ctl, &sctl)) {
 			/* error when getting both controllers, just return */
 			pr_err("%s cannot get both cts for the split display\n",
 				__func__);
-			return;
+			goto exit;
 		}
 
 		/* re-assign to have the correct order in the context */
@@ -1073,12 +1080,9 @@ static void clk_ctrl_gate_work(struct work_struct *work)
 		if (!ctx || !sctx) {
 			pr_err("%s ERROR invalid %s %s\n", __func__,
 				ctx?"":"ctx", sctx?"":"sctx");
-			return;
+			goto exit;
 		}
-		mutex_lock(&cmd_clk_mtx);
 	}
-
-	mutex_lock(&ctl->rsrc_lock);
 
 	if (ctx->autorefresh_init) {
 		/*
@@ -1110,11 +1114,11 @@ static void clk_ctrl_gate_work(struct work_struct *work)
 	mdp5_data->resources_state = MDP_RSRC_CTL_STATE_GATE;
 
 exit:
-	mutex_unlock(&ctl->rsrc_lock);
-
 	/* unlock mutex needed for split display */
 	if (ctl->mfd->split_mode == MDP_DUAL_LM_DUAL_DISPLAY)
 		mutex_unlock(&cmd_clk_mtx);
+
+	mutex_unlock(&ctl->rsrc_lock);
 
 	ATRACE_END(__func__);
 }
