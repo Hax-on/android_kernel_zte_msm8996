@@ -596,7 +596,7 @@
 
 				qcom,cpr-pd-bypass-mask = <0x07>;
 				qcom,cpr-fuse-corners = <5>;
-				qcom,cpr-fuse-combos = <2>;
+				qcom,cpr-fuse-combos = <8>;
 				qcom,cpr-corners = <16>;
 
 				qcom,ldo-headroom-voltage = <150000>;
@@ -642,8 +642,20 @@
 
 				qcom,cpr-open-loop-voltage-fuse-adjustment =
 					<0 0 (-10000) (-25000) (-25000)>,
-					<0 0 (-10000) (-25000) (-25000)>;
+					<0 0 (-10000) (-25000) (-25000)>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>;
 				qcom,cpr-closed-loop-voltage-fuse-adjustment =
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
 					<0 0 0 0 0>,
 					<0 0 0 0 0>;
 
@@ -659,7 +671,7 @@
 
 				qcom,cpr-pd-bypass-mask = <0x18>;
 				qcom,cpr-fuse-corners = <5>;
-				qcom,cpr-fuse-combos = <2>;
+				qcom,cpr-fuse-combos = <8>;
 				qcom,cpr-corners = <19>;
 
 				qcom,cpr-corner-fmax-map = <1 2 5 13 19>;
@@ -703,8 +715,20 @@
 
 				qcom,cpr-open-loop-voltage-fuse-adjustment =
 					<0 0 (-45000) (-20000) (-45000)>,
-					<0 0 (-45000) (-20000) (-45000)>;
+					<0 0 (-45000) (-20000) (-45000)>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>;
 				qcom,cpr-closed-loop-voltage-fuse-adjustment =
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
 					<0 0 0 0 0>,
 					<0 0 0 0 0>;
 
@@ -728,7 +752,7 @@
 
 				qcom,cpr-pd-bypass-mask = <0xe0>;
 				qcom,cpr-fuse-corners = <5>;
-				qcom,cpr-fuse-combos = <2>;
+				qcom,cpr-fuse-combos = <8>;
 				qcom,cpr-corners = <25>;
 
 				qcom,ldo-headroom-voltage = <150000>;
@@ -780,8 +804,20 @@
 
 				qcom,cpr-open-loop-voltage-fuse-adjustment =
 					<0 0 0 (-65000) (-20000)>,
-					<0 0 0 (-65000) (-20000)>;
+					<0 0 0 (-65000) (-20000)>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>;
 				qcom,cpr-closed-loop-voltage-fuse-adjustment =
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
+					<0 0 0 0 0>,
 					<0 0 0 0 0>,
 					<0 0 0 0 0>;
 
