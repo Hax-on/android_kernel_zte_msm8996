@@ -75,7 +75,7 @@ static int _read_fw2_block_header(uint32_t *header, uint32_t id,
 #define HEADER_TIME	4
 #define HEADER_SEQUENCE	5
 
-#define MAX_HEADER_SIZE	10
+#define MAX_HEADER_SIZE	12
 
 #define LM_SEQUENCE_ID		1
 #define HWCG_SEQUENCE_ID	2
