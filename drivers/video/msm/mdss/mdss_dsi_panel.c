@@ -564,39 +564,6 @@ end:
 	return 0;
 }
 
-void mdss_dsi_panel_3v_power(struct mdss_panel_data *pdata, int enable)
-{
-	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
-
-	if (pdata == NULL) {
-		pr_err("%s: Invalid input data\n", __func__);
-		return;
-	}
-
-	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
-				panel_data);
-
-	printk("LCD 3v_power GPIO(vsp):%d , Enable:%d\n",ctrl_pdata->lcd_3v_vsp_en_gpio, enable);
-
-	if (enable) {
-		if (gpio_is_valid(ctrl_pdata->lcd_3v_vsp_en_gpio)){
-			//gpio_set_value((ctrl_pdata->lcd_5v_vsp_en_gpio), 1);	
-			gpio_direction_output((ctrl_pdata->lcd_3v_vsp_en_gpio), 1);	
-		}
-		else
-		{
-			pr_debug("%s:%d, lcd_3v_vsp_en_gpio not configured\n",
-			  	 __func__, __LINE__);
-		}
-		msleep(5);
-		
-	} else {
-		if (gpio_is_valid(ctrl_pdata->lcd_3v_vsp_en_gpio))
-			//gpio_set_value((ctrl_pdata->lcd_5v_vsp_en_gpio), 0);
-			gpio_direction_output((ctrl_pdata->lcd_3v_vsp_en_gpio), 0);
-	}
-}
-
 static void mdss_dsi_panel_switch_mode(struct mdss_panel_data *pdata,
 							int mode)
 {

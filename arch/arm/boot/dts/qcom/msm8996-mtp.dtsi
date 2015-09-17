@@ -345,14 +345,13 @@
 };
 
 &mdss_dsi0 {
-	qcom,dsi-pref-prim-pan = <&dsi_SAM_S6E3FA3_SAM_6p0_1080P_video_vid>;
+	qcom,dsi-pref-prim-pan = <&dsi_dual_sharp_video>;
 	pinctrl-names = "mdss_default", "mdss_sleep";
 	pinctrl-0 = <&mdss_dsi_active &mdss_te_active>;
 	pinctrl-1 = <&mdss_dsi_suspend &mdss_te_suspend>;
 	qcom,platform-te-gpio = <&tlmm 10 0>;
 	qcom,platform-reset-gpio = <&tlmm 8 0>;
-	zte,lcd-3v-vsp-enable-gpio = <&tlmm 40 0>;
-	//qcom,platform-bklight-en-gpio = <&pm8994_gpios 14 0>;
+	qcom,platform-bklight-en-gpio = <&pm8994_gpios 14 0>;
 };
 
 &mdss_dsi1 {

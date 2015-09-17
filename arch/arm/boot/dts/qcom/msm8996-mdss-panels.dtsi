@@ -23,7 +23,6 @@
 #include "dsi-panel-sim-dualmipi-cmd.dtsi"
 #include "dsi-panel-nt35597-dsc-wqxga-cmd.dtsi"
 #include "dsi-panel-hx8379a-truly-fwvga-video.dtsi"
-#include "dsi-panel-zte-sam-s6e3fa3-sam-6p0-1080p-video.dtsi"
 
 &soc {
 	dsi_panel_pwr_supply: dsi_panel_pwr_supply {

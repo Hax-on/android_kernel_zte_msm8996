@@ -388,7 +388,6 @@ struct mdss_dsi_ctrl_pdata {
 	int rst_gpio;
 	int disp_en_gpio;
 	int bklt_en_gpio;
-	int lcd_3v_vsp_en_gpio;
 	int mode_gpio;
 	int bklt_ctrl;	/* backlight ctrl */
 	bool pwm_pmi;
@@ -545,7 +544,6 @@ int mdss_dsi_post_clkon_cb(void *priv,
 int mdss_dsi_pre_clkon_cb(void *priv,
 			  enum mdss_dsi_clk_type clk_type,
 			  enum mdss_dsi_clk_state new_state);
-void mdss_dsi_panel_3v_power(struct mdss_panel_data *pdata, int enable);
 int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable);
 void mdss_dsi_phy_disable(struct mdss_dsi_ctrl_pdata *ctrl);
 void mdss_dsi_cmd_test_pattern(struct mdss_dsi_ctrl_pdata *ctrl);
