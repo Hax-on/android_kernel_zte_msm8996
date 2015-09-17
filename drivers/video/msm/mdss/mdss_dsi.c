@@ -1224,7 +1224,9 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 		pr_err("%s:Panel power on failed. rc=%d\n", __func__, ret);
 		goto end;
 	}
-
+	
+	mdss_dsi_panel_3v_power(pdata, 1);
+	
 	ret = mdss_dsi_set_clk_src(ctrl_pdata);
 	if (ret) {
 		pr_err("%s: failed to set clk src. rc=%d\n", __func__, ret);
@@ -3377,7 +3379,20 @@ int dsi_panel_device_register(struct platform_device *ctrl_pdev,
 
 	pinfo->panel_max_fps = mdss_panel_get_framerate(pinfo);
 	pinfo->panel_max_vtotal = mdss_panel_get_vtotal(pinfo);
-
+	
+	ctrl_pdata->lcd_3v_vsp_en_gpio = of_get_named_gpio(ctrl_pdev->dev.of_node,
+		"zte,lcd-3v-vsp-enable-gpio", 0);	
+	if (!gpio_is_valid(ctrl_pdata->lcd_3v_vsp_en_gpio)) {
+		pr_err("%s:%d, qcom,lcd-3v-vsp-enable-gpio not specified\n",
+						__func__, __LINE__);
+	} else {
+		rc = gpio_request(ctrl_pdata->lcd_3v_vsp_en_gpio, "lcd_3v_vsp_en_gpio");
+		if (rc) {
+			pr_err("request lcd_3v_vsp_en_gpio failed, rc=%d\n",
+			       rc);
+		}
+	}
+	
 	rc = mdss_dsi_parse_gpio_params(ctrl_pdev, ctrl_pdata);
 	if (rc) {
 		pr_err("%s: failed to parse gpio params, rc=%d\n",
