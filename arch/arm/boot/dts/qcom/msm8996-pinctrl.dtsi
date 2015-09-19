@@ -1459,16 +1459,16 @@
 		};
 
 		seta_17: seta_17 {
-			mux {
-				pins = "gpio89";
-				function = "qdss_tracedata_a";
-			};
-
-			config {
-				pins = "gpio89";
-				drive-strength = <16>;
-				bias-disable;
-			};
+		//	mux {
+		//		pins = "gpio89";
+		//		function = "qdss_tracedata_a";
+		//	};
+//
+		//	config {
+		//		pins = "gpio89";
+		//		drive-strength = <16>;
+		//		bias-disable;
+		//	};
 		};
 
 		seta_18: seta_18 {
@@ -1732,10 +1732,10 @@
 		};
 
 		tsif0_signals_active: tsif0_signals_active {
-			tsif1_clk {
-				pins = "gpio89"; /* TSIF0 CLK */
-				function = "tsif1_clk";
-			};
+			//tsif1_clk {
+			//	pins = "gpio89"; /* TSIF0 CLK */
+			//	function = "tsif1_clk";
+			//};
 			tsif1_en {
 				pins = "gpio90"; /* TSIF0 Enable */
 				function = "tsif1_en";
@@ -1745,7 +1745,7 @@
 				function = "tsif1_data";
 			};
 			signals_cfg {
-				pins = "gpio89", "gpio90", "gpio91";
+				pins =  "gpio90", "gpio91";
 				drive_strength = <2>;	/* 2 mA */
 				bias-pull-down;		/* pull down */
 			};

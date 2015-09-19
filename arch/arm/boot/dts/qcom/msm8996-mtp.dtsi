@@ -27,6 +27,8 @@
 	};
 };
 
+
+
 &ufs_ice {
         status = "ok";
 };
@@ -604,6 +606,17 @@
 			clocks = <&clock_gcc clk_gcc_blsp2_ahb_clk>,
 				 <&clock_gcc clk_gcc_blsp2_qup6_i2c_apps_clk>;
 		};
+	             gt1x-touchscreen@5d {
+			compatible = "goodix,gt1x";
+			reg = <0x5d>;
+			interrupt-parent = <&tlmm>;
+			interrupts = <13 0x2008>;
+			dvdd-supply = <&pm8994_l14>;
+			avdd-supply = <&pm8994_l22>;
+			//goodix,avdd-gpio = <&tlmm 98 0x00>;
+		       goodix,reset-gpio = <&tlmm 89 0x00>;
+			goodix,irq-gpio = <&tlmm 125 0x00>;
+		};
 	};
 
 	gen-vkeys {
@@ -628,24 +641,15 @@
 			gpio-key,wakeup;
 			debounce-interval = <15>;
 		};
-
-		cam_snapshot {
-			label = "cam_snapshot";
-			gpios = <&pm8994_gpios 4 0x1>;
+		vol_down {
+			label = "volume_down";
+			gpios = <&pm8994_gpios 3 0x1>;
 			linux,input-type = <1>;
-			linux,code = <766>;
+			linux,code = <114>;
 			gpio-key,wakeup;
 			debounce-interval = <15>;
 		};
 
-		cam_focus {
-			label = "cam_focus";
-			gpios = <&pm8994_gpios 5 0x1>;
-			linux,input-type = <1>;
-			linux,code = <528>;
-			gpio-key,wakeup;
-			debounce-interval = <15>;
-		};
 	};
 
 	sound {
@@ -738,7 +742,13 @@
 		qcom,src-sel = <0>;
 		status = "okay";
 	};
-
+	gpio@c200 { /* GPIO 3 */
+		qcom,mode = <0>;
+		qcom,pull = <0>;
+		qcom,vin-sel = <2>;
+		qcom,src-sel = <0>;
+		status = "okay";
+	};
 	gpio@c300 { /* GPIO 4 */
 		qcom,mode = <0>;
 		qcom,pull = <0>;
