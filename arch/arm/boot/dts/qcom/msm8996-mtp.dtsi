@@ -357,12 +357,13 @@
 };
 
 &mdss_dsi1 {
-	qcom,dsi-pref-prim-pan = <&dsi_dual_sharp_video>;
+	qcom,dsi-pref-prim-pan = <&dsi_SAM_S6E3FA3_SAM_6p0_1080P_video_vid>;
 	pinctrl-names = "mdss_default", "mdss_sleep";
 	pinctrl-0 = <&mdss_dsi_active &mdss_te_active>;
 	pinctrl-1 = <&mdss_dsi_suspend &mdss_te_suspend>;
 	qcom,platform-te-gpio = <&tlmm 10 0>;
 	qcom,platform-reset-gpio = <&tlmm 8 0>;
+	zte,lcd-3v-vsp-enable-gpio = <&tlmm 40 0>;
 	qcom,platform-bklight-en-gpio = <&pm8994_gpios 14 0>;
 };
 
@@ -401,12 +402,12 @@
 	qcom,panel-roi-alignment = <360 16 360 16 360 16>;
 };
 
-&dsi_nt35597_dsc_video {
-	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_wled";
+&dsi_SAM_S6E3FA3_SAM_6p0_1080P_video_vid {
+	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_dcs";
 	qcom,mdss-dsi-bl-min-level = <1>;
-	qcom,mdss-dsi-bl-max-level = <4095>;
-	qcom,cont-splash-enabled;
-	qcom,panel-supply-entries = <&dsi_panel_pwr_supply>;
+	qcom,mdss-dsi-bl-max-level = <255>;
+	//qcom,cont-splash-enabled;
+	qcom,panel-supply-entries = <&dsi_panel_pwr_supply_no_labibb>;
 };
 
 &dsi_nt35597_dsc_cmd {

@@ -23,6 +23,7 @@
 #include "dsi-panel-sim-dualmipi-cmd.dtsi"
 #include "dsi-panel-nt35597-dsc-wqxga-cmd.dtsi"
 #include "dsi-panel-hx8379a-truly-fwvga-video.dtsi"
+#include "dsi-panel-zte-sam-s6e3fa3-sam-6p0-1080p-video.dtsi"
 
 &soc {
 	dsi_panel_pwr_supply: dsi_panel_pwr_supply {
@@ -119,7 +120,7 @@
 		23 18 07 08 04 03 04 a0];
 };
 
-&dsi_nt35597_dsc_video {
+&dsi_SAM_S6E3FA3_SAM_6p0_1080P_video_vid {
 	qcom,mdss-dsi-panel-timings-8996 = [20 1d 05 07 03 03 04 a0
 		20 1d 05 07 03 03 04 a0
 		20 1d 05 07 03 03 04 a0
