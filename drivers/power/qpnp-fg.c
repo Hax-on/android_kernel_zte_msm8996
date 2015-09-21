@@ -217,11 +217,11 @@ enum fg_mem_data_index {
 
 static struct fg_mem_setting settings[FG_MEM_SETTING_MAX] = {
 	/*       ID                    Address, Offset, Value*/
-	SETTING(SOFT_COLD,       0x454,   0,      100),
-	SETTING(SOFT_HOT,        0x454,   1,      400),
-	SETTING(HARD_COLD,       0x454,   2,      50),
-	SETTING(HARD_HOT,        0x454,   3,      450),
-	SETTING(RESUME_SOC,      0x45C,   1,      0),
+	SETTING(SOFT_COLD,       0x454,   0,      20),
+	SETTING(SOFT_HOT,        0x454,   1,      450),
+	SETTING(HARD_COLD,       0x454,   2,      0),
+	SETTING(HARD_HOT,        0x454,   3,      600),
+	SETTING(RESUME_SOC,      0x45C,   1,      99),
 	SETTING(BCL_LM_THRESHOLD, 0x47C,   2,      50),
 	SETTING(BCL_MH_THRESHOLD, 0x47C,   3,      752),
 	SETTING(TERM_CURRENT,	 0x40C,   2,      250),
@@ -271,8 +271,11 @@ static int fg_est_dump;
 module_param_named(
 	first_est_dump, fg_est_dump, int, S_IRUSR | S_IWUSR
 );
+static char *fg_batt_type_default = "zte_p894a01_3000mah";
+static char *fg_batt_type_batteryid_1 = "ZTE_BATTERY_DATA_ID_1";
 
-static char *fg_batt_type;
+static char *fg_batt_type = "ZTE_BATTERY_DATA_ID_1";//zte add 
+
 module_param_named(
 	battery_type, fg_batt_type, charp, S_IRUSR | S_IWUSR
 );
@@ -446,6 +449,7 @@ struct fg_chip {
 	struct delayed_work	update_sram_data;
 	struct delayed_work	update_temp_work;
 	struct delayed_work	check_empty_work;
+	struct delayed_work	start_update_work;//zte add 
 	char			*batt_profile;
 	u8			thermal_coefficients[THERMAL_COEFF_N_BYTES];
 	u32			cc_cv_threshold_mv;
@@ -1658,6 +1662,8 @@ static int get_monotonic_soc_raw(struct fg_chip *chip)
 		pr_info_ratelimited("raw: 0x%02x\n", cap[0]);
 	return cap[0];
 }
+static int profile_loaded_zte = 0;
+module_param(profile_loaded_zte, int, 0644);
 
 #define EMPTY_CAPACITY		0
 #define DEFAULT_CAPACITY	50
@@ -1713,8 +1719,24 @@ static int64_t get_batt_id(unsigned int battery_id_uv, u8 bid_info)
 }
 
 #define DEFAULT_TEMP_DEGC	250
+//zte add strat
+static unsigned long last_bms_update = 0;
+static void update_sram_data(struct fg_chip *chip, int *resched_ms);
+static void start_update_work_func(struct work_struct *work)
+{
+	struct fg_chip *chip = container_of(work,struct fg_chip,
+				start_update_work.work);
+	int resched_ms;
+	if (time_after(jiffies, last_bms_update+2*HZ)) {
+		update_sram_data(chip,&resched_ms);
+		last_bms_update = jiffies;
+		pr_debug("updating bms sram\n");
+	}
+}
+//zte add end
 static int get_sram_prop_now(struct fg_chip *chip, unsigned int type)
 {
+	schedule_delayed_work(&chip->start_update_work, 0);//zte add 
 	if (fg_debug_mask & FG_POWER_SUPPLY)
 		pr_info("addr 0x%02X, offset %d value %d\n",
 			fg_data[type].address, fg_data[type].offset,
@@ -4332,13 +4354,23 @@ wait:
 		pr_info("battery id = %d\n",
 				get_sram_prop_now(chip, FG_DATA_BATT_ID));
 	profile_node = of_batterydata_get_best_profile(batt_node, "bms",
-							fg_batt_type);
+							fg_batt_type_batteryid_1);
 	if (!profile_node) {
-		pr_err("couldn't find profile handle\n");
+		pr_err("couldn't find profile handle ,battery_type1 is %s\n",fg_batt_type_batteryid_1);
+		profile_node = of_batterydata_get_best_profile(batt_node, "bms",
+							fg_batt_type_default);
+	if (!profile_node) {
+			pr_err("couldn't find profile handle ,battery_type_default is %s\n",fg_batt_type_default);
 		old_batt_type = default_batt_type;
 		rc = -ENODATA;
 		goto fail;
+		}else{
+			fg_batt_type = fg_batt_type_default;
+		}	
+	}else{
+		fg_batt_type = fg_batt_type_batteryid_1;
 	}
+	pr_debug("fg_batt_type is %s\n",fg_batt_type);
 
 	/* read rslow compensation values if they're available */
 	rc = of_property_read_u32(profile_node, "qcom,chg-rs-to-rslow",
@@ -4514,6 +4546,7 @@ done:
 		chip->batt_type = batt_type_str;
 	chip->first_profile_loaded = true;
 	chip->profile_loaded = true;
+	profile_loaded_zte = true;
 	chip->battery_missing = is_battery_missing(chip);
 	update_chg_iterm(chip);
 	update_cc_cv_setpoint(chip);
@@ -6023,7 +6056,7 @@ static int fg_probe(struct spmi_device *spmi)
 	complete_all(&chip->sram_access_revoked);
 	init_completion(&chip->batt_id_avail);
 	dev_set_drvdata(&spmi->dev, chip);
-
+	INIT_DELAYED_WORK(&chip->start_update_work, start_update_work_func); //zte add 
 	spmi_for_each_container_dev(spmi_resource, spmi) {
 		if (!spmi_resource) {
 			pr_err("qpnp_chg: spmi resource absent\n");

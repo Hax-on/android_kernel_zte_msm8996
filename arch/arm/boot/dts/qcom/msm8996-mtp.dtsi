@@ -449,7 +449,7 @@
 /{
 	mtp_batterydata: qcom,battery-data {
 		qcom,batt-id-range-pct = <15>;
-		#include "batterydata-itech-3000mah.dtsi"
+		#include "zte_p894a01_3000mah.dtsi"
 	};
 };
 
@@ -473,7 +473,7 @@
 		compatible = "qcom,smb1351-charger";
 		reg = <0x1d>;
 		qcom,parallel-charger;
-		qcom,float-voltage-mv = <4400>;
+		qcom,float-voltage-mv = <4350>;
 		qcom,recharge-mv = <100>;
 	};
 };

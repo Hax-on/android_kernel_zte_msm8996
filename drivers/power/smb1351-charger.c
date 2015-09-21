@@ -598,6 +598,8 @@ static int smb1351_enable_volatile_writes(struct smb1351_charger *chip)
 
 	return rc;
 }
+static int smb1351_set_flexcharge(struct smb1351_charger *chip);
+static int smb1351_set_otg_mode_power_options(struct smb1351_charger *chip);
 
 static int smb1351_fastchg_current_set(struct smb1351_charger *chip,
 					unsigned int fastchg_current)
@@ -605,7 +607,9 @@ static int smb1351_fastchg_current_set(struct smb1351_charger *chip,
 	int i, rc;
 	bool is_pre_chg = false;
 
-
+	smb1351_set_flexcharge(chip);
+	smb1351_set_otg_mode_power_options(chip);
+	pr_debug("%s:fastchg_current:%d\n",__func__,fastchg_current);
 	if ((fastchg_current < SMB1351_CHG_PRE_MIN_MA) ||
 		(fastchg_current > SMB1351_CHG_FAST_MAX_MA)) {
 		pr_err("bad pre_fastchg current mA=%d asked to set\n",
@@ -807,6 +811,36 @@ static int smb1351_regulator_init(struct smb1351_charger *chip)
 	}
 
 	return rc;
+}
+static int smb1351_set_flexcharge(struct smb1351_charger *chip)
+{
+    int rc;
+	u8 reg = 0, mask = 0;
+    /*set the 0x10 to 0x07 and the 0x14 to 0x9c*/
+    reg = 0x07;
+	mask = LOW_BATT_VOLTAGE_DET_TH_MASK | CHG_CONFIG_MASK | AFVC_IRQ_BIT;
+    /*disable hvdcp function*/
+	rc = smb1351_masked_write(chip, FLEXCHARGER_REG,
+								mask, reg);
+	if (rc) {
+		pr_err("Couldn't disable HVDCP function rc=%d\n", rc);	
+	}
+    return rc;
+}
+static int smb1351_set_otg_mode_power_options(struct smb1351_charger *chip)
+{
+    int rc;
+	u8 reg = 0, mask = 0;
+    reg = 0x9c;
+	mask = INPUT_CURRENT_LIMIT_MASK | OTG_HICCUP_MODE_BIT | SDP_LOW_BATT_FORCE_USB5_OVER_USB1_BIT | MAP_HVDCP_BIT | ADAPTER_CONFIG_MASK;
+    /*disable hvdcp function*/
+	rc = smb1351_masked_write(chip, OTG_MODE_POWER_OPTIONS_REG,
+								mask, reg);
+	if (rc) {
+		pr_err("Couldn't disable HVDCP function rc=%d\n", rc);
+		return rc;
+	}
+    return rc;
 }
 
 static int smb1351_hw_init(struct smb1351_charger *chip)
