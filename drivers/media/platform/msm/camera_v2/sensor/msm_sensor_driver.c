@@ -691,6 +691,12 @@ int32_t msm_sensor_driver_probe(void *setting,
 		slave_info->sensor_id_info = slave_info32->sensor_id_info;
 
 		slave_info->slave_addr = slave_info32->slave_addr;
+/*
+  * by ZTE_YCM_20140909 yi.changming 400006
+  */
+// --->
+	      slave_info->bakeup_slave_addr = slave_info32->bakeup_slave_addr;
+// <---400006
 		slave_info->power_setting_array.size =
 			slave_info32->power_setting_array.size;
 		slave_info->power_setting_array.size_down =
@@ -811,6 +817,12 @@ int32_t msm_sensor_driver_probe(void *setting,
 		slave_info->sensor_id_info.sensor_id_reg_addr;
 	camera_info->sensor_id = slave_info->sensor_id_info.sensor_id;
 	camera_info->sensor_id_mask = slave_info->sensor_id_info.sensor_id_mask;
+/*
+  * by ZTE_YCM_20140909 yi.changming 400006
+  */
+// --->
+	camera_info->sensor_bakeup_slave_addr = slave_info->bakeup_slave_addr;
+// <---400006
 
 	/* Fill CCI master, slave address and CCI default params */
 	if (!s_ctrl->sensor_i2c_client) {

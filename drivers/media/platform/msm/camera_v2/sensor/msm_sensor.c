@@ -101,6 +101,30 @@ static struct msm_cam_clk_info cam_8974_clk_info[] = {
 	[SENSOR_CAM_CLK] = {"cam_clk", 0},
 };
 
+/*
+  * by ZTE_YCM_20140909 yi.changming 400006
+  */
+// --->
+void camera_sensor_address_swap(struct msm_sensor_ctrl_t *s_ctrl)
+{
+
+	uint16_t temp;
+	
+	temp = s_ctrl->sensordata->slave_info->sensor_slave_addr;
+	
+   	s_ctrl->sensordata->slave_info->sensor_slave_addr
+		= s_ctrl->sensordata->slave_info->sensor_bakeup_slave_addr;
+	
+	 s_ctrl->sensordata->slave_info->sensor_bakeup_slave_addr = temp;
+
+
+	s_ctrl->sensor_i2c_client->cci_client->sid = 
+						s_ctrl->sensordata->slave_info->sensor_slave_addr >> 1;
+
+	return;
+}
+// --->400006
+
 int msm_sensor_power_down(struct msm_sensor_ctrl_t *s_ctrl)
 {
 	struct msm_camera_power_ctrl_t *power_info;
@@ -170,10 +194,30 @@ int msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 			return rc;
 		rc = msm_sensor_check_id(s_ctrl);
 		if (rc < 0) {
+/*
+  * by ZTE_YCM_20140909 yi.changming 400006
+  */
+// --->
+#if 0
 			msm_camera_power_down(power_info,
 				s_ctrl->sensor_device_type, sensor_i2c_client);
 			msleep(20);
 			continue;
+#else
+			if(s_ctrl->sensordata->slave_info->sensor_bakeup_slave_addr){
+				camera_sensor_address_swap(s_ctrl);
+				rc = msm_sensor_check_id(s_ctrl);
+			}
+			if (rc < 0) {
+				msm_camera_power_down(power_info,
+				s_ctrl->sensor_device_type, sensor_i2c_client);
+				msleep(20);
+				continue;
+			}else{
+				break;
+			}
+#endif
+// --->400006
 		} else {
 			break;
 		}

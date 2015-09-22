@@ -43,6 +43,12 @@ enum msm_bus_perf_setting {
 
 struct msm_camera_slave_info {
 	uint16_t sensor_slave_addr;
+/*
+  * by ZTE_YCM_20140909 yi.changming 400006
+  */
+// --->
+	uint16_t sensor_bakeup_slave_addr;
+// --->400006
 	uint16_t sensor_id_reg_addr;
 	uint16_t sensor_id;
 	uint16_t sensor_id_mask;
