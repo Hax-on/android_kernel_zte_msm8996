@@ -235,7 +235,7 @@
 					  "CAM_STANDBY2",
 					  "CAM_DVDD2",
 					  "CAM_IOVDD2";
-		qcom,sensor-position = <1>;
+		qcom,sensor-position = <0x101>;
 		qcom,sensor-mode = <0>;
 		qcom,cci-master = <1>;
 		status = "ok";
