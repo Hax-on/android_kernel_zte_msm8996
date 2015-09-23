@@ -195,6 +195,12 @@
 			reg = <0 0x82400000 0 0x1c00000>;
 			label = "cont_splash_mem";
 		};
+                /*ZTE_BOOT 20150923*/
+                ramoops_men: ramoops_region@bfc00000 {
+                        compatible = "removed_ramoops_memory";
+                        no-map;
+                        reg = <0 0xbfc00000 0 0x400000>;
+                };
 	};
 };
 
@@ -3335,7 +3341,6 @@
                          qcom,glinkpkt-dev-name = "glink_pkt_loopback";
                  };
          };
-
 	qcom,cache_erp64@6500000 {
 		compatible = "qcom,kryo_cache_erp64";
 		reg = <0x6500000 0x4000>;
@@ -3459,6 +3464,19 @@
 
 		qcom,save-reg;
 	};
+
+        /*ZTE_BOOT 20150923*/
+        qcom,ramoops@8fc00000{
+                compatible = "qcom,ramoops";
+                memory-region = <&ramoops_men>;
+                mem_type = <0>;
+                dump_oops = <1>;
+                size =  <0x0 0x100000>,/*console size*/
+                      <0x0 0x008000>,/*record size*/
+                      <0x0 0x100000>,/*ftrace size*/
+                      <0x0 0x100000>;/*pmsg size*/
+        };
+
 };
 
 &gdsc_venus {
