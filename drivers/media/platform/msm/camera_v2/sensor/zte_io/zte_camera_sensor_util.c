@@ -358,7 +358,15 @@ void msm_sensor_register_sysdev(struct msm_sensor_ctrl_t *s_ctrl)
 	msm_sensor_sysdev_info[index].id = s_ctrl->sensordata->slave_info->sensor_id;
 
 
-	msm_sensor_sysdev_info[index].name = s_ctrl->sensordata->sensor_name;
+ /*
+  * by ZTE_YCM_20140728 yi.changming 400015
+  */
+// --->
+	if(s_ctrl->sensordata->sensor_module_name)
+		msm_sensor_sysdev_info[index].name = s_ctrl->sensordata->sensor_module_name;
+	else
+		msm_sensor_sysdev_info[index].name = s_ctrl->sensordata->sensor_name;
+  // <---400015
 
   
 	msm_sensor_sysdev_info[index].position = s_ctrl->sensordata->sensor_info->position;

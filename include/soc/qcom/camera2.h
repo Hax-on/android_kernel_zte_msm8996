@@ -151,6 +151,14 @@ struct msm_camera_sensor_board_info {
 	const char *sensor_name;
 	const char *eeprom_name;
 	const char *actuator_name;
+ /*
+  * by ZTE_YCM_20140728 yi.changming 400015
+  */
+// --->
+	const char *sensor_module_name;
+	const char *chromtix_lib_name;
+	const char *default_chromtix_lib_name;
+// <---400015
 	const char *ois_name;
 	struct msm_camera_slave_info *slave_info;
 	struct msm_camera_csi_lane_params *csi_lane_params;
