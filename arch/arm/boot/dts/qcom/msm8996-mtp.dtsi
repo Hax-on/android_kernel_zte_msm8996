@@ -13,6 +13,7 @@
 #include "msm8996-pinctrl.dtsi"
 //#include "msm8996-camera-sensor-mtp.dtsi"  
 #include "zte-camera-sensor-mtp.dtsi" //yichangming 400001
+#include "zte-usb-type-c.dtsi"
 
 / {
 	bluetooth: bt_qca6174 {
@@ -727,16 +728,16 @@
 		status = "okay";
 	};
 
-	gpio@cd00 { /* GPIO 14 - lcd_bklt_reg_en */
-		qcom,mode = <1>;	/* DIGITAL OUT */
-		qcom,output-type = <0>;		/* CMOS logic */
-		qcom,invert = <1>; 	/* output hight initially */
-		qcom,vin-sel = <2>;	/* 1.8 */
-		qcom,src-sel = <0>;	/* CONSTANT */
-		qcom,out-strength = <1>;	/* Low drive strength */
-		qcom,master-en = <1>;	/* ENABLE GPIO */
-		status = "okay";
-	};
+	/*gpio@cd00 {  GPIO 14 - lcd_bklt_reg_en */
+		/*qcom,mode = <1>;	 DIGITAL OUT */
+		/*qcom,output-type = <0>;		 CMOS logic */
+		/*qcom,invert = <1>; 	 output hight initially */
+		/*qcom,vin-sel = <2>;	 1.8 */
+		/*qcom,src-sel = <0>;	 CONSTANT */
+		/*qcom,out-strength = <1>;	 Low drive strength */
+		/*qcom,master-en = <1>;	 ENABLE GPIO */
+		/*status = "okay"; */
+	/*}; */
 	gpio@c100 { /* GPIO 2 */
 		qcom,mode = <0>;
 		qcom,pull = <0>;
