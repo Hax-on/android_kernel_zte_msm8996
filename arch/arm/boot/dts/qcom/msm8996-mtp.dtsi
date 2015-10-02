@@ -654,31 +654,6 @@
 
 	};
 
-    spi@7579000 {
-                vfs74xx@0 {
-                        compatible = "validity,metallica";
-                        reg = <0x0>;
-                        spi-max-frequency = <19200000>;
-                        interrupt-parent = <&tlmm>;
-                        interrupts = <123 0x2>;
-						qcom,qup_id=<5>;
-                        drdy-gpio = <&tlmm 123 0>;
-                        sleep-gpio = <&tlmm 39 0>;
-                        cs-gpio = <&tlmm 83 0>;
-                        id-gpio = <&tlmm 91 0>;
-                        vdd-1p8-en-gpio = <&tlmm 121 0>;
-                        vdd-3p3-en-gpio = <&tlmm 122 0>;
-                        /* fpc,vddtx_mv = <3300>;  */
-                        /* fpc,txout_boost_enable; */
-                        /*vcc_spi-supply = <&pm8941_s3>;*/
-                        /*vdd_ana-supply = <&pm8994_lvs2>;*/
-                        /*vdd_io-supply = <&pm8994_lvs2>;*/
-                        clock-names = "spi5_iface_clk", "spi5_icore_clk";
-                        clocks = <&clock_gcc clk_gcc_blsp1_ahb_clk>,
-                         <&clock_gcc clk_gcc_blsp1_qup4_spi_apps_clk>;
-                };
-        };	
-	
 	sound {
 		qcom,model = "msm8996-tomtom-mtp-snd-card";
 		qcom,hdmi-audio-rx;

@@ -39,7 +39,6 @@
 		i2c8 = &i2c_8;
 		i2c12 = &i2c_12;
 		spi0 = &spi_0;
-		spi5 = &spi_5;
 	};
 
 	psci {
@@ -318,28 +317,7 @@
 		pinctrl-0 = <&i2c_12_active>;
 		pinctrl-1 = <&i2c_12_sleep>;
 	};
-	
-	spi_5: spi@7579000 { /* BLSP1 QUP4 */
-                compatible = "qcom,spi-qup-v2";
-                #address-cells = <1>;
-                #size-cells = <0>;
-                reg-names = "spi_physical";
-                reg = <0x7579000 0x1000>;
-                interrupt-names = "spi_irq";
-                interrupts = <0 99 0>;
-                spi-max-frequency = <19200000>;
 
-                qcom,infinite-mode = <0>;
-                qcom,master-id = <86>;
-                qcom,use-pinctrl;
-                pinctrl-names = "spi_default", "spi_sleep";
-                pinctrl-0 = <&spi_5_active>;
-                pinctrl-1 = <&spi_5_sleep>;
-
-                clock-names = "iface_clk", "core_clk";
-                clocks = <&clock_gcc clk_gcc_blsp1_ahb_clk>,
-                         <&clock_gcc clk_gcc_blsp1_qup4_spi_apps_clk>;
-        };
 
 	dma_blsp1: qcom,sps-dma@0x7544000{ /* BLSP1 */
 		#dma-cells = <4>;
