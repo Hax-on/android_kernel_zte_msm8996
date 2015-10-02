@@ -207,6 +207,11 @@ source "drivers/input/touchscreen/Kconfig"
 
 source "drivers/input/misc/Kconfig"
 
+#shilinfeng for fp 20150828
+source "drivers/input/fingerprint/synaptics_vfs/Kconfig"
+
+source "drivers/input/fingerprint/fpc/Kconfig"
+
 endif
 
 menu "Hardware I/O ports"
