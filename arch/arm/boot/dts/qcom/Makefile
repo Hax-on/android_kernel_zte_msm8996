@@ -36,7 +36,8 @@ dtb-$(CONFIG_ARCH_MSM8996) += msm8996-v2-pmi8994-cdp.dtb \
 	apq8096-v2-liquid.dtb \
 	apq8096-v3-liquid.dtb \
 	apq8096-v2-dragonboard.dtb \
-	apq8096-v3-dragonboard.dtb
+	apq8096-v3-dragonboard.dtb \
+        zte-msm8996-v2-pmi8994-ailsa_ii.dtb
 
 dtb-$(CONFIG_ARCH_MSMCOBALT) += msmcobalt-sim.dtb
 
