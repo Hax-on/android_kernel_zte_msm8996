@@ -1221,12 +1221,12 @@
 		cam_sensor_rear2_active: cam_sensor_rear2_active {
 			/* RESET, STANDBY */
 			mux {
-				pins = "gpio63","gpio62";
+				pins = "gpio131","gpio131";
 				function = "gpio";
 			};
 
 			config {
-				pins = "gpio63","gpio62";
+				pins = "gpio131","gpio131";
 				bias-disable; /* No PULL */
 				drive-strength = <2>; /* 2 MA */
 			};
@@ -1236,12 +1236,12 @@
 			cam_sensor_rear2_suspend: cam_sensor_rear2_suspend{
 				/* RESET, STANDBY */
 				mux {
-					pins = "gpio63","gpio62";
+					pins = "gpio131","gpio131";
 					function = "gpio";
 				};
 
 				config {
-					pins = "gpio63","gpio62";
+					pins = "gpio131","gpio131";
 					bias-disable; /* No PULL */
 					drive-strength = <2>; /* 2 MA */
 				};
@@ -1362,12 +1362,12 @@
 
 		seta_5: seta_5 {
 			mux {
-				pins = "gpio63";
+				pins = "gpio131";
 				function = "qdss_tracedata_a";
 			};
 
 			config {
-				pins = "gpio63";
+				pins = "gpio131";
 				drive-strength = <16>;
 				bias-disable;
 			};
@@ -1427,12 +1427,12 @@
 
 		seta_10: seta_10 {
 			mux {
-				pins = "gpio74";
+				pins = "gpio131";
 				function = "qdss_tracedata_a";
 			};
 
 			config {
-				pins = "gpio74";
+				pins = "gpio131";
 				drive-strength = <16>;
 				bias-disable;
 			};
@@ -1583,12 +1583,12 @@
 
 		setb_4: setb_4 {
 			mux {
-				pins = "gpio16";
+				pins = "gpio131";
 				function = "qdss_tracedata_b";
 			};
 
 			config {
-				pins = "gpio16";
+				pins = "gpio131";
 				drive-strength = <16>;
 				bias-disable;
 			};
