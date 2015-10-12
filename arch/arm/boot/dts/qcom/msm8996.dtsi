@@ -746,12 +746,23 @@
 		qcom,client-id = <0x011013ed>;
 	};
 
+/*
 	wcd9xxx_intc: wcd9xxx-irq {
 		compatible = "qcom,wcd9xxx-irq";
 		interrupt-controller;
 		#interrupt-cells = <1>;
 		interrupt-parent = <&tlmm>;
 		qcom,gpio-connect = <&tlmm 54 0>;
+	};
+*/
+	ak49xx_intc: ak49xx-irq {
+		compatible = "akm,ak49xx-irq";
+		interrupt-controller;
+		#interrupt-cells = <1>;
+		interrupt-parent = <&tlmm>;
+		qcom,gpio-connect = <&tlmm 54 0>;
+		es804,cdc-ldo-gpio = <&tlmm 16 0>;
+		es804,cdc-reset-gpio = <&tlmm 74 0>;
 	};
 
 	clock_audio: audio_ext_clk {
@@ -829,6 +840,51 @@
 			elemental-addr = [ff ff ff fe 17 02];
 		};
 
+		ak4961_codec {
+			compatible = "qcom,ak4961-slim-pgd";
+			elemental-addr = [00 02 61 49 DD 01];
+
+			interrupt-parent = <&ak49xx_intc>;
+			interrupts = <0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
+				      17 18 19 20 21 22 23 24 25 26 27 28 29
+				      30 31>;
+
+			akm,cdc-reset-gpio = <&tlmm 64 0>;
+                    akm,cdc-ldo-gpio = <&tlmm 63 0>;
+		      akm,cdc-cif1-gpio=<&tlmm 62 0>;
+
+			clock-names = "cdc_clk";
+			clocks = <&clock_audio clk_audio_pmi_clk>;
+
+			// cdc-vdd-buck-supply = <&pm8994_s4>;
+			// qcom,cdc-vdd-buck-voltage = <1800000 1800000>;
+			// qcom,cdc-vdd-buck-current = <650000>;
+
+			cdc-vdd-tx-h-supply = <&pm8994_s4>;
+			akm,cdc-vdd-tx-h-voltage = <1800000 1800000>;
+			akm,cdc-vdd-tx-h-current = <20000>;
+
+			cdc-vdd-rx-h-supply = <&pm8994_s4>;
+			akm,cdc-vdd-rx-h-voltage = <1800000 1800000>;
+			akm,cdc-vdd-rx-h-current = <20000>;
+
+			cdc-vdd-px-supply = <&pm8994_s4>;
+			akm,cdc-vdd-px-voltage = <1800000 1800000>;
+			akm,cdc-vdd-px-current = <45000>;
+
+			akm,cdc-static-supplies = "cdc-vdd-tx-h",
+						   "cdc-vdd-rx-h",
+						   "cdc-vdd-px";
+
+			akm,cdc-micbias-mpwr1-mv = <0>;
+			akm,cdc-micbias-mpwr2-mv = <2800>;
+
+			akm,cdc-mclk-clk-rate = <9600000>;
+			akm,cdc-slim-ifd = "ak4961-slim-ifd";
+			akm,cdc-slim-ifd-elemental-addr = [00 00 61 49 DD 01];
+		};
+
+#if 0
 		tomtom_codec {
 			compatible = "qcom,tomtom-slim-pgd";
 			elemental-addr = [00 01 30 01 17 02];
@@ -946,6 +1002,7 @@
 			qcom,cdc-dmic-sample-rate = <4800000>;
 			qcom,cdc-mad-dmic-rate = <600000>;
 		};
+#endif
 	};
 
 	sdhc_1: sdhci@7464900 {
@@ -2801,6 +2858,52 @@
 		hyplog-size-offset = <0x414>;    /* 0x066BFB34 */
 	};
 
+// ZTE_chenjun
+	sound-ak4961 {
+		compatible = "qcom,msm8996-asoc-snd-tomtom";
+		#if 1
+		qcom,model = "msm8996-ak4961-snd-card";
+		#else
+		qcom,model = "msm8996-test-snd-card";
+		#endif
+
+		qcom,audio-routing =
+			"RX_BIAS", "MCLK";
+
+		qcom,tomtom-mclk-clk-freq = <9600000>;
+		asoc-platform = <&pcm0>, <&pcm1>, <&pcm2>, <&voip>, <&voice>,
+				<&loopback>, <&compress>, <&hostless>,
+				<&afe>, <&lsm>, <&routing>, <&cpe>, <&compr>;
+		asoc-platform-names = "msm-pcm-dsp.0", "msm-pcm-dsp.1", "msm-pcm-dsp.2",
+				"msm-voip-dsp", "msm-pcm-voice", "msm-pcm-loopback",
+				"msm-compress-dsp", "msm-pcm-hostless", "msm-pcm-afe",
+				"msm-lsm-client", "msm-pcm-routing", "msm-cpe-lsm",
+				"msm-compr-dsp";
+		asoc-cpu = <&dai_pri_auxpcm>, <&dai_sec_auxpcm>, <&dai_hdmi>, <&dai_mi2s>,
+				<&sb_0_rx>, <&sb_0_tx>, <&sb_1_rx>, <&sb_1_tx>,
+				<&sb_2_rx>, <&sb_2_tx>, <&sb_3_rx>, <&sb_3_tx>,
+				<&sb_4_rx>, <&sb_4_tx>, <&sb_5_tx>, <&afe_pcm_rx>,
+				<&afe_pcm_tx>, <&afe_proxy_rx>, <&afe_proxy_tx>,
+				<&incall_record_rx>, <&incall_record_tx>,
+				<&incall_music_rx>, <&incall_music2_rx>,
+				<&sb_5_rx>;
+		asoc-cpu-names = "msm-dai-q6-auxpcm.1", "msm-dai-q6-auxpcm.2",
+				"msm-dai-q6-hdmi.8", "msm-dai-q6-mi2s.2",
+				"msm-dai-q6-dev.16384", "msm-dai-q6-dev.16385",
+				"msm-dai-q6-dev.16386", "msm-dai-q6-dev.16387",
+				"msm-dai-q6-dev.16388", "msm-dai-q6-dev.16389",
+				"msm-dai-q6-dev.16390", "msm-dai-q6-dev.16391",
+				"msm-dai-q6-dev.16392", "msm-dai-q6-dev.16393",
+				"msm-dai-q6-dev.16395", "msm-dai-q6-dev.224",
+				"msm-dai-q6-dev.225", "msm-dai-q6-dev.241",
+				"msm-dai-q6-dev.240", "msm-dai-q6-dev.32771",
+				"msm-dai-q6-dev.32772", "msm-dai-q6-dev.32773",
+				"msm-dai-q6-dev.32770", "msm-dai-q6-dev.16394";
+		asoc-codec = <&stub_codec>;
+		asoc-codec-names = "msm-stub-codec.1";
+	};
+
+#if 0
 	sound {
 		compatible = "qcom,msm8996-asoc-snd-tomtom";
 		qcom,model = "msm8996-tomtom-snd-card";
@@ -2933,6 +3036,7 @@
 		asoc-codec = <&stub_codec>;
 		asoc-codec-names = "msm-stub-codec.1";
 	};
+#endif
 
 	qcom,msm-adsp-loader {
 		status = "ok";

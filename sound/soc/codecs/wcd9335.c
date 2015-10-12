@@ -610,6 +610,14 @@ struct tasha_priv {
 				      enum wcd9335_codec_event);
 };
 
+// ZTE_chenjun
+#if !defined(CONFIG_SOUNDWIRE_WCD_CTRL)
+int swrm_wcd_notify(struct platform_device *pdev, u32 id, void *data)
+{
+	return 0;
+}
+#endif
+
 int tasha_enable_efuse_sensing(struct snd_soc_codec *codec)
 {
 	tasha_cdc_mclk_enable(codec, true, false);

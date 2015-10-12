@@ -655,6 +655,8 @@
 
 	};
 
+// ZTE_chenjun
+#if 0
 	sound {
 		qcom,model = "msm8996-tomtom-mtp-snd-card";
 		qcom,hdmi-audio-rx;
@@ -704,6 +706,8 @@
 		qcom,us-euro-gpios = <&pm8994_mpps 2 0>;
 		qcom,aux-codec = <&wsa881x_1>, <&wsa881x_2>;
 	};
+#endif
+
 };
 
 &pm8994_gpios {
