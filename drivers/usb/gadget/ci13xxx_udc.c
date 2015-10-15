@@ -77,6 +77,7 @@
 #define USB_MAX_TIMEOUT		25 /* 25msec timeout */
 #define EP_PRIME_CHECK_DELAY	(jiffies + msecs_to_jiffies(1000))
 #define MAX_PRIME_CHECK_RETRY	3 /*Wait for 3sec for EP prime failure */
+#define EXTRA_ALLOCATION_SIZE	256
 
 /* ctrl register bank access */
 static DEFINE_SPINLOCK(udc_lock);
@@ -1653,7 +1654,6 @@ static int ci13xxx_wakeup(struct usb_gadget *_gadget)
 {
 	struct ci13xxx *udc = container_of(_gadget, struct ci13xxx, gadget);
 	unsigned long flags;
-	bool skip_fpr = false;
 	int ret = 0;
 
 	trace();
@@ -1666,21 +1666,7 @@ static int ci13xxx_wakeup(struct usb_gadget *_gadget)
 	}
 	spin_unlock_irqrestore(udc->lock, flags);
 
-	/* Make sure phy driver is done with its bus suspend handling */
-	if (udc->udc_driver->cancel_pending_suspend)
-		udc->udc_driver->cancel_pending_suspend(udc);
-
-	if ((udc->udc_driver->in_lpm != NULL) &&
-	    (udc->udc_driver->in_lpm(udc))) {
-		if (udc->udc_driver->set_fpr_flag) {
-			/* When USB HW is in low-power mode we set a flag
-			 * for the OTG layer to set the FPR bit during the
-			 * low-power mode mode exit sequence.
-			 */
-			udc->udc_driver->set_fpr_flag(udc);
-			skip_fpr = true;
-		}
-	}
+	pm_runtime_get_sync(&_gadget->dev);
 
 	udc->udc_driver->notify_event(udc,
 		CI13XXX_CONTROLLER_REMOTE_WAKEUP_EVENT);
@@ -1689,15 +1675,15 @@ static int ci13xxx_wakeup(struct usb_gadget *_gadget)
 		usb_phy_set_suspend(udc->transceiver, 0);
 
 	spin_lock_irqsave(udc->lock, flags);
-	if (!skip_fpr) {
-		if (!hw_cread(CAP_PORTSC, PORTSC_SUSP)) {
-			ret = -EINVAL;
-			dbg_trace("port is not suspended\n");
-			goto out;
-		}
-		hw_cwrite(CAP_PORTSC, PORTSC_FPR, PORTSC_FPR);
+	if (!hw_cread(CAP_PORTSC, PORTSC_SUSP)) {
+		ret = -EINVAL;
+		dbg_trace("port is not suspended\n");
+		pm_runtime_put_sync(&_gadget->dev);
+		goto out;
 	}
+	hw_cwrite(CAP_PORTSC, PORTSC_FPR, PORTSC_FPR);
 
+	pm_runtime_put_sync(&_gadget->dev);
 out:
 	spin_unlock_irqrestore(udc->lock, flags);
 	return ret;
@@ -2909,70 +2895,6 @@ delegate:
 	}
 }
 
-/**
- * ci13xxx_exit_lpm: Exit controller from low power mode
- * @udc: UDC descriptor
- * @allow_sleep: Are we in preemptible context or not.
- *
- * This function check if controller is in low power mode and if so, exit from
- * the low power mode.
- *
- * In case the controller is in low power mode, registers are not accessible,
- * therefore this function can be used as utility function to ensure exit from
- * low power mode before do registers read/write operations.
- *
- * Return 0 if not in low power mode and read/write operations are safe.
- * Return -EAGAIN in case exit from low power mode was initiated, but it is not
- * safe yet to use read/write operations against the controller registers.
- */
-static int ci13xxx_exit_lpm(struct ci13xxx *udc, bool allow_sleep)
-{
-	if (!udc)
-		return -ENODEV;
-
-	/* Make sure phy driver is done with its bus suspend handling */
-	if (udc->udc_driver->cancel_pending_suspend && allow_sleep)
-		udc->udc_driver->cancel_pending_suspend(udc);
-
-	/* Check if the controller is in low power mode state */
-	if (udc->udc_driver->in_lpm &&
-	    udc->udc_driver->in_lpm(udc) &&
-	    udc->transceiver) {
-
-		dev_dbg(udc->transceiver->dev,
-			"%s: Exit from low power mode\n",
-			__func__);
-
-		/*
-		 * Resume of the controller may be done
-		 * asynchronically in deffered context.
-		 */
-		usb_phy_set_suspend(udc->transceiver, 0);
-
-		/*
-		 * Wait for controller resume to finish in case of non atomic
-		 * context or return EAGAIN otherwise.
-		 */
-		if (allow_sleep) {
-			while (udc->udc_driver->in_lpm(udc))
-				usleep_range(1, 10);
-		} else {
-			/*
-			 * Return EAGAIN only in case controller resume
-			 * was done asynchronically.
-			 */
-			if (udc->udc_driver->in_lpm(udc)) {
-				dev_err(udc->transceiver->dev,
-					"%s: Unable to exit lpm\n",
-					__func__);
-				return -EAGAIN;
-			}
-		}
-	}
-
-	return 0;
-}
-
 /******************************************************************************
  * ENDPT block
  *****************************************************************************/
@@ -3507,7 +3429,6 @@ static int ci13xxx_vbus_session(struct usb_gadget *_gadget, int is_active)
 
 	if (gadget_ready) {
 		if (is_active) {
-			pm_runtime_get_sync(&_gadget->dev);
 			hw_device_reset(udc);
 			if (udc->udc_driver->notify_event)
 				udc->udc_driver->notify_event(udc,
@@ -3520,7 +3441,6 @@ static int ci13xxx_vbus_session(struct usb_gadget *_gadget, int is_active)
 			if (udc->udc_driver->notify_event)
 				udc->udc_driver->notify_event(udc,
 					CI13XXX_CONTROLLER_DISCONNECT_EVENT);
-			pm_runtime_put_sync(&_gadget->dev);
 		}
 	}
 
@@ -3556,7 +3476,6 @@ static int ci13xxx_pullup(struct usb_gadget *_gadget, int is_active)
 {
 	struct ci13xxx *udc = container_of(_gadget, struct ci13xxx, gadget);
 	unsigned long flags;
-	int ret;
 
 	spin_lock_irqsave(udc->lock, flags);
 	udc->softconnect = is_active;
@@ -3567,17 +3486,12 @@ static int ci13xxx_pullup(struct usb_gadget *_gadget, int is_active)
 	}
 	spin_unlock_irqrestore(udc->lock, flags);
 
-	ret = ci13xxx_exit_lpm(udc, true);
-	if (ret) {
-		dev_err(udc->transceiver->dev,
-			"%s: Unable to exit lpm %d, ignore pullup\n",
-			__func__, ret);
-		return ret;
-	}
+	pm_runtime_get_sync(&_gadget->dev);
 
 	spin_lock_irqsave(udc->lock, flags);
 	if (!udc->vbus_active) {
 		spin_unlock_irqrestore(udc->lock, flags);
+		pm_runtime_put_sync(&_gadget->dev);
 		return 0;
 	}
 	if (is_active) {
@@ -3589,6 +3503,8 @@ static int ci13xxx_pullup(struct usb_gadget *_gadget, int is_active)
 		hw_device_state(0);
 	}
 	spin_unlock_irqrestore(udc->lock, flags);
+
+	pm_runtime_put_sync(&_gadget->dev);
 
 	return 0;
 }
@@ -3657,7 +3573,8 @@ static int ci13xxx_start(struct usb_gadget *gadget,
 	udc->status = usb_ep_alloc_request(&udc->ep0in.ep, GFP_KERNEL);
 	if (!udc->status)
 		return -ENOMEM;
-	udc->status_buf = kzalloc(2, GFP_KERNEL); /* for GET_STATUS */
+	udc->status_buf = kzalloc(2 + udc->gadget.extra_buf_alloc,
+				GFP_KERNEL); /* for GET_STATUS */
 	if (!udc->status_buf) {
 		usb_ep_free_request(&udc->ep0in.ep, udc->status);
 		return -ENOMEM;
@@ -3736,7 +3653,6 @@ static int ci13xxx_stop(struct usb_gadget *gadget,
 		spin_unlock_irqrestore(udc->lock, flags);
 		_gadget_stop_activity(&udc->gadget);
 		spin_lock_irqsave(udc->lock, flags);
-		pm_runtime_put(&udc->gadget.dev);
 	}
 
 	spin_unlock_irqrestore(udc->lock, flags);
@@ -3947,6 +3863,9 @@ static int udc_probe(struct ci13xxx_udc_driver *driver, struct device *dev,
 		udc->max_nominal_system_clk_rate =
 					pdata->max_nominal_system_clk_rate;
 		udc->default_system_clk_rate = pdata->default_system_clk_rate;
+		if (pdata->enable_axi_prefetch)
+			udc->gadget.extra_buf_alloc = EXTRA_ALLOCATION_SIZE;
+
 	}
 
 	if (udc->udc_driver->flags & CI13XXX_REQUIRE_TRANSCEIVER) {

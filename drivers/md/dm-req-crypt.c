@@ -872,8 +872,10 @@ static int req_crypt_endio(struct dm_target *ti, struct request *clone,
 
 	/* If it is a write request, do nothing just return. */
 	if (encryption_mode == DM_REQ_CRYPT_ENCRYPTION_MODE_TRANSPARENT
-		&& rq_data_dir(clone) == READ)
+		&& rq_data_dir(clone) == READ) {
+		mempool_free(req_io, req_io_pool);
 		goto submit_request;
+	}
 
 	if (rq_data_dir(clone) == WRITE) {
 		rq_for_each_segment(bvec, clone, iter1) {
@@ -1264,6 +1266,12 @@ static int req_crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	req_scatterlist_pool = mempool_create_slab_pool(MIN_IOS,
 					_req_dm_scatterlist_pool);
 	BUG_ON(!req_scatterlist_pool);
+
+	/*
+	 * If underlying device supports flush, mapped target should
+	 * also allow it
+	 */
+	ti->num_flush_bios = 1;
 
 	err = 0;
 	DMINFO("%s: Mapping block_device %s to dm-req-crypt ok!\n",

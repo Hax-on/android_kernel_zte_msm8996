@@ -308,6 +308,7 @@ struct sdhci_ops {
 	int	(*crypto_engine_cfg)(struct sdhci_host *host,
 				struct mmc_request *mrq, u32 slot);
 	int	(*crypto_engine_reset)(struct sdhci_host *host);
+	void	(*crypto_cfg_reset)(struct sdhci_host *host, unsigned int slot);
 	void	(*set_uhs_signaling)(struct sdhci_host *host, unsigned int uhs);
 	void	(*hw_reset)(struct sdhci_host *host);
 	void    (*adma_workaround)(struct sdhci_host *host, u32 intmask);
@@ -331,6 +332,10 @@ struct sdhci_ops {
 	void	(*enhanced_strobe_mask)(struct sdhci_host *host, bool set);
 	void	(*detect)(struct sdhci_host *host, bool detected);
 	int	(*notify_load)(struct sdhci_host *host, enum mmc_load state);
+	void	(*reset_workaround)(struct sdhci_host *host, u32 enable);
+	void	(*init)(struct sdhci_host *host);
+	void	(*pre_req)(struct sdhci_host *host, struct mmc_request *req);
+	void	(*post_req)(struct sdhci_host *host, struct mmc_request *req);
 };
 
 #ifdef CONFIG_MMC_SDHCI_IO_ACCESSORS

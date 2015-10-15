@@ -571,6 +571,9 @@ static ulong corr_counter_limit = 5;
 /* counter to keep track if common PHY needs to be configured */
 static u32 num_rc_on;
 
+/* global lock for PCIe common PHY */
+static struct mutex com_phy_lock;
+
 /* Table to track info of PCIe devices */
 static struct msm_pcie_device_info
 	msm_pcie_dev_tbl[MAX_RC_NUM * MAX_DEVICE_NUM];
@@ -595,7 +598,7 @@ static struct msm_pcie_vreg_info_t msm_pcie_vreg_info[MSM_PCIE_MAX_VREG] = {
 /* GPIOs */
 static struct msm_pcie_gpio_info_t msm_pcie_gpio_info[MSM_PCIE_MAX_GPIO] = {
 	{"perst-gpio",		0, 1, 0, 0, 1},
-	{"wake-gpio",		0, 0, 0, 0, 1},
+	{"wake-gpio",		0, 0, 0, 0, 0},
 	{"qcom,ep-gpio",	0, 1, 1, 0, 0}
 };
 
@@ -1234,6 +1237,16 @@ static void pcie_pcs_port_phy_init(struct msm_pcie_dev_t *dev)
 	msm_pcie_write_reg(dev->phy,
 		PCIE_N_POWER_STATE_CONFIG1(dev->rc_idx, common_phy),
 		0xA3);
+
+	if (dev->phy_ver == 0x3) {
+		msm_pcie_write_reg(dev->phy,
+			QSERDES_RX_N_SIGDET_LVL(dev->rc_idx, common_phy),
+			0x19);
+
+		msm_pcie_write_reg(dev->phy,
+			PCIE_N_TXDEEMPH_M3P5DB_V0(dev->rc_idx, common_phy),
+			0x0E);
+	}
 
 	msm_pcie_write_reg(dev->phy,
 		PCIE_N_POWER_DOWN_CONTROL(dev->rc_idx, common_phy),
@@ -3557,7 +3570,10 @@ static int msm_pcie_get_resources(struct msm_pcie_dev_t *dev,
 
 	/* All allocations succeeded */
 
-	dev->wake_n = gpio_to_irq(dev->gpio[MSM_PCIE_GPIO_WAKE].num);
+	if (dev->gpio[MSM_PCIE_GPIO_WAKE].num)
+		dev->wake_n = gpio_to_irq(dev->gpio[MSM_PCIE_GPIO_WAKE].num);
+	else
+		dev->wake_n = 0;
 
 	dev->parf = dev->res[MSM_PCIE_RES_PARF].base;
 	dev->phy = dev->res[MSM_PCIE_RES_PHY].base;
@@ -3662,9 +3678,13 @@ int msm_pcie_enable(struct msm_pcie_dev_t *dev, u32 options)
 			PCIE20_PARF_AXI_MSTR_WR_ADDR_HALT, 0, BIT(31));
 	}
 
+	mutex_lock(&com_phy_lock);
 	/* init PCIe PHY */
 	if (!num_rc_on)
 		pcie_phy_init(dev);
+
+	num_rc_on++;
+	mutex_unlock(&com_phy_lock);
 
 	if (options & PM_PIPE_CLK) {
 		usleep_range(PHY_STABILIZATION_DELAY_US_MIN,
@@ -3761,7 +3781,6 @@ int msm_pcie_enable(struct msm_pcie_dev_t *dev, u32 options)
 	dev->power_on = true;
 	dev->suspending = false;
 	dev->link_turned_on_counter++;
-	num_rc_on++;
 
 	goto out;
 
@@ -3773,12 +3792,17 @@ link_fail:
 		PCIE_N_SW_RESET(dev->rc_idx, dev->common_phy), 0x1);
 	msm_pcie_write_reg(dev->phy,
 		PCIE_N_POWER_DOWN_CONTROL(dev->rc_idx, dev->common_phy), 0);
+
+	mutex_lock(&com_phy_lock);
+	num_rc_on--;
 	if (!num_rc_on) {
 		PCIE_DBG(dev, "PCIe: RC%d is powering down the common phy\n",
 			dev->rc_idx);
 		msm_pcie_write_reg(dev->phy, PCIE_COM_SW_RESET, 0x1);
 		msm_pcie_write_reg(dev->phy, PCIE_COM_POWER_DOWN_CONTROL, 0);
 	}
+	mutex_unlock(&com_phy_lock);
+
 	msm_pcie_pipe_clk_deinit(dev);
 	msm_pcie_clk_deinit(dev);
 clk_fail:
@@ -3808,7 +3832,6 @@ void msm_pcie_disable(struct msm_pcie_dev_t *dev, u32 options)
 	dev->link_status = MSM_PCIE_LINK_DISABLED;
 	dev->power_on = false;
 	dev->link_turned_off_counter++;
-	num_rc_on--;
 
 	PCIE_INFO(dev, "PCIe: Assert the reset of endpoint of RC%d.\n",
 		dev->rc_idx);
@@ -3821,12 +3844,15 @@ void msm_pcie_disable(struct msm_pcie_dev_t *dev, u32 options)
 	msm_pcie_write_reg(dev->phy,
 		PCIE_N_POWER_DOWN_CONTROL(dev->rc_idx, dev->common_phy), 0);
 
+	mutex_lock(&com_phy_lock);
+	num_rc_on--;
 	if (!num_rc_on) {
 		PCIE_DBG(dev, "PCIe: RC%d is powering down the common phy\n",
 			dev->rc_idx);
 		msm_pcie_write_reg(dev->phy, PCIE_COM_SW_RESET, 0x1);
 		msm_pcie_write_reg(dev->phy, PCIE_COM_POWER_DOWN_CONTROL, 0);
 	}
+	mutex_unlock(&com_phy_lock);
 
 	if (options & PM_CLK) {
 		msm_pcie_write_mask(dev->parf + PCIE20_PARF_PHY_CTRL, 0,
@@ -4926,22 +4952,26 @@ int32_t msm_pcie_irq_init(struct msm_pcie_dev_t *dev)
 	}
 
 	/* register handler for PCIE_WAKE_N interrupt line */
-	rc = devm_request_irq(pdev,
-			dev->wake_n, handle_wake_irq, IRQF_TRIGGER_FALLING,
-			 "msm_pcie_wake", dev);
-	if (rc) {
-		PCIE_ERR(dev, "PCIe: RC%d: Unable to request wake interrupt\n",
-			dev->rc_idx);
-		return rc;
-	}
+	if (dev->wake_n) {
+		rc = devm_request_irq(pdev,
+				dev->wake_n, handle_wake_irq,
+				IRQF_TRIGGER_FALLING, "msm_pcie_wake", dev);
+		if (rc) {
+			PCIE_ERR(dev,
+				"PCIe: RC%d: Unable to request wake interrupt\n",
+				dev->rc_idx);
+			return rc;
+		}
 
-	INIT_WORK(&dev->handle_wake_work, handle_wake_func);
+		INIT_WORK(&dev->handle_wake_work, handle_wake_func);
 
-	rc = enable_irq_wake(dev->wake_n);
-	if (rc) {
-		PCIE_ERR(dev, "PCIe: RC%d: Unable to enable wake interrupt\n",
-			dev->rc_idx);
-		return rc;
+		rc = enable_irq_wake(dev->wake_n);
+		if (rc) {
+			PCIE_ERR(dev,
+				"PCIe: RC%d: Unable to enable wake interrupt\n",
+				dev->rc_idx);
+			return rc;
+		}
 	}
 
 	/* Create a virtual domain of interrupts */
@@ -4953,7 +4983,10 @@ int32_t msm_pcie_irq_init(struct msm_pcie_dev_t *dev)
 			PCIE_ERR(dev,
 				"PCIe: RC%d: Unable to initialize irq domain\n",
 				dev->rc_idx);
-			disable_irq(dev->wake_n);
+
+			if (dev->wake_n)
+				disable_irq(dev->wake_n);
+
 			return PTR_ERR(dev->irq_domain);
 		}
 
@@ -4968,7 +5001,9 @@ void msm_pcie_irq_deinit(struct msm_pcie_dev_t *dev)
 	PCIE_DBG(dev, "RC%d\n", dev->rc_idx);
 
 	wakeup_source_trash(&dev->ws);
-	disable_irq(dev->wake_n);
+
+	if (dev->wake_n)
+		disable_irq(dev->wake_n);
 }
 
 
@@ -5353,6 +5388,7 @@ int __init pcie_init(void)
 
 	pcie_drv.rc_num = 0;
 	mutex_init(&pcie_drv.drv_lock);
+	mutex_init(&com_phy_lock);
 
 	for (i = 0; i < MAX_RC_NUM; i++) {
 		snprintf(rc_name, MAX_RC_NAME_LEN, "pcie%d-short", i);

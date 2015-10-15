@@ -24,9 +24,45 @@
 #include "dsi-panel-nt35597-dsc-wqxga-cmd.dtsi"
 #include "dsi-panel-hx8379a-truly-fwvga-video.dtsi"
 #include "dsi-panel-zte-sam-s6e3fa3-sam-6p0-1080p-video.dtsi"
+#include "dsi-panel-r69007-dualdsi-wqxga-cmd.dtsi"
 
 &soc {
 	dsi_panel_pwr_supply: dsi_panel_pwr_supply {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		qcom,panel-supply-entry@0 {
+			reg = <0>;
+			qcom,supply-name = "vddio";
+			qcom,supply-min-voltage = <1800000>;
+			qcom,supply-max-voltage = <1800000>;
+			qcom,supply-enable-load = <62000>;
+			qcom,supply-disable-load = <80>;
+		};
+
+		qcom,panel-supply-entry@1 {
+			reg = <1>;
+			qcom,supply-name = "lab";
+			qcom,supply-min-voltage = <4600000>;
+			qcom,supply-max-voltage = <6000000>;
+			qcom,supply-enable-load = <100000>;
+			qcom,supply-disable-load = <100>;
+		};
+
+		qcom,panel-supply-entry@2 {
+			reg = <2>;
+			qcom,supply-name = "ibb";
+			qcom,supply-min-voltage = <4600000>;
+			qcom,supply-max-voltage = <6000000>;
+			qcom,supply-enable-load = <100000>;
+			qcom,supply-disable-load = <100>;
+			qcom,supply-post-on-sleep = <10>;
+		};
+	};
+};
+
+&soc {
+	dsi_panel_pwr_supply_amoled: dsi_panel_pwr_supply_amoled {
 		#address-cells = <1>;
 		#size-cells = <0>;
 
@@ -57,6 +93,16 @@
 			qcom,supply-enable-load = <100000>;
 			qcom,supply-disable-load = <100>;
 			qcom,supply-post-on-sleep = <20>;
+		};
+
+		qcom,panel-supply-entry@3 {
+			reg = <3>;
+			qcom,supply-name = "oled-vdda";
+			qcom,supply-min-voltage = <3000000>;
+			qcom,supply-max-voltage = <3000000>;
+			qcom,supply-enable-load = <857000>;
+			qcom,supply-disable-load = <0>;
+			qcom,supply-post-on-sleep = <0>;
 		};
 	};
 };
@@ -137,11 +183,12 @@
 };
 
 &dsi_dual_jdi_4k_nofbc_video {
-	qcom,mdss-dsi-panel-timings-8996 = [31 2e 0d 12 0d 03 04 a0
-		31 2e 0d 12 0d 03 04 a0
-		31 2e 0d 12 0d 03 04 a0
-		31 2e 0d 12 0d 03 04 a0
-		31 53 0c 12 0d 03 04 a0];
+	qcom,mdss-dsi-panel-timings-8996 = [
+		2c 27 0e 10 0a 03 04 a0
+		2c 27 0e 10 0a 03 04 a0
+		2c 27 0e 10 0a 03 04 a0
+		2c 27 0e 10 0a 03 04 a0
+		2c 32 0e 0f 0a 03 04 a0];
 };
 
 &dsi_hx8379a_fwvga_truly_vid {
@@ -150,4 +197,11 @@
 		23 20 06 09 05 03 04 a0
 		23 20 06 09 05 03 04 a0
 		23 2e 06 08 05 03 04 a0];
+};
+&dsi_r69007_wqxga_cmd {
+	qcom,mdss-dsi-panel-timings-8996 = [23 1f 07 09 05 03 04 a0
+		23 1f 07 09 05 03 04 a0
+		23 1f 07 09 05 03 04 a0
+		23 1f 07 09 05 03 04 a0
+		23 19 08 08 05 03 04 a0];
 };

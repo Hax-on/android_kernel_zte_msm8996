@@ -310,6 +310,18 @@ struct dsi_panel_cmds {
 	int link_state;
 };
 
+struct dsi_panel_timing {
+	struct mdss_panel_timing timing;
+	uint32_t phy_timing[12];
+	uint32_t phy_timing_8996[40];
+	/* DSI_CLKOUT_TIMING_CTRL */
+	char t_clk_post;
+	char t_clk_pre;
+	struct dsi_panel_cmds on_cmds;
+	struct dsi_panel_cmds post_panel_on_cmds;
+	struct dsi_panel_cmds switch_cmds;
+};
+
 struct dsi_kickoff_action {
 	struct list_head act_entry;
 	void (*action) (void *);
@@ -448,6 +460,7 @@ struct mdss_dsi_ctrl_pdata {
 	struct regulator *ibb; /* vreg handle */
 	struct mutex clk_lane_mutex;
 
+	bool null_insert_enabled;
 	bool ulps;
 	bool core_power;
 	bool mmss_clamp;
@@ -460,6 +473,7 @@ struct mdss_dsi_ctrl_pdata {
 	struct dsi_buf status_buf;
 	int status_mode;
 	int rx_len;
+	int cur_max_pkt_size;
 
 	struct dsi_pinctrl_res pin_res;
 
@@ -492,10 +506,10 @@ int dsi_panel_device_register(struct platform_device *ctrl_pdev,
 	struct device_node *pan_node, struct mdss_dsi_ctrl_pdata *ctrl_pdata);
 
 int mdss_dsi_cmds_tx(struct mdss_dsi_ctrl_pdata *ctrl,
-		struct dsi_cmd_desc *cmds, int cnt);
+		struct dsi_cmd_desc *cmds, int cnt, int use_dma_tpg);
 
 int mdss_dsi_cmds_rx(struct mdss_dsi_ctrl_pdata *ctrl,
-			struct dsi_cmd_desc *cmds, int rlen);
+			struct dsi_cmd_desc *cmds, int rlen, int use_dma_tpg);
 
 void mdss_dsi_host_init(struct mdss_panel_data *pdata);
 void mdss_dsi_op_mode_config(int mode,
@@ -509,7 +523,7 @@ void mdss_dsi_ack_err_status(struct mdss_dsi_ctrl_pdata *ctrl);
 int mdss_dsi_clk_ctrl(struct mdss_dsi_ctrl_pdata *ctrl, void *clk_handle,
 	enum mdss_dsi_clk_type clk_type, enum mdss_dsi_clk_state clk_state);
 void mdss_dsi_clk_req(struct mdss_dsi_ctrl_pdata *ctrl,
-				int enable);
+	struct dsi_panel_clk_ctrl *clk_ctrl);
 void mdss_dsi_controller_cfg(int enable,
 				struct mdss_panel_data *pdata);
 void mdss_dsi_sw_reset(struct mdss_dsi_ctrl_pdata *ctrl_pdata, bool restore);
@@ -521,6 +535,7 @@ void mdss_dsi_irq_handler_config(struct mdss_dsi_ctrl_pdata *ctrl_pdata);
 void mdss_dsi_set_tx_power_mode(int mode, struct mdss_panel_data *pdata);
 int mdss_dsi_clk_div_config(struct mdss_panel_info *panel_info,
 			    int frame_rate);
+int mdss_dsi_clk_refresh(struct mdss_panel_data *pdata);
 int mdss_dsi_link_clk_init(struct platform_device *pdev,
 		      struct mdss_dsi_ctrl_pdata *ctrl_pdata);
 void mdss_dsi_link_clk_deinit(struct device *dev,
@@ -572,6 +587,9 @@ u32 mdss_dsi_panel_cmd_read(struct mdss_dsi_ctrl_pdata *ctrl, char cmd0,
 int mdss_dsi_panel_init(struct device_node *node,
 		struct mdss_dsi_ctrl_pdata *ctrl_pdata,
 		bool cmd_cfg_cont_splash);
+int mdss_dsi_panel_timing_switch(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
+			struct mdss_panel_timing *timing);
+
 int mdss_panel_parse_bl_settings(struct device_node *np,
 			struct mdss_dsi_ctrl_pdata *ctrl_pdata);
 int mdss_panel_get_dst_fmt(u32 bpp, char mipi_mode, u32 pixel_packing,
@@ -580,6 +598,7 @@ int mdss_panel_get_dst_fmt(u32 bpp, char mipi_mode, u32 pixel_packing,
 int mdss_dsi_register_recovery_handler(struct mdss_dsi_ctrl_pdata *ctrl,
 		struct mdss_intf_recovery *recovery);
 void mdss_dsi_panel_dsc_pps_send(struct mdss_dsi_ctrl_pdata *ctrl);
+void mdss_dsi_unregister_bl_settings(struct mdss_dsi_ctrl_pdata *ctrl_pdata);
 
 static inline const char *__mdss_dsi_pm_name(enum dsi_pm_type module)
 {

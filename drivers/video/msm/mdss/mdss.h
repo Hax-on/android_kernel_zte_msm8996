@@ -30,6 +30,7 @@
 
 #define MAX_DRV_SUP_MMB_BLKS	44
 #define MAX_DRV_SUP_PIPES 10
+#define MAX_CLIENT_NAME_LEN 20
 
 #define MDSS_PINCTRL_STATE_DEFAULT "mdss_default"
 #define MDSS_PINCTRL_STATE_SLEEP  "mdss_sleep"
@@ -158,6 +159,7 @@ enum mdss_hw_quirk {
 enum mdss_hw_capabilities {
 	MDSS_CAPS_YUV_CONFIG,
 	MDSS_CAPS_SCM_RESTORE_NOT_REQUIRED,
+	MDSS_CAPS_3D_MUX_UNDERRUN_RECOVERY_SUPPORTED,
 	MDSS_CAPS_MAX,
 };
 
@@ -173,6 +175,7 @@ enum mdss_qos_settings {
 };
 
 struct reg_bus_client {
+	char name[MAX_CLIENT_NAME_LEN];
 	short usecase_ndx;
 	u32 id;
 	struct list_head list;
@@ -276,6 +279,7 @@ struct mdss_data_type {
 	bool has_pingpong_split;
 	bool has_pixel_ram;
 	bool needs_hist_vote;
+	bool has_ubwc;
 
 	u32 default_ot_rd_limit;
 	u32 default_ot_wr_limit;
@@ -310,6 +314,7 @@ struct mdss_data_type {
 	struct list_head reg_bus_clist;
 	struct mutex reg_bus_lock;
 	struct reg_bus_client *reg_bus_clt;
+	struct reg_bus_client *pp_reg_bus_clt;
 
 	u32 axi_port_cnt;
 	u32 nrt_axi_port_cnt;
@@ -461,7 +466,7 @@ void mdss_bus_bandwidth_ctrl(int enable);
 int mdss_iommu_ctrl(int enable);
 int mdss_bus_scale_set_quota(int client, u64 ab_quota, u64 ib_quota);
 int mdss_update_reg_bus_vote(struct reg_bus_client *, u32 usecase_ndx);
-struct reg_bus_client *mdss_reg_bus_vote_client_create(void);
+struct reg_bus_client *mdss_reg_bus_vote_client_create(char *client_name);
 void mdss_reg_bus_vote_client_destroy(struct reg_bus_client *);
 
 struct mdss_util_intf {

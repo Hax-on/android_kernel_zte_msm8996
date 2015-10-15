@@ -392,7 +392,7 @@ static int dwc3_alloc_trb_pool(struct dwc3_ep *dep)
 
 	dep->trb_pool = dma_zalloc_coherent(dwc->dev,
 			sizeof(struct dwc3_trb) * DWC3_TRB_NUM,
-			&dep->trb_pool_dma, GFP_KERNEL);
+			&dep->trb_pool_dma, GFP_ATOMIC);
 	if (!dep->trb_pool) {
 		dev_err(dep->dwc->dev, "failed to allocate trb pool for %s\n",
 				dep->name);
@@ -479,7 +479,7 @@ static int dwc3_gadget_set_ep_config(struct dwc3 *dwc, struct dwc3_ep *dep,
 		dep->stream_capable = true;
 	}
 
-	if (!usb_endpoint_xfer_control(desc))
+	if (usb_endpoint_xfer_isoc(desc))
 		params.param1 |= DWC3_DEPCFG_XFER_IN_PROGRESS_EN;
 
 	/*
@@ -642,13 +642,6 @@ static int __dwc3_gadget_ep_disable(struct dwc3_ep *dep)
 	dep->type = 0;
 	dep->flags = 0;
 
-	/*
-	 * Clean up ep ring to avoid getting xferInProgress due to stale trbs
-	 * with HWO bit set from previous composition when update transfer cmd
-	 * is issued.
-	 */
-	memset(&dep->trb_pool[0], 0, sizeof(struct dwc3_trb) * DWC3_TRB_NUM);
-	dbg_event(dep->number, "Clr_TRB", 0);
 	return 0;
 }
 
@@ -712,6 +705,10 @@ static int dwc3_gadget_ep_enable(struct usb_ep *ep,
 		dev_err(dwc->dev, "invalid endpoint transfer type\n");
 	}
 
+	ret = dwc3_alloc_trb_pool(dep);
+	if (ret)
+		return ret;
+
 	spin_lock_irqsave(&dwc->lock, flags);
 	ret = __dwc3_gadget_ep_enable(dep, desc, ep->comp_desc, false, false);
 	dbg_event(dep->number, "ENABLE", ret);
@@ -749,6 +746,8 @@ static int dwc3_gadget_ep_disable(struct usb_ep *ep)
 	ret = __dwc3_gadget_ep_disable(dep);
 	dbg_event(dep->number, "DISABLE", ret);
 	spin_unlock_irqrestore(&dwc->lock, flags);
+
+	dwc3_free_trb_pool(dep);
 
 	return ret;
 }
@@ -2177,25 +2176,8 @@ static int dwc3_gadget_start(struct usb_gadget *g,
 	 * device-specific initialization until device mode is activated.
 	 * In that case dwc3_gadget_restart() will handle it.
 	 */
-	if (!dwc->is_drd) {
-		spin_unlock_irqrestore(&dwc->lock, flags);
-		pm_runtime_get_sync(dwc->dev);
-		dbg_event(0xFF, "GdgStrt Begin",
-			atomic_read(&dwc->dev->power.usage_count));
-		spin_lock_irqsave(&dwc->lock, flags);
-		ret = __dwc3_gadget_start(dwc);
-		pm_runtime_put(dwc->dev);
-		dbg_event(0xFF, "GdgStrt End",
-			atomic_read(&dwc->dev->power.usage_count));
-		if (ret)
-			goto err2;
-	}
-
 	spin_unlock_irqrestore(&dwc->lock, flags);
 	return 0;
-
-err2:
-	dwc->gadget_driver = NULL;
 
 err1:
 	spin_unlock_irqrestore(&dwc->lock, flags);
@@ -2274,17 +2256,11 @@ static int dwc3_gadget_init_hw_endpoints(struct dwc3 *dwc,
 			if (!epnum)
 				dwc->gadget.ep0 = &dep->endpoint;
 		} else {
-			int		ret;
-
 			usb_ep_set_maxpacket_limit(&dep->endpoint, 1024);
 			dep->endpoint.max_streams = 15;
 			dep->endpoint.ops = &dwc3_gadget_ep_ops;
 			list_add_tail(&dep->endpoint.ep_list,
 					&dwc->gadget.ep_list);
-
-			ret = dwc3_alloc_trb_pool(dep);
-			if (ret)
-				return ret;
 		}
 
 		INIT_LIST_HEAD(&dep->request_list);
@@ -2334,7 +2310,8 @@ static void dwc3_gadget_free_endpoints(struct dwc3 *dwc)
 		 * with all sorts of bugs when removing dwc3.ko.
 		 */
 		if (epnum != 0 && epnum != 1) {
-			dwc3_free_trb_pool(dep);
+			if (dep->trb_pool)
+				dwc3_free_trb_pool(dep);
 			list_del(&dep->endpoint.ep_list);
 		}
 
@@ -2616,6 +2593,12 @@ static void dwc3_endpoint_interrupt(struct dwc3 *dwc,
 		break;
 	case DWC3_DEPEVT_XFERINPROGRESS:
 		dep->dbg_ep_events.xferinprogress++;
+		if (!usb_endpoint_xfer_isoc(dep->endpoint.desc)) {
+			dev_dbg(dwc->dev, "%s is not an Isochronous endpoint\n",
+					dep->name);
+			return;
+		}
+
 		dwc3_endpoint_transfer_complete(dwc, dep, event);
 		break;
 	case DWC3_DEPEVT_XFERNOTREADY:

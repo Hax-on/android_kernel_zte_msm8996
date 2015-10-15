@@ -253,7 +253,8 @@ static inline struct f_rmnet *port_to_rmnet(struct grmnet *r)
 }
 
 static struct usb_request *
-frmnet_alloc_req(struct usb_ep *ep, unsigned len, gfp_t flags)
+frmnet_alloc_req(struct usb_ep *ep, unsigned len, size_t extra_buf_alloc,
+		gfp_t flags)
 {
 	struct usb_request *req;
 
@@ -261,7 +262,7 @@ frmnet_alloc_req(struct usb_ep *ep, unsigned len, gfp_t flags)
 	if (!req)
 		return ERR_PTR(-ENOMEM);
 
-	req->buf = kmalloc(len, flags);
+	req->buf = kmalloc(len + extra_buf_alloc, flags);
 	if (!req->buf) {
 		usb_ep_free_request(ep, req);
 		return ERR_PTR(-ENOMEM);
@@ -424,7 +425,7 @@ static int gport_rmnet_connect(struct f_rmnet *dev, unsigned intf)
 	port_num = rmnet_ports[dev->port_num].data_xport_num;
 
 	switch (dxport) {
-	case USB_GADGET_XPORT_BAM:
+	case USB_GADGET_XPORT_BAM_DMUX:
 		ret = gbam_connect(&dev->port, port_num,
 			dxport, src_connection_idx, dst_connection_idx);
 		if (ret) {
@@ -528,7 +529,7 @@ static int gport_rmnet_disconnect(struct f_rmnet *dev)
 
 	port_num = rmnet_ports[dev->port_num].data_xport_num;
 	switch (dxport) {
-	case USB_GADGET_XPORT_BAM:
+	case USB_GADGET_XPORT_BAM_DMUX:
 	case USB_GADGET_XPORT_BAM2BAM_IPA:
 		gbam_disconnect(&dev->port, port_num, dxport);
 		break;
@@ -605,7 +606,7 @@ static void frmnet_suspend(struct usb_function *f)
 
 	port_num = rmnet_ports[dev->port_num].data_xport_num;
 	switch (dxport) {
-	case USB_GADGET_XPORT_BAM:
+	case USB_GADGET_XPORT_BAM_DMUX:
 		break;
 	case USB_GADGET_XPORT_BAM2BAM_IPA:
 		if (remote_wakeup_allowed) {
@@ -659,7 +660,7 @@ static void frmnet_resume(struct usb_function *f)
 
 	port_num = rmnet_ports[dev->port_num].data_xport_num;
 	switch (dxport) {
-	case USB_GADGET_XPORT_BAM:
+	case USB_GADGET_XPORT_BAM_DMUX:
 		break;
 	case USB_GADGET_XPORT_BAM2BAM_IPA:
 		if (remote_wakeup_allowed) {
@@ -1078,6 +1079,7 @@ frmnet_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 					" req%02x.%02x v%04x i%04x l%d\n",
 					ctrl->bRequestType, ctrl->bRequest,
 					w_value, w_index, w_length);
+				ret = 0;
 				spin_unlock(&dev->lock);
 				goto invalid;
 			}
@@ -1175,6 +1177,7 @@ static int frmnet_bind(struct usb_configuration *c, struct usb_function *f)
 
 	dev->notify_req = frmnet_alloc_req(ep,
 				sizeof(struct usb_cdc_notification),
+				cdev->gadget->extra_buf_alloc,
 				GFP_KERNEL);
 	if (IS_ERR(dev->notify_req)) {
 		pr_err("%s: unable to allocate memory for notify req\n",
@@ -1349,9 +1352,16 @@ static void frmnet_unbind_config(void)
 		}
 }
 
+static int rmnet_init(void)
+{
+	return gqti_ctrl_init();
+}
+
 static void frmnet_cleanup(void)
 {
 	int i;
+
+	gqti_ctrl_cleanup();
 
 	for (i = 0; i < nr_rmnet_ports; i++)
 		kfree(rmnet_ports[i].port);
@@ -1429,11 +1439,14 @@ static int frmnet_init_port(const char *ctrl_name, const char *data_name,
 	}
 
 	switch (rmnet_port->data_xport) {
-	case USB_GADGET_XPORT_BAM:
+	case USB_GADGET_XPORT_BAM2BAM:
+		/* Override BAM2BAM to BAM_DMUX for old ABI compatibility */
+		rmnet_port->data_xport = USB_GADGET_XPORT_BAM_DMUX;
+		/* fall-through */
+	case USB_GADGET_XPORT_BAM_DMUX:
 		rmnet_port->data_xport_num = no_data_bam_ports;
 		no_data_bam_ports++;
 		break;
-	case USB_GADGET_XPORT_BAM2BAM:
 	case USB_GADGET_XPORT_BAM2BAM_IPA:
 		rmnet_port->data_xport_num = no_data_bam2bam_ports;
 		no_data_bam2bam_ports++;

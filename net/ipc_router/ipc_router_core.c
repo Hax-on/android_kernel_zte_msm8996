@@ -182,7 +182,7 @@ static DEFINE_MUTEX(log_ctx_list_lock_lha0);
 static LIST_HEAD(log_ctx_list);
 static DEFINE_MUTEX(ipc_router_init_lock);
 static bool is_ipc_router_inited;
-static int msm_ipc_router_init(void);
+static int ipc_router_core_init(void);
 #define IPC_ROUTER_INIT_TIMEOUT (10 * HZ)
 
 static uint32_t next_port_id;
@@ -1104,6 +1104,7 @@ static int post_pkt_to_port(struct msm_ipc_port *port_ptr,
 		       size_t oob_data_len, void *priv);
 	void (*data_ready)(struct sock *sk) = NULL;
 	struct sock *sk;
+	uint32_t pkt_type;
 
 	if (unlikely(!port_ptr || !pkt))
 		return -EINVAL;
@@ -1124,6 +1125,7 @@ static int post_pkt_to_port(struct msm_ipc_port *port_ptr,
 	list_add_tail(&temp_pkt->list, &port_ptr->port_rx_q);
 	wake_up(&port_ptr->port_rx_wait_q);
 	notify = port_ptr->notify;
+	pkt_type = temp_pkt->hdr.type;
 	sk = (struct sock *)port_ptr->endpoint;
 	if (sk) {
 		read_lock(&sk->sk_callback_lock);
@@ -1132,7 +1134,7 @@ static int post_pkt_to_port(struct msm_ipc_port *port_ptr,
 	}
 	mutex_unlock(&port_ptr->port_rx_q_lock_lhc3);
 	if (notify)
-		notify(pkt->hdr.type, NULL, 0, port_ptr->priv);
+		notify(pkt_type, NULL, 0, port_ptr->priv);
 	else if (sk && data_ready)
 		data_ready(sk);
 
@@ -3350,7 +3352,7 @@ struct msm_ipc_port *msm_ipc_router_create_port(
 	struct msm_ipc_port *port_ptr;
 	int ret;
 
-	ret = msm_ipc_router_init();
+	ret = ipc_router_core_init();
 	if (ret < 0) {
 		IPC_RTR_ERR("%s: Error %d initializing IPC Router\n",
 			    __func__, ret);
@@ -3990,7 +3992,7 @@ void msm_ipc_router_xprt_notify(struct msm_ipc_router_xprt *xprt,
 	struct rr_packet *pkt;
 	int ret;
 
-	ret = msm_ipc_router_init();
+	ret = ipc_router_core_init();
 	if (ret < 0) {
 		IPC_RTR_ERR("%s: Error %d initializing IPC Router\n",
 			    __func__, ret);
@@ -4103,9 +4105,18 @@ static struct platform_driver ipc_router_driver = {
 	 },
 };
 
-static int msm_ipc_router_init(void)
+/**
+ * ipc_router_core_init() - Initialize all IPC Router core data structures
+ *
+ * Return: 0 on Success or Standard error code otherwise.
+ *
+ * This function only initializes all the core data structures to the IPC Router
+ * module. The remaining initialization is done inside msm_ipc_router_init().
+ */
+static int ipc_router_core_init(void)
 {
-	int i, ret;
+	int i;
+	int ret;
 	struct msm_ipc_routing_table_entry *rt_entry;
 
 	mutex_lock(&ipc_router_init_lock);
@@ -4113,8 +4124,6 @@ static int msm_ipc_router_init(void)
 		mutex_unlock(&ipc_router_init_lock);
 		return 0;
 	}
-
-	msm_ipc_router_debug_mask |= SMEM_LOG;
 
 	debugfs_init();
 
@@ -4133,16 +4142,30 @@ static int msm_ipc_router_init(void)
 	rt_entry = create_routing_table_entry(IPC_ROUTER_NID_LOCAL, NULL);
 	kref_put(&rt_entry->ref, ipc_router_release_rtentry);
 
-	ret = msm_ipc_router_security_init();
-	if (ret < 0)
-		IPC_RTR_ERR("%s: Security Init failed\n", __func__);
-
 	msm_ipc_router_workqueue =
 		create_singlethread_workqueue("msm_ipc_router");
 	if (!msm_ipc_router_workqueue) {
 		mutex_unlock(&ipc_router_init_lock);
 		return -ENOMEM;
 	}
+
+	ret = msm_ipc_router_security_init();
+	if (ret < 0)
+		IPC_RTR_ERR("%s: Security Init failed\n", __func__);
+	else
+		is_ipc_router_inited = true;
+	mutex_unlock(&ipc_router_init_lock);
+
+	return ret;
+}
+
+static int msm_ipc_router_init(void)
+{
+	int ret;
+
+	ret = ipc_router_core_init();
+	if (ret < 0)
+		return ret;
 
 	ret = platform_driver_register(&ipc_router_driver);
 	if (ret)
@@ -4153,10 +4176,7 @@ static int msm_ipc_router_init(void)
 	if (ret < 0)
 		IPC_RTR_ERR("%s: Init sockets failed\n", __func__);
 
-	is_ipc_router_inited = true;
-
 	ipc_router_log_ctx_init();
-	mutex_unlock(&ipc_router_init_lock);
 	return ret;
 }
 

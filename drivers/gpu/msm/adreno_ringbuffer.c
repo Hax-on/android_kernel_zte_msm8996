@@ -94,11 +94,20 @@ void adreno_ringbuffer_submit(struct adreno_ringbuffer *rb,
 		local_irq_save(flags);
 
 		/* Read always on registers */
-		if (!adreno_is_a3xx(adreno_dev))
+		if (!adreno_is_a3xx(adreno_dev)) {
 			adreno_readreg64(adreno_dev,
 				ADRENO_REG_RBBM_ALWAYSON_COUNTER_LO,
 				ADRENO_REG_RBBM_ALWAYSON_COUNTER_HI,
 				&time->ticks);
+
+			/*
+			 * Mask hi bits as they may be incorrect on
+			 * a4x and some a5x
+			 */
+			if (ADRENO_GPUREV(adreno_dev) >= 400 &&
+				ADRENO_GPUREV(adreno_dev) <= ADRENO_REV_A530)
+				time->ticks &= 0xFFFFFFFF;
+		}
 		else
 			time->ticks = 0;
 
@@ -565,10 +574,6 @@ adreno_ringbuffer_addcmds(struct adreno_ringbuffer *rb,
 
 	total_sizedwords += (secured_ctxt) ? 26 : 0;
 
-	/* Add two dwords for the CP_INTERRUPT */
-	total_sizedwords +=
-		(drawctxt || (flags & KGSL_CMD_FLAGS_INTERNAL_ISSUE)) ?  2 : 0;
-
 	/* context rollover */
 	if (adreno_is_a3xx(adreno_dev))
 		total_sizedwords += 3;
@@ -707,7 +712,10 @@ adreno_ringbuffer_addcmds(struct adreno_ringbuffer *rb,
 	 * set and hence the rb timestamp will be used in else statement below.
 	 */
 	*ringcmds++ = cp_mem_packet(adreno_dev, CP_EVENT_WRITE, 3, 1);
-	*ringcmds++ = CACHE_FLUSH_TS;
+	if (drawctxt || (flags & KGSL_CMD_FLAGS_INTERNAL_ISSUE))
+		*ringcmds++ = CACHE_FLUSH_TS | (1 << 31);
+	else
+		*ringcmds++ = CACHE_FLUSH_TS;
 
 	if (drawctxt && !(flags & KGSL_CMD_FLAGS_INTERNAL_ISSUE)) {
 		ringcmds += cp_gpuaddr(adreno_dev, ringcmds, gpuaddr +
@@ -721,11 +729,6 @@ adreno_ringbuffer_addcmds(struct adreno_ringbuffer *rb,
 		ringcmds += cp_gpuaddr(adreno_dev, ringcmds, gpuaddr +
 				KGSL_MEMSTORE_RB_OFFSET(rb, eoptimestamp));
 		*ringcmds++ = timestamp;
-	}
-
-	if (drawctxt || (flags & KGSL_CMD_FLAGS_INTERNAL_ISSUE)) {
-		*ringcmds++ = cp_packet(adreno_dev, CP_INTERRUPT, 1);
-		*ringcmds++ = CP_INTERRUPT_RB;
 	}
 
 	if (adreno_is_a3xx(adreno_dev)) {
@@ -874,8 +877,20 @@ static inline int _get_alwayson_counter(struct adreno_device *adreno_dev,
 	unsigned int *p = cmds;
 
 	*p++ = cp_mem_packet(adreno_dev, CP_REG_TO_MEM, 2, 1);
-	*p++ = adreno_getreg(adreno_dev, ADRENO_REG_RBBM_ALWAYSON_COUNTER_LO) |
-		(1 << 30) | (2 << 18);
+
+	/*
+	 * For a4x and some a5x the alwayson_hi read through CPU
+	 * will be masked. Only do 32 bit CP reads for keeping the
+	 * numbers consistent
+	 */
+	if (ADRENO_GPUREV(adreno_dev) >= 400 &&
+		ADRENO_GPUREV(adreno_dev) <= ADRENO_REV_A530)
+		*p++ = adreno_getreg(adreno_dev,
+			ADRENO_REG_RBBM_ALWAYSON_COUNTER_LO);
+	else
+		*p++ = adreno_getreg(adreno_dev,
+			ADRENO_REG_RBBM_ALWAYSON_COUNTER_LO) |
+			(1 << 30) | (2 << 18);
 	p += cp_gpuaddr(adreno_dev, p, gpuaddr);
 
 	return (unsigned int)(p - cmds);
@@ -1234,33 +1249,6 @@ int adreno_ringbuffer_waittimestamp(struct adreno_ringbuffer *rb,
 }
 
 /**
- * adreno_ringbuffer_pt_switch_cmds() - Add commands to switch the pagetable
- * @rb: The ringbuffer on which the commands are going to be submitted
- * @cmds: The pointer where the commands are copied
- *
- * Returns the number of DWORDS added to cmds pointer
- */
-static int
-adreno_ringbuffer_pt_switch_cmds(struct adreno_ringbuffer *rb,
-				unsigned int *cmds,
-				struct kgsl_pagetable *pt)
-{
-	unsigned int *cmds_orig = cmds;
-	struct adreno_device *adreno_dev = ADRENO_DEVICE(rb->device);
-
-	cmds += adreno_iommu_set_apriv(adreno_dev, cmds, 1);
-	if (ADRENO_FEATURE(adreno_dev, ADRENO_HAS_REG_TO_REG_CMDS))
-		cmds += adreno_iommu_set_pt_ib(rb, cmds, pt);
-	else
-		cmds += adreno_iommu_set_pt_generate_cmds(rb, cmds, pt);
-
-	cmds += adreno_iommu_set_apriv(adreno_dev, cmds, 0);
-
-	return cmds - cmds_orig;
-}
-
-
-/**
  * adreno_ringbuffer_submit_preempt_token() - Submit a preempt token
  * @rb: Ringbuffer in which the token is submitted
  * @incoming_rb: The RB to which the GPU switches when this preemption
@@ -1307,12 +1295,11 @@ int adreno_ringbuffer_submit_preempt_token(struct adreno_ringbuffer *rb,
 			 */
 			BUG_ON(!pt);
 			/* set the ringbuffer for incoming RB */
-			pt_switch_sizedwords = adreno_ringbuffer_pt_switch_cmds(
-								incoming_rb,
+			pt_switch_sizedwords =
+				adreno_iommu_set_pt_generate_cmds(incoming_rb,
 								&link[0], pt);
+			total_sizedwords += pt_switch_sizedwords;
 
-			total_sizedwords = total_sizedwords +
-						pt_switch_sizedwords;
 		}
 	}
 

@@ -37,8 +37,6 @@
 
 #define PHYSTATUS				BIT(6)
 
-/* AHB2PHY register offsets */
-#define PERIPH_SS_AHB2PHY_TOP_CFG		0x10
 
 #define INIT_MAX_TIME_USEC			1000
 
@@ -254,7 +252,7 @@ static const struct qmp_reg_val qmp_settings_rev2[] = {
 	{0x508, 0x77}, /* QSERDES_RX_RX_EQ_OFFSET_ADAPTOR_CNTRL1 */
 	{0x50C, 0x80}, /* QSERDES_RX_RX_OFFSET_ADAPTOR_CNTRL2 */
 	{0x514, 0x03}, /* QSERDES_RX_SIGDET_CNTRL */
-	{0x518, 0x1B}, /* QSERDES_RX_SIGDET_LVL */
+	{0x518, 0x18}, /* QSERDES_RX_SIGDET_LVL */
 	{0x51C, 0x16}, /* QSERDES_RX_SIGDET_DEGLITCH_CNTRL */
 
 	/* TX settings */
@@ -281,6 +279,9 @@ static const struct qmp_reg_val qmp_settings_rev2[] = {
 /* Override for QMP PHY revision 2 */
 static const struct qmp_reg_val qmp_settings_rev2_misc[] = {
 	{0x178, 0x01}, /* QSERDES_COM_HSCLK_SEL */
+
+	/* Rx settings */
+	{0x518, 0x1B}, /* QSERDES_RX_SIGDET_LVL */
 
 	/* Res_code settings */
 	{0xC4, 0x15}, /* USB3PHY_QSERDES_COM_RESCODE_DIV_NUM */
@@ -319,7 +320,6 @@ static const struct qmp_reg_val qmp_settings_rev1_misc[] = {
 struct msm_ssphy_qmp {
 	struct usb_phy		phy;
 	void __iomem		*base;
-	void __iomem		*ahb2phy;
 	void __iomem		*vls_clamp_reg;
 	struct regulator	*vdd;
 	struct regulator	*vdda18;
@@ -336,7 +336,6 @@ struct msm_ssphy_qmp {
 	bool			in_suspend;
 	bool			override_pll_cal;
 	bool			emulation;
-	bool			switch_pipe_clk_src;
 	bool			misc_config;
 	unsigned int		*phy_reg; /* revision based offset */
 };
@@ -504,18 +503,6 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 			clk_prepare_enable(phy->ref_clk);
 		clk_prepare_enable(phy->aux_clk);
 		clk_prepare_enable(phy->cfg_ahb_clk);
-
-		if (phy->switch_pipe_clk_src) {
-			/*
-			 * Before PHY is initilized we must first use the xo
-			 * clock as the source clock for the gcc_usb3_pipe_clk
-			 * as 19.2MHz. After PHY initilization we will set the
-			 * rate again to 125MHz.
-			 */
-			clk_set_rate(phy->pipe_clk, 19200000);
-			clk_prepare_enable(phy->pipe_clk);
-		} /* otherwise pipe_clk must be enabled after initialization */
-		phy->clk_enabled = true;
 	}
 
 	/* Rev ID is made up each of the LSBs of REVISION_ID[0-3] */
@@ -550,11 +537,16 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 		return -ENODEV;
 	}
 
-	/* Configure AHB2PHY for one wait state reads/writes */
-	if (phy->ahb2phy)
-		writel_relaxed(0x11, phy->ahb2phy + PERIPH_SS_AHB2PHY_TOP_CFG);
-
 	writel_relaxed(0x01, phy->base + PCIE_USB3_PHY_POWER_DOWN_CONTROL);
+
+	/* Make sure that above write completed to get PHY into POWER DOWN */
+	mb();
+
+	if (!phy->clk_enabled) {
+		clk_set_rate(phy->pipe_clk, 125000000);
+		clk_prepare_enable(phy->pipe_clk);
+		phy->clk_enabled = true;
+	}
 
 	/* Main configuration */
 	ret = configure_phy_regs(uphy, reg);
@@ -583,9 +575,6 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 	writel_relaxed(0x03, phy->base + PCIE_USB3_PHY_START);
 	writel_relaxed(0x00, phy->base + PCIE_USB3_PHY_SW_RESET);
 
-	if (!phy->switch_pipe_clk_src)
-		/* this clock wasn't enabled before, enable it now */
-		clk_prepare_enable(phy->pipe_clk);
 
 	/* Wait for PHY initialization to be done */
 	do {
@@ -603,16 +592,6 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 					phy->phy_reg[USB3_PHY_PCS_STATUS]));
 		return -EBUSY;
 	};
-
-	/*
-	 * After PHY initilization above, the PHY is generating
-	 * the usb3_pipe_clk in 125MHz. Therefore now we can (if needed)
-	 * switch the gcc_usb3_pipe_clk to 125MHz as well, so the
-	 * gcc_usb3_pipe_clk is sourced now from the usb3_pipe3_clk
-	 * instead of from the xo clock.
-	 */
-	if (phy->switch_pipe_clk_src)
-		clk_set_rate(phy->pipe_clk, 125000000);
 
 	return 0;
 }
@@ -916,16 +895,6 @@ static int msm_ssphy_qmp_probe(struct platform_device *pdev)
 		return PTR_ERR(phy->vls_clamp_reg);
 	}
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
-						"qmp_ahb2phy_base");
-	if (res) {
-		phy->ahb2phy = devm_ioremap_resource(dev, res);
-		if (IS_ERR(phy->ahb2phy)) {
-			dev_err(dev, "couldn't find qmp_ahb2phy_base addr.\n");
-			phy->ahb2phy = NULL;
-		}
-	}
-
 	phy->emulation = of_property_read_bool(dev->of_node,
 						"qcom,emulation");
 
@@ -990,9 +959,6 @@ static int msm_ssphy_qmp_probe(struct platform_device *pdev)
 					"qcom,qmp-misc-config");
 	if (phy->misc_config)
 		dev_dbg(dev, "Miscellaneous configurations are enabled.\n");
-
-	phy->switch_pipe_clk_src = !of_property_read_bool(dev->of_node,
-					"qcom,no-pipe-clk-switch");
 
 	phy->phy.dev			= dev;
 	phy->phy.init			= msm_ssphy_qmp_init;

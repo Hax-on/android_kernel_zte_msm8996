@@ -251,7 +251,6 @@ fail_mem_ctrl:
 	return res;
 
 }
-EXPORT_SYMBOL(ipa3_dma_init);
 
 /**
  * ipa3_dma_enable() -Vote for IPA clocks.
@@ -281,7 +280,6 @@ int ipa3_dma_enable(void)
 	IPADMA_FUNC_EXIT();
 	return 0;
 }
-EXPORT_SYMBOL(ipa3_dma_enable);
 
 static bool ipa3_dma_work_pending(void)
 {
@@ -343,7 +341,6 @@ int ipa3_dma_disable(void)
 	IPADMA_FUNC_EXIT();
 	return 0;
 }
-EXPORT_SYMBOL(ipa3_dma_disable);
 
 /**
  * ipa3_dma_sync_memcpy()- Perform synchronous memcpy using IPA.
@@ -500,7 +497,6 @@ fail_mem_alloc:
 			complete(&ipa3_dma_ctx->done);
 	return res;
 }
-EXPORT_SYMBOL(ipa3_dma_sync_memcpy);
 
 /**
  * ipa3_dma_async_memcpy()- Perform asynchronous memcpy using IPA.
@@ -618,7 +614,6 @@ fail_mem_alloc:
 			complete(&ipa3_dma_ctx->done);
 	return res;
 }
-EXPORT_SYMBOL(ipa3_dma_async_memcpy);
 
 /**
  * ipa3_dma_uc_memcpy() - Perform a memcpy action using IPA uC
@@ -675,7 +670,6 @@ dec_and_exit:
 	IPADMA_FUNC_EXIT();
 	return res;
 }
-EXPORT_SYMBOL(ipa3_dma_uc_memcpy);
 
 /**
  * ipa3_dma_destroy() -teardown IPADMA pipes and release ipadma.
@@ -722,7 +716,6 @@ void ipa3_dma_destroy(void)
 
 	IPADMA_FUNC_EXIT();
 }
-EXPORT_SYMBOL(ipa3_dma_destroy);
 
 /**
  * ipa3_dma_async_memcpy_notify_cb() -Callback function which will be called by
@@ -731,19 +724,20 @@ EXPORT_SYMBOL(ipa3_dma_destroy);
  *
  * @priv -not in use.
  * @evt - event name - IPA_RECIVE.
- * @data -the iovec.
+ * @data -the ipa3_mem_buffer.
  */
 void ipa3_dma_async_memcpy_notify_cb(void *priv
 			, enum ipa_dp_evt_type evt, unsigned long data)
 {
 	int ep_idx = 0;
-	struct sps_iovec *iov = (struct sps_iovec *) data;
 	struct ipa3_dma_xfer_wrapper *xfer_descr_expected;
 	struct ipa3_sys_context *sys;
 	unsigned long flags;
+	struct ipa3_mem_buffer *mem_info;
 
 	IPADMA_FUNC_ENTRY();
 
+	mem_info = (struct ipa3_mem_buffer *)data;
 	ep_idx = ipa3_get_ep_mapping(IPA_CLIENT_MEMCPY_DMA_ASYNC_CONS);
 	sys = ipa3_ctx->ep[ep_idx].sys;
 
@@ -754,8 +748,8 @@ void ipa3_dma_async_memcpy_notify_cb(void *priv
 	sys->len--;
 	spin_unlock_irqrestore(&ipa3_dma_ctx->async_lock, flags);
 
-	BUG_ON(xfer_descr_expected->phys_addr_dest != iov->addr);
-	BUG_ON(xfer_descr_expected->len != iov->size);
+	BUG_ON(xfer_descr_expected->phys_addr_dest != mem_info->phys_base);
+	BUG_ON(xfer_descr_expected->len != mem_info->size);
 
 	atomic_inc(&ipa3_dma_ctx->total_async_memcpy);
 	atomic_dec(&ipa3_dma_ctx->async_memcpy_pending_cnt);

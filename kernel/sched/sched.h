@@ -1,4 +1,6 @@
-
+#ifdef CONFIG_SCHED_QHMP
+#include "qhmp_sched.h"
+#else
 #include <linux/sched.h>
 #include <linux/sched/sysctl.h>
 #include <linux/sched/rt.h>
@@ -25,9 +27,15 @@ extern __read_mostly int scheduler_running;
 extern unsigned long calc_load_update;
 extern atomic_long_t calc_load_tasks;
 
+struct freq_max_load_entry {
+	/* The maximum load which has accounted governor's headroom. */
+	u64 hdemand;
+};
+
 struct freq_max_load {
 	struct rcu_head rcu;
-	u32 freqs[0];
+	int length;
+	struct freq_max_load_entry freqs[0];
 };
 
 extern DEFINE_PER_CPU(struct freq_max_load *, freq_max_load);
@@ -624,6 +632,7 @@ struct rq {
 	u64 idle_stamp;
 	u64 avg_idle;
 	int cstate, wakeup_latency, wakeup_energy;
+	int dstate, dstate_wakeup_latency, dstate_wakeup_energy;
 
 	/* This is used to determine avg_idle's max value */
 	u64 max_idle_balance_cost;
@@ -649,6 +658,8 @@ struct rq {
 	u64 cur_irqload;
 	u64 avg_irqload;
 	u64 irqload_ts;
+	unsigned int static_cpu_pwr_cost;
+	unsigned int static_cluster_pwr_cost;
 
 #ifdef CONFIG_SCHED_FREQ_INPUT
 	unsigned int old_busy_time;
@@ -659,6 +670,8 @@ struct rq {
 #ifdef CONFIG_SCHED_FREQ_INPUT
 	u64 curr_runnable_sum;
 	u64 prev_runnable_sum;
+	u64 nt_curr_runnable_sum;
+	u64 nt_prev_runnable_sum;
 #endif
 
 #ifdef CONFIG_IRQ_TIME_ACCOUNTING
@@ -915,13 +928,13 @@ extern unsigned int sched_init_task_load_windows;
 extern unsigned int sched_heavy_task;
 extern unsigned int up_down_migrate_scale_factor;
 extern void reset_cpu_hmp_stats(int cpu, int reset_cra);
-extern void fixup_nr_big_task(int cpu, int reset_stats);
 extern unsigned int max_task_load(void);
 extern void sched_account_irqtime(int cpu, struct task_struct *curr,
 				 u64 delta, u64 wallclock);
 unsigned int cpu_temp(int cpu);
 extern unsigned int nr_eligible_big_tasks(int cpu);
 extern void update_up_down_migrate(void);
+extern int power_delta_exceeded(unsigned int cpu_cost, unsigned int base_cost);
 
 /*
  * 'load' is in reference to "best cpu" at its best frequency.
@@ -932,8 +945,10 @@ static inline u64 scale_load_to_cpu(u64 task_load, int cpu)
 {
 	struct rq *rq = cpu_rq(cpu);
 
-	task_load *= (u64)rq->load_scale_factor;
-	task_load /= 1024;
+	if (rq->load_scale_factor != 1024) {
+		task_load *= (u64)rq->load_scale_factor;
+		task_load /= 1024;
+	}
 
 	return task_load;
 }
@@ -947,6 +962,13 @@ static inline int max_poss_capacity(struct rq *rq)
 	return rq->max_possible_capacity;
 }
 
+static inline unsigned int task_load(struct task_struct *p)
+{
+	if (sched_use_pelt)
+		return p->se.avg.runnable_avg_sum_scaled;
+
+	return p->ravg.demand;
+}
 
 static inline void
 inc_cumulative_runnable_avg(struct hmp_sched_stats *stats,
@@ -982,18 +1004,12 @@ dec_cumulative_runnable_avg(struct hmp_sched_stats *stats,
 
 static inline void
 fixup_cumulative_runnable_avg(struct hmp_sched_stats *stats,
-			      struct task_struct *p, u32 new_task_load)
+			      struct task_struct *p, s64 task_load_delta)
 {
-	u32 task_load;
-
-	task_load = sched_use_pelt ?
-		    p->se.avg.runnable_avg_sum_scaled : p->ravg.demand;
-	p->ravg.demand = new_task_load;
-
 	if (!sched_enable_hmp || sched_disable_window_stats)
 		return;
 
-	stats->cumulative_runnable_avg += ((s64)new_task_load - task_load);
+	stats->cumulative_runnable_avg += task_load_delta;
 	BUG_ON((s64)stats->cumulative_runnable_avg < 0);
 }
 
@@ -1032,10 +1048,6 @@ static inline int sched_cpu_high_irqload(int cpu)
 #else	/* CONFIG_SCHED_HMP */
 
 struct hmp_sched_stats;
-
-static inline void fixup_nr_big_task(int cpu, int reset_stats)
-{
-}
 
 static inline u64 scale_load_to_cpu(u64 load, int cpu)
 {
@@ -1143,12 +1155,34 @@ static inline void clear_reserved(int cpu)
 	clear_bit(CPU_RESERVED, &rq->hmp_flags);
 }
 
+static inline u64 cpu_cravg_sync(int cpu, int sync)
+{
+	struct rq *rq = cpu_rq(cpu);
+	u64 load;
+
+	load = rq->hmp_stats.cumulative_runnable_avg;
+
+	/*
+	 * If load is being checked in a sync wakeup environment,
+	 * we may want to discount the load of the currently running
+	 * task.
+	 */
+	if (sync && cpu == smp_processor_id()) {
+		if (load > rq->curr->ravg.demand)
+			load -= rq->curr->ravg.demand;
+		else
+			load = 0;
+	}
+
+	return load;
+}
+
 extern void check_for_migration(struct rq *rq, struct task_struct *p);
 extern void pre_big_task_count_change(const struct cpumask *cpus);
 extern void post_big_task_count_change(const struct cpumask *cpus);
 extern void set_hmp_defaults(void);
 extern int power_delta_exceeded(unsigned int cpu_cost, unsigned int base_cost);
-extern unsigned int power_cost(u64 total_load, int cpu);
+extern unsigned int power_cost(int cpu, u64 demand);
 extern void reset_all_window_stats(u64 window_start, unsigned int window_size);
 extern void boost_kick(int cpu);
 extern int sched_boost(void);
@@ -1946,3 +1980,4 @@ static inline u64 irq_time_read(int cpu)
 }
 #endif /* CONFIG_64BIT */
 #endif /* CONFIG_IRQ_TIME_ACCOUNTING */
+#endif /* CONFIG_SCHED_QHMP */

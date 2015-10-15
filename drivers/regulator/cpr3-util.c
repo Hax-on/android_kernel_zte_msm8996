@@ -40,6 +40,9 @@
 #define CPR3_IDLE_CLOCKS_MIN		0
 #define CPR3_IDLE_CLOCKS_MAX		31
 
+/* This constant has units of uV/mV so 1000 corresponds to 100%. */
+#define CPR3_AGING_DERATE_UNITY		1000
+
 /**
  * cpr3_allocate_regulators() - allocate and initialize CPR3 regulators for a
  *		given thread based upon device tree data
@@ -367,7 +370,7 @@ int cpr3_parse_common_corner_data(struct cpr3_regulator *vreg,
 {
 	struct device_node *node = vreg->of_node;
 	struct cpr3_controller *ctrl = vreg->thread->ctrl;
-	u32 max_fuse_combos, fuse_corners;
+	u32 max_fuse_combos, fuse_corners, aging_allowed = 0;
 	u32 *combo_corners;
 	u32 *temp;
 	int i, j, rc;
@@ -541,6 +544,66 @@ int cpr3_parse_common_corner_data(struct cpr3_regulator *vreg,
 				vreg->corner[i].cpr_fuse_corner = j;
 				break;
 			}
+		}
+	}
+
+	if (of_find_property(vreg->of_node,
+				"qcom,allow-aging-voltage-adjustment", NULL)) {
+		rc = cpr3_parse_array_property(vreg,
+			"qcom,allow-aging-voltage-adjustment",
+			1, vreg->fuse_combos_supported, vreg->fuse_combo,
+			&aging_allowed);
+		if (rc)
+			goto free_temp;
+
+		vreg->aging_allowed = aging_allowed;
+	}
+
+	if (vreg->aging_allowed) {
+		if (ctrl->aging_ref_volt <= 0) {
+			cpr3_err(ctrl, "qcom,cpr-aging-ref-voltage must be specified\n");
+			rc = -EINVAL;
+			goto free_temp;
+		}
+
+		rc = cpr3_parse_array_property(vreg,
+			"qcom,cpr-aging-max-voltage-adjustment",
+			1, vreg->fuse_combos_supported, vreg->fuse_combo,
+			&vreg->aging_max_adjust_volt);
+		if (rc)
+			goto free_temp;
+
+		rc = cpr3_parse_array_property(vreg,
+			"qcom,cpr-aging-ref-corner",
+			1, vreg->fuse_combos_supported, vreg->fuse_combo,
+			&vreg->aging_corner);
+		if (rc) {
+			goto free_temp;
+		} else if (vreg->aging_corner < CPR3_CORNER_OFFSET
+			   || vreg->aging_corner > vreg->corner_count - 1
+							+ CPR3_CORNER_OFFSET) {
+			cpr3_err(vreg, "aging reference corner=%d not in range [%d, %d]\n",
+				vreg->aging_corner, CPR3_CORNER_OFFSET,
+				vreg->corner_count - 1 + CPR3_CORNER_OFFSET);
+			rc = -EINVAL;
+			goto free_temp;
+		}
+		vreg->aging_corner -= CPR3_CORNER_OFFSET;
+
+		if (of_find_property(vreg->of_node, "qcom,cpr-aging-derate",
+					NULL)) {
+			rc = cpr3_parse_array_property(vreg,
+				"qcom,cpr-aging-derate", vreg->corner_count,
+				*corner_sum, *combo_offset, temp);
+			if (rc)
+				goto free_temp;
+
+			for (i = 0; i < vreg->corner_count; i++)
+				vreg->corner[i].aging_derate = temp[i];
+		} else {
+			for (i = 0; i < vreg->corner_count; i++)
+				vreg->corner[i].aging_derate
+					= CPR3_AGING_DERATE_UNITY;
 		}
 	}
 
@@ -725,6 +788,11 @@ int cpr3_parse_common_ctrl_data(struct cpr3_controller *ctrl)
 	ctrl->cpr_allowed_sw = of_property_read_bool(ctrl->dev->of_node,
 			"qcom,cpr-enable");
 
+	/* Aging reference voltage is optional */
+	ctrl->aging_ref_volt = 0;
+	of_property_read_u32(ctrl->dev->of_node, "qcom,cpr-aging-ref-voltage",
+			&ctrl->aging_ref_volt);
+
 	ctrl->vdd_regulator = devm_regulator_get(ctrl->dev, "vdd");
 	if (IS_ERR(ctrl->vdd_regulator)) {
 		rc = PTR_ERR(ctrl->vdd_regulator);
@@ -823,7 +891,8 @@ void cpr3_open_loop_voltage_as_ceiling(struct cpr3_regulator *vreg)
  * @combo_offset:	The array offset for the selected fuse combo
  *
  * This function also ensures that the open-loop voltage for each corner falls
- * within the final floor to ceiling voltage range.
+ * within the final floor to ceiling voltage range and that floor voltages
+ * increase monotonically.
  *
  * Return: 0 on success, errno on failure
  */
@@ -831,11 +900,12 @@ int cpr3_limit_floor_voltages(struct cpr3_regulator *vreg, int corner_sum,
 				int combo_offset)
 {
 	char *prop = "qcom,cpr-floor-to-ceiling-max-range";
-	int i, rc, floor_new;
+	int i, floor_new;
 	u32 *floor_range;
+	int rc = 0;
 
 	if (!of_find_property(vreg->of_node, prop, NULL))
-		return 0;
+		goto enforce_monotonicity;
 
 	floor_range = kcalloc(vreg->corner_count, sizeof(*floor_range),
 				GFP_KERNEL);
@@ -864,6 +934,30 @@ int cpr3_limit_floor_voltages(struct cpr3_regulator *vreg, int corner_sum,
 
 free_floor_adjust:
 	kfree(floor_range);
+
+enforce_monotonicity:
+	/* Ensure that floor voltages increase monotonically. */
+	for (i = 1; i < vreg->corner_count; i++) {
+		if (vreg->corner[i].floor_volt
+		    < vreg->corner[i - 1].floor_volt) {
+			cpr3_debug(vreg, "corner %d floor voltage=%d uV < corner %d voltage=%d uV; overriding: corner %d voltage=%d\n",
+				i, vreg->corner[i].floor_volt,
+				i - 1, vreg->corner[i - 1].floor_volt,
+				i, vreg->corner[i - 1].floor_volt);
+			vreg->corner[i].floor_volt
+				= vreg->corner[i - 1].floor_volt;
+
+			if (vreg->corner[i].open_loop_volt
+			    < vreg->corner[i].floor_volt)
+				vreg->corner[i].open_loop_volt
+					= vreg->corner[i].floor_volt;
+			if (vreg->corner[i].ceiling_volt
+			    < vreg->corner[i].floor_volt)
+				vreg->corner[i].ceiling_volt
+					= vreg->corner[i].floor_volt;
+		}
+	}
+
 	return rc;
 }
 
@@ -961,8 +1055,8 @@ done:
 int cpr3_adjust_open_loop_voltages(struct cpr3_regulator *vreg, int corner_sum,
 		int combo_offset)
 {
-	int i, rc, prev_volt;
-	int *volt_adjust;
+	int i, rc, prev_volt, min_volt;
+	int *volt_adjust, *volt_diff;
 
 	if (!of_find_property(vreg->of_node,
 			"qcom,cpr-open-loop-voltage-adjustment", NULL)) {
@@ -972,8 +1066,11 @@ int cpr3_adjust_open_loop_voltages(struct cpr3_regulator *vreg, int corner_sum,
 
 	volt_adjust = kcalloc(vreg->corner_count, sizeof(*volt_adjust),
 				GFP_KERNEL);
-	if (!volt_adjust)
-		return -ENOMEM;
+	volt_diff = kcalloc(vreg->corner_count, sizeof(*volt_diff), GFP_KERNEL);
+	if (!volt_adjust || !volt_diff) {
+		rc = -ENOMEM;
+		goto done;
+	}
 
 	rc = cpr3_parse_array_property(vreg,
 		"qcom,cpr-open-loop-voltage-adjustment",
@@ -993,20 +1090,36 @@ int cpr3_adjust_open_loop_voltages(struct cpr3_regulator *vreg, int corner_sum,
 		}
 	}
 
-	/* Ensure that open-loop voltages increase monotonically */
+	if (of_find_property(vreg->of_node,
+			"qcom,cpr-open-loop-voltage-min-diff", NULL)) {
+		rc = cpr3_parse_array_property(vreg,
+			"qcom,cpr-open-loop-voltage-min-diff",
+			vreg->corner_count, corner_sum, combo_offset,
+			volt_diff);
+		if (rc) {
+			cpr3_err(vreg, "could not load minimum open-loop voltage differences, rc=%d\n",
+				rc);
+			goto done;
+		}
+	}
+
+	/*
+	 * Ensure that open-loop voltages increase monotonically with respect
+	 * to configurable minimum allowed differences.
+	 */
 	for (i = 1; i < vreg->corner_count; i++) {
-		if (vreg->corner[i].open_loop_volt
-		    < vreg->corner[i - 1].open_loop_volt) {
-			cpr3_info(vreg, "adjusted corner %d open-loop voltage=%d uV < corner %d voltage=%d uV; overriding: corner %d voltage=%d\n",
+		min_volt = vreg->corner[i - 1].open_loop_volt + volt_diff[i];
+		if (vreg->corner[i].open_loop_volt < min_volt) {
+			cpr3_info(vreg, "adjusted corner %d open-loop voltage=%d uV < corner %d voltage=%d uV + min diff=%d uV; overriding: corner %d voltage=%d\n",
 				i, vreg->corner[i].open_loop_volt,
 				i - 1, vreg->corner[i - 1].open_loop_volt,
-				i, vreg->corner[i - 1].open_loop_volt);
-			vreg->corner[i].open_loop_volt
-				= vreg->corner[i - 1].open_loop_volt;
+				volt_diff[i], i, min_volt);
+			vreg->corner[i].open_loop_volt = min_volt;
 		}
 	}
 
 done:
+	kfree(volt_diff);
 	kfree(volt_adjust);
 	return rc;
 }
@@ -1042,4 +1155,40 @@ int cpr3_quot_adjustment(int ro_scale, int volt_adjust)
 	quot_adjust *= sign;
 
 	return quot_adjust;
+}
+
+/**
+ * cpr3_voltage_adjustment() - returns the voltage adjustment value resulting
+ *		from the specified quotient adjustment and RO scaling factor
+ * @ro_scale:		The CPR ring oscillator (RO) scaling factor with units
+ *			of QUOT/V
+ * @quot_adjust:	The amount to adjust the quotient by in units of
+ *			QUOT.  This value may be positive or negative.
+ */
+int cpr3_voltage_adjustment(int ro_scale, int quot_adjust)
+{
+	unsigned long long temp;
+	int volt_adjust;
+	int sign = 1;
+
+	if (ro_scale < 0) {
+		sign = -sign;
+		ro_scale = -ro_scale;
+	}
+
+	if (quot_adjust < 0) {
+		sign = -sign;
+		quot_adjust = -quot_adjust;
+	}
+
+	if (ro_scale == 0)
+		return 0;
+
+	temp = (unsigned long long)quot_adjust * 1000000;
+	do_div(temp, ro_scale);
+
+	volt_adjust = temp;
+	volt_adjust *= sign;
+
+	return volt_adjust;
 }

@@ -501,6 +501,7 @@
 			regulator-max-microvolt = <1140000>;
 			qcom,max-voltage-step = <150000>;
 			qcom,cpu-num = <0>;
+			qcom,recal-mask = <3>;
 
 			pm8994_s11_limit: avs-limit-regulator {
 				regulator-name = "pm8994_s11_avs_limit";
@@ -564,7 +565,8 @@
 		qcom,cpr-up-down-delay-time = <3000>;
 		qcom,cpr-step-quot-init-min = <11>;
 		qcom,cpr-step-quot-init-max = <13>;
-		qcom,cpr-count-mode = <2>;		/* Staggered */
+		qcom,cpr-count-mode = <0>;		/* All-at-once min */
+		qcom,cpr-count-repeat = <25>;
 
 		qcom,apm-ctrl = <&apc_apm>;
 		qcom,apm-threshold-voltage = <850000>;
@@ -579,14 +581,15 @@
 		vdd-thread1-ldo-ret-supply = <&kryo1_retention_vreg>;
 
 		qcom,cpr-enable;
-		qcom,cpr-hw-closed-loop;
 		qcom,cpr-clock-throttling = <0x20>;
+
+		qcom,cpr-aging-ref-voltage = <905000>;
 
 		thread@0 {
 			qcom,cpr-thread-id = <0>;
 			qcom,cpr-consecutive-up = <0>;
-			qcom,cpr-consecutive-down = <2>;
-			qcom,cpr-up-threshold = <0>;
+			qcom,cpr-consecutive-down = <3>;
+			qcom,cpr-up-threshold = <2>;
 			qcom,cpr-down-threshold = <2>;
 
 			apc0_pwrcl_vreg: regulator-pwrcl {
@@ -600,7 +603,7 @@
 				qcom,cpr-corners = <16>;
 
 				qcom,ldo-headroom-voltage = <150000>;
-				qcom,ldo-max-voltage = <915000>;
+				qcom,ldo-max-voltage = <890000>;
 
 				qcom,cpr-corner-fmax-map = <1 2 7 12 16>;
 
@@ -641,27 +644,47 @@
 				       2519 2257 2668 2372    0    0    0    0>;
 
 				qcom,cpr-open-loop-voltage-fuse-adjustment =
-					<0 0 (-10000) (-25000) (-25000)>,
-					<0 0 (-10000) (-25000) (-25000)>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>;
+					<45000     0 50000  20000   15000>,
+					<45000     0 50000  20000   15000>,
+					<45000     0 50000  20000   15000>,
+					<45000     0 50000  20000   15000>,
+					<45000     0 50000  20000   15000>,
+					<45000     0 50000  20000   15000>,
+					<45000     0 50000  20000   15000>,
+					<45000     0 50000  20000   15000>;
 				qcom,cpr-closed-loop-voltage-fuse-adjustment =
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>;
+					<35000 35000 40000  40000   40000>,
+					<20000 10000  5000 (-5000) (-5000)>,
+					<20000 10000  5000 (-5000) (-5000)>,
+					<20000 10000  5000 (-5000) (-5000)>,
+					<20000 10000  5000 (-5000) (-5000)>,
+					<20000 10000  5000 (-5000) (-5000)>,
+					<20000 10000  5000 (-5000) (-5000)>,
+					<20000 10000  5000 (-5000) (-5000)>;
+
+				qcom,cpr-open-loop-voltage-adjustment =
+					<(-15000) (-15000) (-15000) (-15000)
+					 (-13000) (-14000) (-15000) (-18000)
+					 (-20000) (-22000) (-24000) (-25000)
+					 (-26000) (-27000) (-28000) (-30000)>;
+				qcom,cpr-open-loop-voltage-min-diff =
+				       <0 0 0 0 (-50000) 0 0 0 0 0 0 0 0 0 0 0>;
+
+				qcom,cpr-closed-loop-voltage-adjustment =
+					<(-15000) (-15000) (-15000) (-15000)
+					 (-13000) (-14000) (-15000) (-18000)
+					 (-20000) (-22000) (-24000) (-25000)
+					 (-26000) (-27000) (-28000) (-30000)>;
 
 				qcom,allow-voltage-interpolation;
 				qcom,allow-quotient-interpolation;
 				qcom,cpr-scaled-open-loop-voltage-as-ceiling;
+
+				qcom,cpr-aging-max-voltage-adjustment = <25000>;
+				qcom,cpr-aging-ref-corner = <12>;
+				qcom,cpr-aging-ro-scaling-factor = <3200>;
+				qcom,allow-aging-voltage-adjustment =
+					<0 0 0 1 1 1 1 1>;
 			};
 
 			apc0_cbf_vreg: regulator-cbf {
@@ -714,35 +737,41 @@
 				       2519 2257 2668 2372    0    0    0    0>;
 
 				qcom,cpr-open-loop-voltage-fuse-adjustment =
-					<0 0 (-45000) (-20000) (-45000)>,
-					<0 0 (-45000) (-20000) (-45000)>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>;
+					<55000    0   15000    15000  (-15000)>,
+					<55000    0   15000    15000  (-15000)>,
+					<55000    0   15000    15000  (-15000)>,
+					<55000    0   15000    15000  (-15000)>,
+					<55000    0   15000    15000  (-15000)>,
+					<55000    0   15000    15000  (-15000)>,
+					<55000    0   15000    15000  (-15000)>,
+					<55000    0   15000    15000  (-15000)>;
 				qcom,cpr-closed-loop-voltage-fuse-adjustment =
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>;
+					<10000 5000        0        0        0>,
+					<10000 5000 (-20000)        0 (-35000)>,
+					<10000 5000 (-20000)        0 (-35000)>,
+					<10000 5000 (-20000)        0 (-35000)>,
+					<10000 5000 (-20000)        0 (-35000)>,
+					<10000 5000 (-20000)        0 (-35000)>,
+					<10000 5000 (-20000)        0 (-35000)>,
+					<10000 5000 (-20000)        0 (-35000)>;
 
 				qcom,allow-voltage-interpolation;
 				qcom,allow-quotient-interpolation;
 				qcom,cpr-scaled-open-loop-voltage-as-ceiling;
+
+				qcom,cpr-aging-max-voltage-adjustment = <25000>;
+				qcom,cpr-aging-ref-corner = <13>;
+				qcom,cpr-aging-ro-scaling-factor = <3200>;
+				qcom,allow-aging-voltage-adjustment =
+					<0 0 0 1 1 1 1 1>;
 			};
 		};
 
 		thread@1 {
 			qcom,cpr-thread-id = <1>;
 			qcom,cpr-consecutive-up = <0>;
-			qcom,cpr-consecutive-down = <2>;
-			qcom,cpr-up-threshold = <0>;
+			qcom,cpr-consecutive-down = <3>;
+			qcom,cpr-up-threshold = <2>;
 			qcom,cpr-down-threshold = <2>;
 
 			apc1_vreg: regulator {
@@ -756,7 +785,7 @@
 				qcom,cpr-corners = <25>;
 
 				qcom,ldo-headroom-voltage = <150000>;
-				qcom,ldo-max-voltage = <915000>;
+				qcom,ldo-max-voltage = <890000>;
 
 				qcom,cpr-corner-fmax-map = <1 4 9 13 25>;
 
@@ -773,7 +802,7 @@
 					470000  470000  470000  470000  470000
 					470000  470000  470000  470000  470000>;
 				qcom,cpr-floor-to-ceiling-max-range =
-					<80000   80000   80000   80000   80000
+					<    0   80000   80000   80000   80000
 					 80000   80000   80000   80000   80000
 					 80000   80000   80000   80000   80000
 					 80000   80000   80000   80000   80000
@@ -803,27 +832,54 @@
 				       2519 2257 2668 2372    0    0    0    0>;
 
 				qcom,cpr-open-loop-voltage-fuse-adjustment =
-					<0 0 0 (-65000) (-20000)>,
-					<0 0 0 (-65000) (-20000)>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>;
+					<35000     0 40000 (-30000) 25000>,
+					<35000     0 40000 (-30000) 25000>,
+					<35000     0 40000   25000  25000>,
+					<35000     0 40000   25000  25000>,
+					<35000     0 40000   25000  25000>,
+					<35000     0 40000   25000  25000>,
+					<35000     0 40000   25000  25000>,
+					<35000     0 40000   25000  25000>;
 				qcom,cpr-closed-loop-voltage-fuse-adjustment =
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>,
-					<0 0 0 0 0>;
+					<35000 35000 40000 (-30000) 40000>,
+					<    0     0     0 (-70000)     0>,
+					<    0     0     0        0     0>,
+					<    0     0     0        0     0>,
+					<    0     0     0        0     0>,
+					<    0     0     0        0     0>,
+					<    0     0     0        0     0>,
+					<    0     0     0        0     0>;
+
+				qcom,cpr-open-loop-voltage-adjustment =
+					<(-15000) (-15000) (-15000) (-15000)
+					 (-11000) (-12000) (-13000) (-14000)
+					 (-15000) (-18000) (-21000) (-23000)
+					 (-25000) (-25000) (-26000) (-26000)
+					 (-27000) (-27000) (-28000) (-28000)
+					 (-28000) (-29000) (-29000) (-30000)
+					 (-30000)>;
+				qcom,cpr-open-loop-voltage-min-diff =
+					<0 0 0 0 (-50000) 0 0 0 0 0 0 0 0 0 0 0
+					 0 0 0 0 0 0 0 0 0>;
+
+				qcom,cpr-closed-loop-voltage-adjustment =
+					<(-15000) (-15000) (-15000) (-15000)
+					 (-11000) (-12000) (-13000) (-14000)
+					 (-15000) (-18000) (-21000) (-23000)
+					 (-25000) (-25000) (-26000) (-26000)
+					 (-27000) (-27000) (-28000) (-28000)
+					 (-28000) (-29000) (-29000) (-30000)
+					 (-30000)>;
 
 				qcom,allow-voltage-interpolation;
 				qcom,allow-quotient-interpolation;
 				qcom,cpr-scaled-open-loop-voltage-as-ceiling;
+
+				qcom,cpr-aging-max-voltage-adjustment = <25000>;
+				qcom,cpr-aging-ref-corner = <13>;
+				qcom,cpr-aging-ro-scaling-factor = <3200>;
+				qcom,allow-aging-voltage-adjustment =
+					<0 0 0 1 1 1 1 1>;
 			};
 		};
 	};
@@ -852,6 +908,8 @@
 
 		qcom,cpr-enable;
 
+		qcom,cpr-aging-ref-voltage = <905000>;
+
 		thread@0 {
 			qcom,cpr-thread-id = <0>;
 			qcom,cpr-consecutive-up = <0>;
@@ -878,15 +936,15 @@
 					 520000  520000  520000>;
 
 				qcom,corner-frequencies =
-					<0 133000000 210000000 300000000
-					 401800000 510000000 549000000
+					<0 133000000 214000000 315000000
+					 401800000 510000000 560000000
 					 624000000>;
 
 				qcom,cpr-target-quotients =
 				      <   0    0    0    0    0    0    0    0
 					  0    0    0    0    0    0    0    0>,
-				      <   0    0    0    0    0    0  287  273
-					425  426  443  453    0    0    0    0>,
+				      <   0    0    0    0    0    0  185  179
+					291  299  304  319    0    0    0    0>,
 				      <   0    0    0    0    0    0  287  273
 					425  426  443  453    0    0    0    0>,
 				      <   0    0    0    0    0    0  414  392
@@ -919,29 +977,43 @@
 				       1959 2131 2246 2253    0    0    0    0>;
 
 				qcom,cpr-open-loop-voltage-fuse-adjustment =
-					<30000 30000 30000 0>,
-					<0 0 0 0>,
-					<0 0 0 0>,
-					<0 0 0 0>,
-					<0 0 0 0>,
-					<0 0 0 0>,
-					<0 0 0 0>,
-					<0 0 0 0>;
+					<       0        0    30000 (-10000)>,
+					<(-30000) (-30000)        0 (-10000)>,
+					<(-30000) (-30000)        0 (-10000)>,
+					<(-70000)        0        0        0>,
+					<(-70000)        0        0        0>,
+					<(-70000)        0        0        0>,
+					<(-70000)        0        0        0>,
+					<(-70000)        0        0        0>;
 				qcom,cpr-closed-loop-voltage-adjustment =
-					<0 30000 30000 30000 30000 30000 0 0>,
-					<0 30000 30000 30000 30000 30000 0 0>,
-					<0 30000 30000 30000 30000 30000 0 0>,
-					<0 30000 30000 30000 30000 30000 0 0>,
-					<0 30000 30000 30000 30000 30000 0 0>,
-					<0 30000 30000 30000 30000 30000 0 0>,
-					<0 30000 30000 30000 30000 30000 0 0>,
-					<0 30000 30000 30000 30000 30000 0 0>;
+					<    0 45000 (-5000) 20000 20000 30000
+					 10000 (-5000)>,
+					<    0 45000 (-5000) 20000 20000 30000
+					 10000 (-5000)>,
+					<    0 30000  60000  40000 40000 45000
+					 25000 35000>,
+					<    0     0  30000  10000 10000 45000
+					 25000 25000>,
+					<    0     0  30000  10000 10000 45000
+					 25000 25000>,
+					<    0     0  30000  10000 10000 45000
+					 25000 25000>,
+					<    0     0  30000  10000 10000 45000
+					 25000 25000>,
+					<    0     0  30000  10000 10000 45000
+					 25000 25000>;
 				qcom,cpr-floor-to-ceiling-max-range =
 				       <0 70000 70000 75000 80000 90000 95000
 					100000>;
 
 				qcom,allow-voltage-interpolation;
 				qcom,cpr-scaled-open-loop-voltage-as-ceiling;
+
+				qcom,cpr-aging-max-voltage-adjustment = <25000>;
+				qcom,cpr-aging-ref-corner = <6>;
+				qcom,cpr-aging-ro-scaling-factor = <2950>;
+				qcom,allow-aging-voltage-adjustment =
+					<0 0 0 1 1 1 1 1>;
 			};
 		};
 	};
@@ -953,22 +1025,22 @@
 		reg = <0x99a2000 0x1000>, <0x99e0000 0x1000>,
 		      <0x9820000 0x1000>;
 		reg-names = "pm-apc", "pm-apcc", "apcs-csr";
-		regulator-min-microvolt = <468400>;
-		regulator-max-microvolt = <919200>;
+		regulator-min-microvolt = <468197>;
+		regulator-max-microvolt = <892467>;
 		qcom,ldo-default-voltage = <750000>;
 		qcom,retention-voltage = <520000>;
 		qcom,ldo-headroom-voltage = <150000>;
-		qcom,vref-functional-step-voltage = <4600>;
-		qcom,vref-functional-min-voltage = <335000>;
-		qcom,vref-retention-step-voltage = <4600>;
-		qcom,vref-retention-min-voltage = <335000>;
+		qcom,vref-functional-step-voltage = <4466>;
+		qcom,vref-functional-min-voltage = <325285>;
+		qcom,vref-retention-step-voltage = <4466>;
+		qcom,vref-retention-min-voltage = <325285>;
 		qcom,ldo-config-init = <0xf1f0e471>;
 		qcom,apm-config-init = <0x0>;
 		qcom,cluster-num = <0>;
 		kryo0_retention_vreg: regulator {
 			regulator-name = "kryo0-retention";
-			regulator-min-microvolt = <468400>;
-			regulator-max-microvolt = <919200>;
+			regulator-min-microvolt = <468197>;
+			regulator-max-microvolt = <892467>;
 		};
 	};
 
@@ -978,22 +1050,22 @@
 		reg = <0x99d2000 0x1000>, <0x99e0000 0x1000>,
 		      <0x9820000 0x1000>;
 		reg-names = "pm-apc", "pm-apcc", "apcs-csr";
-		regulator-min-microvolt = <468400>;
-		regulator-max-microvolt = <919200>;
+		regulator-min-microvolt = <468197>;
+		regulator-max-microvolt = <892467>;
 		qcom,ldo-default-voltage = <750000>;
 		qcom,retention-voltage = <520000>;
 		qcom,ldo-headroom-voltage = <150000>;
-		qcom,vref-functional-step-voltage = <4600>;
-		qcom,vref-functional-min-voltage = <335000>;
-		qcom,vref-retention-step-voltage = <4600>;
-		qcom,vref-retention-min-voltage = <335000>;
+		qcom,vref-functional-step-voltage = <4466>;
+		qcom,vref-functional-min-voltage = <325285>;
+		qcom,vref-retention-step-voltage = <4466>;
+		qcom,vref-retention-min-voltage = <325285>;
 		qcom,cluster-num = <1>;
 		qcom,ldo-config-init = <0xf1f0e471>;
 		qcom,apm-config-init = <0x0>;
 		kryo1_retention_vreg: regulator {
 			regulator-name = "kryo1-retention";
-			regulator-min-microvolt = <468400>;
-			regulator-max-microvolt = <919200>;
+			regulator-min-microvolt = <468197>;
+			regulator-max-microvolt = <892467>;
 		};
 	};
 

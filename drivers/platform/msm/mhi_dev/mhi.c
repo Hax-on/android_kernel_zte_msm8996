@@ -33,10 +33,6 @@
 #include "mhi_hwio.h"
 #include "mhi_sm.h"
 
-#define MHI_LOCAL_PA_BASE		0x80000000
-#define MHI_LOCAL_PA_SIZE		0x3e800000
-#define MHI_EP_MSI_NUM			1
-#define MHI_VERSION_E			0x1000000
 /* Wait time on the device for Host to set M0 state */
 #define MHI_M0_WAIT_MIN_USLEEP		20000000
 #define MHI_M0_WAIT_MAX_USLEEP		25000000
@@ -52,6 +48,8 @@
 /* Updated Specification for event start is NER - 2 and end - NER -1 */
 #define MHI_HW_ACC_EVT_RING_START	2
 #define MHI_HW_ACC_EVT_RING_END		1
+
+#define MHI_HOST_REGION_NUM             2
 
 #define MHI_MMIO_CTRL_INT_STATUS_A7_MSK	0x1
 #define MHI_MMIO_CTRL_CRDB_STATUS_MSK	0x2
@@ -225,7 +223,7 @@ int mhi_pcie_config_db_routing(struct mhi_dev *mhi)
 		"Event rings 0x%x => er_base 0x%x, er_end %d\n",
 		mhi->cfg.event_rings, erdb_cfg.base, erdb_cfg.end);
 	erdb_cfg.tgt_addr = (uint32_t) mhi->ipa_uc_mbox_erdb;
-	ep_pcie_config_db_routing(chdb_cfg, erdb_cfg);
+	ep_pcie_config_db_routing(mhi_ctx->phandle, chdb_cfg, erdb_cfg);
 
 	return rc;
 }
@@ -239,7 +237,7 @@ static int mhi_hwc_init(struct mhi_dev *mhi)
 	struct ep_pcie_db_config erdb_cfg;
 
 	/* Call IPA HW_ACC Init with MSI Address and db routing info */
-	rc = ep_pcie_get_msi_config(&cfg);
+	rc = ep_pcie_get_msi_config(mhi_ctx->phandle, &cfg);
 	if (rc) {
 		pr_err("Error retrieving pcie msi logic\n");
 		return rc;
@@ -479,7 +477,7 @@ static int mhi_dev_send_event(struct mhi_dev *mhi, int evnt_ring,
 	mhi_log(MHI_MSG_VERBOSE, "evnt type :0x%x\n", el->evt_tr_comp.type);
 	mhi_log(MHI_MSG_VERBOSE, "evnt chid :0x%x\n", el->evt_tr_comp.chid);
 
-	rc = ep_pcie_trigger_msi(MHI_EP_MSI_NUM);
+	rc = ep_pcie_trigger_msi(mhi_ctx->phandle, mhi_ctx->mhi_ep_msi_num);
 	if (rc) {
 		pr_err("%s: error sending msi\n", __func__);
 		return rc;
@@ -987,6 +985,7 @@ int mhi_dev_config_outbound_iatu(struct mhi_dev *mhi)
 {
 	struct ep_pcie_iatu control, data;
 	int rc = 0;
+	struct ep_pcie_iatu entries[MHI_HOST_REGION_NUM];
 
 	data.start = mhi->data_base.device_pa;
 	data.end = mhi->data_base.device_pa + mhi->data_base.size - 1;
@@ -998,7 +997,11 @@ int mhi_dev_config_outbound_iatu(struct mhi_dev *mhi)
 	control.tgt_lower = HOST_ADDR_LSB(mhi->ctrl_base.host_pa);
 	control.tgt_upper = HOST_ADDR_MSB(mhi->ctrl_base.host_pa);
 
-	rc = ep_pcie_config_outbound_iatu(data, control);
+	entries[0] = data;
+	entries[1] = control;
+
+	rc = ep_pcie_config_outbound_iatu(mhi_ctx->phandle, entries,
+					MHI_HOST_REGION_NUM);
 	if (rc) {
 		pr_err("error configure iATU\n");
 		return rc;
@@ -1033,12 +1036,12 @@ static int mhi_dev_cache_host_cfg(struct mhi_dev *mhi)
 	mhi->data_base.size = addr1 - mhi->data_base.host_pa;
 
 	if (mhi->ctrl_base.host_pa > mhi->data_base.host_pa) {
-		mhi->data_base.device_pa = MHI_LOCAL_PA_BASE;
-		mhi->ctrl_base.device_pa = MHI_LOCAL_PA_BASE +
+		mhi->data_base.device_pa = mhi->device_local_pa_base;
+		mhi->ctrl_base.device_pa = mhi->device_local_pa_base +
 				mhi->ctrl_base.host_pa - mhi->data_base.host_pa;
 	} else {
-		mhi->ctrl_base.device_pa = MHI_LOCAL_PA_BASE;
-		mhi->data_base.device_pa = MHI_LOCAL_PA_BASE +
+		mhi->ctrl_base.device_pa = mhi->device_local_pa_base;
+		mhi->data_base.device_pa = mhi->device_local_pa_base +
 				mhi->data_base.host_pa - mhi->ctrl_base.host_pa;
 	}
 
@@ -1131,7 +1134,7 @@ static int mhi_dev_cache_host_cfg(struct mhi_dev *mhi)
 	if (rc)
 		return rc;
 
-	rc = ep_pcie_get_msi_config(&cfg);
+	rc = ep_pcie_get_msi_config(mhi_ctx->phandle, &cfg);
 	if (rc)
 		pr_err("Error configure pcie msi logic\n");
 	else
@@ -1262,6 +1265,9 @@ static int mhi_dev_ring_init(struct mhi_dev *dev)
 			pr_err("%s: env setting failed\n", __func__);
 			return rc;
 		}
+	} else {
+		pr_err("MHI device failed to enter M0\n");
+		return -EINVAL;
 	}
 
 	rc = mhi_hwc_init(dev);
@@ -1708,6 +1714,45 @@ static int get_device_tree_data(struct platform_device *pdev)
 
 	mhi_ctx = mhi;
 
+	rc = of_property_read_u32((&pdev->dev)->of_node,
+				"qcom,mhi-local-pa-base",
+				&mhi_ctx->device_local_pa_base);
+	if (rc) {
+		pr_err("qcom,mhi-local-pa-base does not exist.\n");
+		return rc;
+	}
+
+	rc = of_property_read_u32((&pdev->dev)->of_node,
+				"qcom,mhi-ifc-id",
+				&mhi_ctx->ifc_id);
+
+	if (rc) {
+		pr_err("qcom,mhi-ifc-id does not exist.\n");
+		return rc;
+	}
+
+	rc = of_property_read_u32((&pdev->dev)->of_node,
+				"qcom,mhi-ep-msi",
+				&mhi_ctx->mhi_ep_msi_num);
+	if (rc) {
+		pr_err("qcom,mhi-ep-msi does not exist.\n");
+		return rc;
+	}
+
+	rc = of_property_read_u32((&pdev->dev)->of_node,
+				"qcom,mhi-version",
+				&mhi_ctx->mhi_version);
+	if (rc) {
+		pr_err("qcom,mhi-version does not exist.\n");
+		return rc;
+	}
+
+	mhi_ctx->phandle = ep_pcie_get_phandle(mhi_ctx->ifc_id);
+	if (!mhi_ctx->phandle) {
+		pr_err("PCIe driver is not ready yet.\n");
+		return -EPROBE_DEFER;
+	}
+
 	rc = mhi_dev_mmio_init(mhi_ctx);
 	if (rc) {
 		pr_err("Failed to update the MMIO init\n");
@@ -1725,7 +1770,7 @@ static int get_device_tree_data(struct platform_device *pdev)
 	}
 
 	mhi_dev_sm_set_ready();
-	rc = mhi_dev_mmio_write(mhi, MHIVER, MHI_VERSION_E);
+	rc = mhi_dev_mmio_write(mhi, MHIVER, mhi->mhi_version);
 	if (rc) {
 		pr_err("Failed to update the MHI version\n");
 		return rc;
@@ -1740,19 +1785,19 @@ static int get_device_tree_data(struct platform_device *pdev)
 	mhi->event_reg.mode = EP_PCIE_TRIGGER_CALLBACK;
 	mhi->event_reg.callback = mhi_dev_sm_pcie_handler;
 
-	rc = ep_pcie_register_event(&mhi_ctx->event_reg);
+	rc = ep_pcie_register_event(mhi_ctx->phandle, &mhi_ctx->event_reg);
 	if (rc) {
 		pr_err("PCIe register for MHI SM cb failed\n");
 		return rc;
 	}
 
-	rc = ep_pcie_get_msi_config(&msi_cfg);
+	rc = ep_pcie_get_msi_config(mhi_ctx->phandle, &msi_cfg);
 	if (rc) {
 		pr_err("MHI: error geting msi configs\n");
 		return rc;
 	}
 
-	rc = ep_pcie_trigger_msi(MHI_EP_MSI_NUM);
+	rc = ep_pcie_trigger_msi(mhi_ctx->phandle, mhi_ctx->mhi_ep_msi_num);
 	if (rc)
 		return rc;
 
@@ -1824,15 +1869,17 @@ static int mhi_dev_probe(struct platform_device *pdev)
 {
 	int rc = 0;
 
-	if (ep_pcie_get_linkstatus() != EP_PCIE_LINK_ENABLED)
-		return -EPROBE_DEFER;
-
 	if (pdev->dev.of_node) {
 		rc = get_device_tree_data(pdev);
 		if (rc) {
 			pr_err("Error reading MHI Dev DT\n");
 			return rc;
 		}
+	}
+
+	if (ep_pcie_get_linkstatus(mhi_ctx->phandle) != EP_PCIE_LINK_ENABLED) {
+		pr_err("PCIe link is not ready to use.\n");
+		return -EPROBE_DEFER;
 	}
 
 	INIT_LIST_HEAD(&mhi_ctx->event_ring_list);

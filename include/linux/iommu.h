@@ -43,7 +43,8 @@ struct notifier_block;
 #define IOMMU_FAULT_WRITE               (1 << 1)
 #define IOMMU_FAULT_TRANSLATION         (1 << 2)
 #define IOMMU_FAULT_PERMISSION          (1 << 3)
-#define IOMMU_FAULT_TRANSACTION_STALLED (1 << 4)
+#define IOMMU_FAULT_EXTERNAL            (1 << 4)
+#define IOMMU_FAULT_TRANSACTION_STALLED (1 << 5)
 
 typedef int (*iommu_fault_handler_t)(struct iommu_domain *,
 			struct device *, unsigned long, int, void *);
@@ -123,6 +124,8 @@ extern struct dentry *iommu_debugfs_top;
  * @domain_set_attr: Change domain attributes
  * @pgsize_bitmap: bitmap of supported page sizes
  * @trigger_fault: trigger a fault on the device attached to an iommu domain
+ * @reg_read: read an IOMMU register
+ * @reg_write: write an IOMMU register
  */
 struct iommu_ops {
 	bool (*capable)(enum iommu_cap);
@@ -162,7 +165,11 @@ struct iommu_ops {
 	u32 (*domain_get_windows)(struct iommu_domain *domain);
 	int (*dma_supported)(struct iommu_domain *domain, struct device *dev,
 			     u64 mask);
-	void (*trigger_fault)(struct iommu_domain *domain);
+	void (*trigger_fault)(struct iommu_domain *domain, unsigned long flags);
+	unsigned long (*reg_read)(struct iommu_domain *domain,
+				  unsigned long offset);
+	void (*reg_write)(struct iommu_domain *domain, unsigned long val,
+			  unsigned long offset);
 
 	unsigned long pgsize_bitmap;
 };
@@ -202,7 +209,12 @@ extern phys_addr_t iommu_iova_to_phys_hard(struct iommu_domain *domain,
 					   dma_addr_t iova);
 extern void iommu_set_fault_handler(struct iommu_domain *domain,
 			iommu_fault_handler_t handler, void *token);
-extern void iommu_trigger_fault(struct iommu_domain *domain);
+extern void iommu_trigger_fault(struct iommu_domain *domain,
+				unsigned long flags);
+extern unsigned long iommu_reg_read(struct iommu_domain *domain,
+				    unsigned long offset);
+extern void iommu_reg_write(struct iommu_domain *domain, unsigned long offset,
+			    unsigned long val);
 
 extern int iommu_attach_group(struct iommu_domain *domain,
 			      struct iommu_group *group);
@@ -406,7 +418,19 @@ static inline void iommu_set_fault_handler(struct iommu_domain *domain,
 {
 }
 
-static inline void iommu_trigger_fault(struct iommu_domain *domain)
+static inline void iommu_trigger_fault(struct iommu_domain *domain,
+				       unsigned long flags)
+{
+}
+
+static inline unsigned long iommu_reg_read(struct iommu_domain *domain,
+					   unsigned long offset)
+{
+	return 0;
+}
+
+static inline void iommu_reg_write(struct iommu_domain *domain,
+				   unsigned long val, unsigned long offset)
 {
 }
 

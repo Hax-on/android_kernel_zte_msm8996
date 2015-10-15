@@ -54,6 +54,8 @@
 #define IPA_ODU_RX_POOL_SZ 32
 #define IPA_SIZE_DL_CSUM_META_TRAILER 8
 
+#define IPA_HEADROOM 128
+
 static struct sk_buff *ipa_get_skb_ipa_rx(unsigned int len, gfp_t flags);
 static void ipa_replenish_wlan_rx_cache(struct ipa_sys_context *sys);
 static void ipa_replenish_rx_cache(struct ipa_sys_context *sys);
@@ -244,6 +246,7 @@ static void ipa_handle_tx(struct ipa_sys_context *sys)
 	int cnt;
 
 	ipa_inc_client_enable_clks();
+	pm_stay_awake(ipa_ctx->pdev);
 	do {
 		cnt = ipa_handle_tx_core(sys, true, true);
 		if (cnt == 0) {
@@ -256,6 +259,7 @@ static void ipa_handle_tx(struct ipa_sys_context *sys)
 	} while (inactive_cycles <= POLLING_INACTIVITY_TX);
 
 	ipa_tx_switch_to_intr_mode(sys);
+	pm_relax(ipa_ctx->pdev);
 	ipa_dec_client_disable_clks();
 }
 
@@ -586,7 +590,7 @@ int ipa_send_cmd(u16 num_desc, struct ipa_desc *descr)
 
 	IPADBG("sending command\n");
 
-	ep_idx = ipa_get_ep_mapping(IPA_CLIENT_APPS_CMD_PROD);
+	ep_idx = ipa2_get_ep_mapping(IPA_CLIENT_APPS_CMD_PROD);
 	if (-1 == ep_idx) {
 		IPAERR("Client %u is not mapped\n",
 			IPA_CLIENT_APPS_CMD_PROD);
@@ -649,6 +653,8 @@ static void ipa_sps_irq_tx_notify(struct sps_event_notify *notify)
 
 	switch (notify->event_id) {
 	case SPS_EVENT_EOT:
+		if (IPA_CLIENT_IS_APPS_CONS(sys->ep->client))
+			atomic_set(&ipa_ctx->sps_pm.eot_activity, 1);
 		if (!atomic_read(&sys->curr_polling_state)) {
 			ret = sps_get_config(sys->ep->ep_hdl,
 					&sys->ep->connect);
@@ -691,6 +697,8 @@ static void ipa_sps_irq_tx_no_aggr_notify(struct sps_event_notify *notify)
 	switch (notify->event_id) {
 	case SPS_EVENT_EOT:
 		tx_pkt = notify->data.transfer.user;
+		if (IPA_CLIENT_IS_APPS_CONS(tx_pkt->sys->ep->client))
+			atomic_set(&ipa_ctx->sps_pm.eot_activity, 1);
 		queue_work(tx_pkt->sys->wq, &tx_pkt->work);
 		break;
 	default:
@@ -806,6 +814,8 @@ static void ipa_sps_irq_rx_notify(struct sps_event_notify *notify)
 
 	switch (notify->event_id) {
 	case SPS_EVENT_EOT:
+		if (IPA_CLIENT_IS_APPS_CONS(sys->ep->client))
+			atomic_set(&ipa_ctx->sps_pm.eot_activity, 1);
 		if (!atomic_read(&sys->curr_polling_state)) {
 			ret = sps_get_config(sys->ep->ep_hdl,
 					&sys->ep->connect);
@@ -854,6 +864,7 @@ static void ipa_handle_rx(struct ipa_sys_context *sys)
 	int cnt;
 
 	ipa_inc_client_enable_clks();
+	pm_stay_awake(ipa_ctx->pdev);
 	do {
 		cnt = ipa_handle_rx_core(sys, true, true);
 		if (cnt == 0) {
@@ -874,6 +885,7 @@ static void ipa_handle_rx(struct ipa_sys_context *sys)
 	} while (inactive_cycles <= POLLING_INACTIVITY_RX);
 
 	ipa_rx_switch_to_intr_mode(sys);
+	pm_relax(ipa_ctx->pdev);
 	ipa_dec_client_disable_clks();
 }
 
@@ -888,7 +900,37 @@ static void switch_to_intr_rx_work_func(struct work_struct *work)
 }
 
 /**
- * ipa_setup_sys_pipe() - Setup an IPA end-point in system-BAM mode and perform
+ * ipa_update_repl_threshold()- Update the repl_threshold for the client.
+ *
+ * Return value: None.
+ */
+void ipa_update_repl_threshold(enum ipa_client_type ipa_client)
+{
+	int ep_idx;
+	struct ipa_ep_context *ep;
+
+	/* Check if ep is valid. */
+	ep_idx = ipa2_get_ep_mapping(ipa_client);
+	if (ep_idx == -1) {
+		IPADBG("Invalid IPA client\n");
+		return;
+	}
+
+	ep = &ipa_ctx->ep[ep_idx];
+	if (!ep->valid) {
+		IPADBG("EP not valid/Not applicable for client.\n");
+		return;
+	}
+	/*
+	 * Determine how many buffers/descriptors remaining will
+	 * cause to drop below the yellow WM bar.
+	 */
+	ep->rx_replenish_threshold = ipa_get_sys_yellow_wm()
+					/ ep->sys->rx_buff_sz;
+}
+
+/**
+ * ipa2_setup_sys_pipe() - Setup an IPA end-point in system-BAM mode and perform
  * IPA EP configuration
  * @sys_in:	[in] input needed to setup BAM pipe and configure EP
  * @clnt_hdl:	[out] client handle
@@ -903,7 +945,7 @@ static void switch_to_intr_rx_work_func(struct work_struct *work)
  *
  * Returns:	0 on success, negative on failure
  */
-int ipa_setup_sys_pipe(struct ipa_sys_connect_params *sys_in, u32 *clnt_hdl)
+int ipa2_setup_sys_pipe(struct ipa_sys_connect_params *sys_in, u32 *clnt_hdl)
 {
 	struct ipa_ep_context *ep;
 	int ipa_ep_idx;
@@ -928,7 +970,7 @@ int ipa_setup_sys_pipe(struct ipa_sys_connect_params *sys_in, u32 *clnt_hdl)
 		goto fail_gen;
 	}
 
-	ipa_ep_idx = ipa_get_ep_mapping(sys_in->client);
+	ipa_ep_idx = ipa2_get_ep_mapping(sys_in->client);
 	if (ipa_ep_idx == -1) {
 		IPAERR("Invalid client.\n");
 		goto fail_gen;
@@ -943,13 +985,13 @@ int ipa_setup_sys_pipe(struct ipa_sys_connect_params *sys_in, u32 *clnt_hdl)
 			IPAERR("EP already allocated.\n");
 			goto fail_and_disable_clocks;
 		} else {
-			if (ipa_cfg_ep_hdr(ipa_ep_idx,
+			if (ipa2_cfg_ep_hdr(ipa_ep_idx,
 						&sys_in->ipa_ep_cfg.hdr)) {
 				IPAERR("fail to configure hdr prop of EP.\n");
 				result = -EFAULT;
 				goto fail_and_disable_clocks;
 			}
-			if (ipa_cfg_ep_cfg(ipa_ep_idx,
+			if (ipa2_cfg_ep_cfg(ipa_ep_idx,
 						&sys_in->ipa_ep_cfg.cfg)) {
 				IPAERR("fail to configure cfg prop of EP.\n");
 				result = -EFAULT;
@@ -1030,11 +1072,11 @@ int ipa_setup_sys_pipe(struct ipa_sys_connect_params *sys_in, u32 *clnt_hdl)
 	}
 
 	if (!ep->skip_ep_cfg) {
-		if (ipa_cfg_ep(ipa_ep_idx, &sys_in->ipa_ep_cfg)) {
+		if (ipa2_cfg_ep(ipa_ep_idx, &sys_in->ipa_ep_cfg)) {
 			IPAERR("fail to configure EP.\n");
 			goto fail_gen2;
 		}
-		if (ipa_cfg_ep_status(ipa_ep_idx, &ep->status)) {
+		if (ipa2_cfg_ep_status(ipa_ep_idx, &ep->status)) {
 			IPAERR("fail to configure status of EP.\n");
 			goto fail_gen2;
 		}
@@ -1069,6 +1111,12 @@ int ipa_setup_sys_pipe(struct ipa_sys_connect_params *sys_in, u32 *clnt_hdl)
 		 */
 		ep->rx_replenish_threshold = ipa_get_sys_yellow_wm()
 						/ ep->sys->rx_buff_sz;
+		/* Only when the WAN pipes are setup, actual threshold will
+		 * be read from the register. So update LAN_CONS ep again with
+		 * right value.
+		 */
+		if (sys_in->client == IPA_CLIENT_APPS_WAN_CONS)
+			ipa_update_repl_threshold(IPA_CLIENT_APPS_LAN_CONS);
 	} else {
 		ep->connect.mode = SPS_MODE_DEST;
 		ep->connect.source = SPS_DEV_HANDLE_MEM;
@@ -1092,7 +1140,7 @@ int ipa_setup_sys_pipe(struct ipa_sys_connect_params *sys_in, u32 *clnt_hdl)
 		ep->connect.desc.phys_base = dma_addr;
 	} else {
 		ep->connect.desc.iova = dma_addr;
-		smmu_domain = ipa_get_smmu_domain();
+		smmu_domain = ipa2_get_smmu_domain();
 		if (smmu_domain != NULL) {
 			ep->connect.desc.phys_base =
 				iommu_iova_to_phys(smmu_domain, dma_addr);
@@ -1186,15 +1234,14 @@ fail_and_disable_clocks:
 fail_gen:
 	return result;
 }
-EXPORT_SYMBOL(ipa_setup_sys_pipe);
 
 /**
- * ipa_teardown_sys_pipe() - Teardown the system-BAM pipe and cleanup IPA EP
- * @clnt_hdl:	[in] the handle obtained from ipa_setup_sys_pipe
+ * ipa2_teardown_sys_pipe() - Teardown the system-BAM pipe and cleanup IPA EP
+ * @clnt_hdl:	[in] the handle obtained from ipa2_setup_sys_pipe
  *
  * Returns:	0 on success, negative on failure
  */
-int ipa_teardown_sys_pipe(u32 clnt_hdl)
+int ipa2_teardown_sys_pipe(u32 clnt_hdl)
 {
 	struct ipa_ep_context *ep;
 	int empty;
@@ -1263,7 +1310,6 @@ int ipa_teardown_sys_pipe(u32 clnt_hdl)
 
 	return 0;
 }
-EXPORT_SYMBOL(ipa_teardown_sys_pipe);
 
 /**
  * ipa_tx_comp_usr_notify_release() - Callback function which will call the
@@ -1297,7 +1343,7 @@ static void ipa_tx_cmd_comp(void *user1, int user2)
 }
 
 /**
- * ipa_tx_dp() - Data-path tx handler
+ * ipa2_tx_dp() - Data-path tx handler
  * @dst:	[in] which IPA destination to route tx packets to
  * @skb:	[in] the packet to send
  * @metadata:	[in] TX packet meta-data
@@ -1323,7 +1369,7 @@ static void ipa_tx_cmd_comp(void *user1, int user2)
  *
  * Returns:	0 on success, negative on failure
  */
-int ipa_tx_dp(enum ipa_client_type dst, struct sk_buff *skb,
+int ipa2_tx_dp(enum ipa_client_type dst, struct sk_buff *skb,
 		struct ipa_tx_meta *meta)
 {
 	struct ipa_desc desc[2];
@@ -1354,15 +1400,15 @@ int ipa_tx_dp(enum ipa_client_type dst, struct sk_buff *skb,
 	 *
 	 */
 	if (IPA_CLIENT_IS_CONS(dst)) {
-		src_ep_idx = ipa_get_ep_mapping(IPA_CLIENT_APPS_LAN_WAN_PROD);
+		src_ep_idx = ipa2_get_ep_mapping(IPA_CLIENT_APPS_LAN_WAN_PROD);
 		if (-1 == src_ep_idx) {
 			IPAERR("Client %u is not mapped\n",
 				IPA_CLIENT_APPS_LAN_WAN_PROD);
 			return -EFAULT;
 		}
-		dst_ep_idx = ipa_get_ep_mapping(dst);
+		dst_ep_idx = ipa2_get_ep_mapping(dst);
 	} else {
-		src_ep_idx = ipa_get_ep_mapping(dst);
+		src_ep_idx = ipa2_get_ep_mapping(dst);
 		if (-1 == src_ep_idx) {
 			IPAERR("Client %u is not mapped\n", dst);
 			return -EFAULT;
@@ -1442,7 +1488,6 @@ fail_send:
 fail_gen:
 	return -EFAULT;
 }
-EXPORT_SYMBOL(ipa_tx_dp);
 
 static void ipa_wq_handle_rx(struct work_struct *work)
 {
@@ -1778,13 +1823,15 @@ static void ipa_fast_replenish_rx_cache(struct ipa_sys_context *sys)
 			break;
 		}
 		rx_len_cached = ++sys->len;
+		sys->repl_trig_cnt++;
 		curr = (curr + 1) % sys->repl.capacity;
 		/* ensure write is done before setting head index */
 		mb();
 		atomic_set(&sys->repl.head_idx, curr);
 	}
 
-	queue_work(sys->repl_wq, &sys->repl_work);
+	if (sys->repl_trig_cnt % sys->repl_trig_thresh == 0)
+		queue_work(sys->repl_wq, &sys->repl_work);
 
 	if (rx_len_cached <= sys->ep->rx_replenish_threshold) {
 		if (rx_len_cached == 0) {
@@ -1795,6 +1842,7 @@ static void ipa_fast_replenish_rx_cache(struct ipa_sys_context *sys)
 			else
 				WARN_ON(1);
 		}
+		sys->repl_trig_cnt = 0;
 		queue_delayed_work(sys->wq, &sys->replenish_rx_work,
 			msecs_to_jiffies(1));
 	}
@@ -2217,7 +2265,7 @@ static int ipa_wan_rx_pyld_hdlr(struct sk_buff *skb,
 			IPA_STATS_INC_CNT(ipa_ctx->stats.wan_aggr_close);
 			continue;
 		}
-		ep_idx = ipa_get_ep_mapping(IPA_CLIENT_APPS_WAN_CONS);
+		ep_idx = ipa2_get_ep_mapping(IPA_CLIENT_APPS_WAN_CONS);
 		if (status->endp_dest_idx != ep_idx) {
 			IPAERR("expected endp_dest_idx %d received %d\n",
 					ep_idx, status->endp_dest_idx);
@@ -2358,6 +2406,18 @@ static struct sk_buff *ipa_get_skb_ipa_rx(unsigned int len, gfp_t flags)
 	return __dev_alloc_skb(len, flags);
 }
 
+static struct sk_buff *ipa_get_skb_ipa_rx_headroom(unsigned int len,
+		gfp_t flags)
+{
+	struct sk_buff *skb;
+
+	skb = __dev_alloc_skb(len + IPA_HEADROOM, flags);
+	if (skb)
+		skb_reserve(skb, IPA_HEADROOM);
+
+	return skb;
+}
+
 static void ipa_free_skb_rx(struct sk_buff *skb)
 {
 	dev_kfree_skb_any(skb);
@@ -2455,7 +2515,7 @@ static void ipa_wlan_wq_rx_common(struct ipa_sys_context *sys, u32 size)
 	rx_skb->truesize = rx_pkt_expected->len + sizeof(struct sk_buff);
 	sys->ep->wstats.tx_pkts_rcvd++;
 	if (sys->len <= IPA_WLAN_RX_POOL_SZ_LOW_WM) {
-		ipa_free_skb(&rx_pkt_expected->data);
+		ipa2_free_skb(&rx_pkt_expected->data);
 		sys->ep->wstats.tx_pkts_dropped++;
 	} else {
 		sys->ep->wstats.tx_pkts_sent++;
@@ -2512,6 +2572,8 @@ void ipa_sps_irq_rx_no_aggr_notify(struct sps_event_notify *notify)
 	switch (notify->event_id) {
 	case SPS_EVENT_EOT:
 		rx_pkt = notify->data.transfer.user;
+		if (IPA_CLIENT_IS_APPS_CONS(rx_pkt->sys->ep->client))
+			atomic_set(&ipa_ctx->sps_pm.eot_activity, 1);
 		rx_pkt->len = notify->data.transfer.iovec.size;
 		IPADBG("event %d notified sys=%p len=%u\n", notify->event_id,
 				notify->user, rx_pkt->len);
@@ -2590,7 +2652,7 @@ static int ipa_assign_policy(struct ipa_sys_connect_params *in,
 				sys->policy = IPA_POLICY_NOINTR_MODE;
 				sys->sps_option = SPS_O_AUTO_ENABLE;
 				sys->sps_callback = NULL;
-				sys->ep->status.status_ep = ipa_get_ep_mapping(
+				sys->ep->status.status_ep = ipa2_get_ep_mapping(
 						IPA_CLIENT_APPS_LAN_CONS);
 				if (IPA_CLIENT_IS_MEMCPY_DMA_PROD(in->client))
 					sys->ep->status.status_en = false;
@@ -2616,8 +2678,9 @@ static int ipa_assign_policy(struct ipa_sys_connect_params *in,
 				INIT_WORK(&sys->repl_work, ipa_wq_repl_rx);
 				atomic_set(&sys->curr_polling_state, 0);
 				sys->rx_buff_sz = IPA_GENERIC_RX_BUFF_SZ(
-					IPA_GENERIC_RX_BUFF_BASE_SZ);
-				sys->get_skb = ipa_get_skb_ipa_rx;
+					IPA_GENERIC_RX_BUFF_BASE_SZ) -
+					IPA_HEADROOM;
+				sys->get_skb = ipa_get_skb_ipa_rx_headroom;
 				sys->free_skb = ipa_free_skb_rx;
 				in->ipa_ep_cfg.aggr.aggr_en = IPA_ENABLE_AGGR;
 				in->ipa_ep_cfg.aggr.aggr = IPA_GENERIC;
@@ -2679,6 +2742,7 @@ static int ipa_assign_policy(struct ipa_sys_connect_params *in,
 						IPA_GENERIC_AGGR_PKT_LIMIT;
 					}
 				}
+				sys->repl_trig_thresh = sys->rx_pool_sz / 8;
 				if (nr_cpu_ids > 1)
 					sys->repl_hdlr =
 						ipa_fast_replenish_rx_cache;
@@ -2823,7 +2887,7 @@ static void ipa_tx_client_rx_pkt_status(void *user1, int user2)
 
 
 /**
- * ipa_tx_dp_mul() - Data-path tx handler for multiple packets
+ * ipa2_tx_dp_mul() - Data-path tx handler for multiple packets
  * @src: [in] - Client that is sending data
  * @ipa_tx_data_desc:	[in] data descriptors from wlan
  *
@@ -2841,7 +2905,7 @@ static void ipa_tx_client_rx_pkt_status(void *user1, int user2)
  *
  * Returns:	0 on success, negative on failure
  */
-int ipa_tx_dp_mul(enum ipa_client_type src,
+int ipa2_tx_dp_mul(enum ipa_client_type src,
 			struct ipa_tx_data_desc *data_desc)
 {
 	/* The second byte in wlan header holds qmap id */
@@ -2861,7 +2925,7 @@ int ipa_tx_dp_mul(enum ipa_client_type src,
 
 	spin_lock_bh(&ipa_ctx->wc_memb.ipa_tx_mul_spinlock);
 
-	ep_idx = ipa_get_ep_mapping(src);
+	ep_idx = ipa2_get_ep_mapping(src);
 	if (unlikely(ep_idx == -1)) {
 		IPAERR("dest EP does not exist.\n");
 		goto fail_send;
@@ -2935,9 +2999,8 @@ fail_send:
 	return -EFAULT;
 
 }
-EXPORT_SYMBOL(ipa_tx_dp_mul);
 
-void ipa_free_skb(struct ipa_rx_data *data)
+void ipa2_free_skb(struct ipa_rx_data *data)
 {
 	struct ipa_rx_pkt_wrapper *rx_pkt;
 
@@ -2960,13 +3023,13 @@ void ipa_free_skb(struct ipa_rx_data *data)
 
 	spin_unlock_bh(&ipa_ctx->wc_memb.wlan_spinlock);
 }
-EXPORT_SYMBOL(ipa_free_skb);
+
 
 /* Functions added to support kernel tests */
 
-int ipa_sys_setup(struct ipa_sys_connect_params *sys_in,
+int ipa2_sys_setup(struct ipa_sys_connect_params *sys_in,
 			unsigned long *ipa_bam_hdl,
-			u32 *ipa_pipe_num, u32 *clnt_hdl)
+			u32 *ipa_pipe_num, u32 *clnt_hdl, bool en_status)
 {
 	struct ipa_ep_context *ep;
 	int ipa_ep_idx;
@@ -2986,7 +3049,7 @@ int ipa_sys_setup(struct ipa_sys_connect_params *sys_in,
 		goto fail_gen;
 	}
 
-	ipa_ep_idx = ipa_get_ep_mapping(sys_in->client);
+	ipa_ep_idx = ipa2_get_ep_mapping(sys_in->client);
 	if (ipa_ep_idx == -1) {
 		IPAERR("Invalid client :%d\n", sys_in->client);
 		goto fail_gen;
@@ -3001,14 +3064,14 @@ int ipa_sys_setup(struct ipa_sys_connect_params *sys_in,
 			IPAERR("EP %d already allocated\n", ipa_ep_idx);
 			goto fail_and_disable_clocks;
 		} else {
-			if (ipa_cfg_ep_hdr(ipa_ep_idx,
+			if (ipa2_cfg_ep_hdr(ipa_ep_idx,
 						&sys_in->ipa_ep_cfg.hdr)) {
 				IPAERR("fail to configure hdr prop of EP %d\n",
 						ipa_ep_idx);
 				result = -EFAULT;
 				goto fail_and_disable_clocks;
 			}
-			if (ipa_cfg_ep_cfg(ipa_ep_idx,
+			if (ipa2_cfg_ep_cfg(ipa_ep_idx,
 						&sys_in->ipa_ep_cfg.cfg)) {
 				IPAERR("fail to configure cfg prop of EP %d\n",
 						ipa_ep_idx);
@@ -3043,11 +3106,11 @@ int ipa_sys_setup(struct ipa_sys_connect_params *sys_in,
 	}
 
 	if (!ep->skip_ep_cfg) {
-		if (ipa_cfg_ep(ipa_ep_idx, &sys_in->ipa_ep_cfg)) {
+		if (ipa2_cfg_ep(ipa_ep_idx, &sys_in->ipa_ep_cfg)) {
 			IPAERR("fail to configure EP.\n");
 			goto fail_gen2;
 		}
-		if (ipa_cfg_ep_status(ipa_ep_idx, &ep->status)) {
+		if (ipa2_cfg_ep_status(ipa_ep_idx, &ep->status)) {
 			IPAERR("fail to configure status of EP.\n");
 			goto fail_gen2;
 		}
@@ -3076,9 +3139,8 @@ fail_and_disable_clocks:
 fail_gen:
 	return result;
 }
-EXPORT_SYMBOL(ipa_sys_setup);
 
-int ipa_sys_teardown(u32 clnt_hdl)
+int ipa2_sys_teardown(u32 clnt_hdl)
 {
 	struct ipa_ep_context *ep;
 
@@ -3102,7 +3164,14 @@ int ipa_sys_teardown(u32 clnt_hdl)
 
 	return 0;
 }
-EXPORT_SYMBOL(ipa_sys_teardown);
+
+int ipa2_sys_update_gsi_hdls(u32 clnt_hdl, unsigned long gsi_ch_hdl,
+	unsigned long gsi_ev_hdl)
+{
+	IPAERR("GSI not supported in IPAv2");
+	return -EFAULT;
+}
+
 
 /**
  * ipa_adjust_ra_buff_base_sz()

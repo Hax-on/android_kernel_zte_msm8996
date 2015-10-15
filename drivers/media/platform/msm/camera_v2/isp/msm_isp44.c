@@ -46,7 +46,7 @@
 #define VFE44_XBAR_BASE(idx) (0x58 + 0x4 * (idx / 2))
 #define VFE44_XBAR_SHIFT(idx) ((idx%2) ? 16 : 0)
 #define VFE44_PING_PONG_BASE(wm, ping_pong) \
-	(VFE44_WM_BASE(wm) + 0x4 * (1 + (~(ping_pong >> wm) & 0x1)))
+	(VFE44_WM_BASE(wm) + 0x4 * (1 + ((~ping_pong) & 0x1)))
 
 #define VFE44_BUS_RD_CGC_OVERRIDE_BIT 16
 
@@ -385,7 +385,7 @@ static void msm_vfe44_process_error_status(struct vfe_device *vfe_dev)
 	if (error_status1 & (1 << 0)) {
 		pr_err("%s: camif error status: 0x%x\n",
 			__func__, vfe_dev->error_info.camif_status);
-		msm_camera_io_dump_2(vfe_dev->vfe_base + 0x2f4, 0x30);
+		msm_camera_io_dump(vfe_dev->vfe_base + 0x2f4, 0x30, 1);
 	}
 	if (error_status1 & (1 << 1))
 		pr_err("%s: stats bhist overwrite\n", __func__);
@@ -525,6 +525,10 @@ static void msm_vfe44_process_reg_update(struct vfe_device *vfe_dev,
 				if (atomic_read(
 					&vfe_dev->stats_data.stats_update))
 					msm_isp_stats_stream_update(vfe_dev);
+				if (vfe_dev->axi_data.camif_state ==
+					CAMIF_STOPPING)
+					vfe_dev->hw_info->vfe_ops.core_ops.
+						reg_update(vfe_dev, i);
 				break;
 			case VFE_RAW_0:
 			case VFE_RAW_1:
@@ -626,6 +630,8 @@ static void msm_vfe44_reg_update(struct vfe_device *vfe_dev,
 		msm_camera_io_w_mb(update_mask,
 			vfe_dev->vfe_base + 0x378);
 	} else if (!vfe_dev->is_split ||
+		((frame_src == VFE_PIX_0) &&
+		(vfe_dev->axi_data.camif_state == CAMIF_STOPPING)) ||
 		(frame_src >= VFE_RAW_0 && frame_src <= VFE_SRC_MAX)) {
 		msm_camera_io_w_mb(update_mask,
 			vfe_dev->vfe_base + 0x378);
@@ -672,17 +678,17 @@ static void msm_vfe44_axi_reload_wm(struct vfe_device *vfe_dev,
 	msm_camera_io_w_mb(reload_mask, vfe_base + 0x4C);
 }
 
-static void msm_vfe44_axi_enable_wm(struct vfe_device *vfe_dev,
+static void msm_vfe44_axi_enable_wm(void __iomem *vfe_base,
 	uint8_t wm_idx, uint8_t enable)
 {
 	uint32_t val;
-	val = msm_camera_io_r(vfe_dev->vfe_base + VFE44_WM_BASE(wm_idx));
+	val = msm_camera_io_r(vfe_base + VFE44_WM_BASE(wm_idx));
 	if (enable)
 		val |= 0x1;
 	else
 		val &= ~0x1;
 	msm_camera_io_w_mb(val,
-		vfe_dev->vfe_base + VFE44_WM_BASE(wm_idx));
+		vfe_base + VFE44_WM_BASE(wm_idx));
 }
 
 static void msm_vfe44_axi_update_cgc_override(struct vfe_device *vfe_dev,
@@ -1368,18 +1374,18 @@ static void msm_vfe44_cfg_axi_ub(struct vfe_device *vfe_dev)
 static void msm_vfe44_read_wm_ping_pong_addr(
 	struct vfe_device *vfe_dev)
 {
-	msm_camera_io_dump_2(vfe_dev->vfe_base +
-		(VFE44_WM_BASE(0) & 0xFFFFFFF0), 0x200);
+	msm_camera_io_dump(vfe_dev->vfe_base +
+		(VFE44_WM_BASE(0) & 0xFFFFFFF0), 0x200, 1);
 }
 
 static void msm_vfe44_update_ping_pong_addr(
 	void __iomem *vfe_base,
-	uint8_t wm_idx, uint32_t pingpong_status, dma_addr_t paddr,
+	uint8_t wm_idx, uint32_t pingpong_bit, dma_addr_t paddr,
 	int32_t buf_size)
 {
 	uint32_t paddr32 = (paddr & 0xFFFFFFFF);
 	msm_camera_io_w(paddr32, vfe_base +
-		VFE44_PING_PONG_BASE(wm_idx, pingpong_status));
+		VFE44_PING_PONG_BASE(wm_idx, pingpong_bit));
 }
 
 static int msm_vfe44_axi_halt(struct vfe_device *vfe_dev,

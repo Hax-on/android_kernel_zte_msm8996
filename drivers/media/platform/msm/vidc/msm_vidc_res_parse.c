@@ -13,6 +13,7 @@
 
 #include <asm/dma-iommu.h>
 #include <linux/iommu.h>
+#include <linux/qcom_iommu.h>
 #include <linux/of.h>
 #include <linux/slab.h>
 #include <linux/sort.h>
@@ -25,6 +26,8 @@
 enum clock_properties {
 	CLOCK_PROP_HAS_SCALING = 1 << 0,
 };
+static int msm_vidc_populate_legacy_context_bank(
+			struct msm_vidc_platform_resources *res);
 
 static size_t get_u32_array_num_elements(struct platform_device *pdev,
 					char *name)
@@ -67,6 +70,12 @@ static inline void msm_vidc_free_freq_table(
 		struct msm_vidc_platform_resources *res)
 {
 	res->load_freq_tbl = NULL;
+}
+
+static inline void msm_vidc_free_imem_ab_table(
+		struct msm_vidc_platform_resources *res)
+{
+	res->imem_ab_tbl = NULL;
 }
 
 static inline void msm_vidc_free_reg_table(
@@ -225,6 +234,44 @@ static int msm_vidc_load_qdss_table(struct msm_vidc_platform_resources *res)
 	}
 err_qdss_addr_tbl:
 	return rc;
+}
+
+static int msm_vidc_load_imem_ab_table(struct msm_vidc_platform_resources *res)
+{
+	int num_elements = 0;
+	struct platform_device *pdev = res->pdev;
+
+	if (!of_find_property(pdev->dev.of_node, "qcom,imem-ab-tbl", NULL)) {
+		/* optional property */
+		dprintk(VIDC_DBG, "qcom,imem-freq-tbl not found\n");
+		return 0;
+	}
+
+	num_elements = get_u32_array_num_elements(pdev, "qcom,imem-ab-tbl");
+	num_elements /= (sizeof(*res->imem_ab_tbl) / sizeof(u32));
+	if (!num_elements) {
+		dprintk(VIDC_ERR, "no elements in imem ab table\n");
+		return -EINVAL;
+	}
+
+	res->imem_ab_tbl = devm_kzalloc(&pdev->dev, num_elements *
+			sizeof(*res->imem_ab_tbl), GFP_KERNEL);
+	if (!res->imem_ab_tbl) {
+		dprintk(VIDC_ERR, "Failed to alloc imem_ab_tbl\n");
+		return -ENOMEM;
+	}
+
+	if (of_property_read_u32_array(pdev->dev.of_node,
+		"qcom,imem-ab-tbl", (u32 *)res->imem_ab_tbl,
+		num_elements * sizeof(*res->imem_ab_tbl) / sizeof(u32))) {
+		dprintk(VIDC_ERR, "Failed to read imem_ab_tbl\n");
+		msm_vidc_free_imem_ab_table(res);
+		return -EINVAL;
+	}
+
+	res->imem_ab_tbl_size = num_elements;
+
+	return 0;
 }
 
 static int msm_vidc_load_freq_table(struct msm_vidc_platform_resources *res)
@@ -630,6 +677,10 @@ int read_platform_resources_from_dt(
 		goto err_load_freq_table;
 	}
 
+	rc = msm_vidc_load_imem_ab_table(res);
+	if (rc)
+		dprintk(VIDC_WARN, "Failed to load freq table: %d\n", rc);
+
 	rc = msm_vidc_load_qdss_table(res);
 	if (rc)
 		dprintk(VIDC_WARN, "Failed to load qdss reg table: %d\n", rc);
@@ -668,6 +719,13 @@ int read_platform_resources_from_dt(
 		goto err_load_max_hw_load;
 	}
 
+	rc = msm_vidc_populate_legacy_context_bank(res);
+	if (rc) {
+		dprintk(VIDC_ERR,
+			"Failed to setup context banks %d\n", rc);
+		goto err_setup_legacy_cb;
+	}
+
 	res->use_non_secure_pil = of_property_read_bool(pdev->dev.of_node,
 			"qcom,use-non-secure-pil");
 
@@ -687,7 +745,12 @@ int read_platform_resources_from_dt(
 	res->never_unload_fw = of_property_read_bool(pdev->dev.of_node,
 			"qcom,never-unload-fw");
 
+	of_property_read_u32(pdev->dev.of_node,
+			"qcom,pm-qos-latency-us", &res->pm_qos_latency_us);
+
 	return rc;
+
+err_setup_legacy_cb:
 err_load_max_hw_load:
 	msm_vidc_free_clock_table(res);
 err_load_clock_table:
@@ -723,17 +786,24 @@ static int msm_vidc_setup_context_bank(struct context_bank_info *cb,
 	int rc = 0;
 	int disable_htw = 1;
 	int secure_vmid = VMID_INVAL;
+	struct bus_type *bus;
 
 	if (!dev || !cb) {
 		dprintk(VIDC_ERR,
 			"%s: Invalid Input params\n", __func__);
 		return -EINVAL;
 	}
-
 	cb->dev = dev;
-	cb->mapping = arm_iommu_create_mapping(&platform_bus_type,
-			cb->addr_range.start, cb->addr_range.size);
 
+	bus = msm_iommu_get_bus(cb->dev);
+	if (IS_ERR_OR_NULL(bus)) {
+		dprintk(VIDC_ERR, "%s - failed to get bus type\n", __func__);
+		rc = PTR_ERR(bus) ?: -ENODEV;
+		goto remove_cb;
+	}
+
+	cb->mapping = arm_iommu_create_mapping(bus, cb->addr_range.start,
+					cb->addr_range.size);
 	if (IS_ERR_OR_NULL(cb->mapping)) {
 		dprintk(VIDC_ERR, "%s - failed to create mapping\n", __func__);
 		rc = PTR_ERR(cb->mapping) ?: -ENODEV;
@@ -781,14 +851,85 @@ remove_cb:
 	return rc;
 }
 
+int msm_vidc_smmu_fault_handler(struct iommu_domain *domain,
+		struct device *dev, unsigned long iova, int flags, void *token)
+{
+	struct msm_vidc_core *core = token;
+	struct msm_vidc_inst *inst;
+	struct buffer_info *temp;
+	struct internal_buf *buf;
+	int i = 0;
+
+	if (!domain || !core) {
+		dprintk(VIDC_ERR, "%s - invalid param %p %p\n",
+			__func__, domain, core);
+		return -EINVAL;
+	}
+
+	if (core->smmu_fault_handled)
+		return -ENOSYS;
+
+	dprintk(VIDC_ERR, "%s - faulting address: %lx\n", __func__, iova);
+
+	mutex_lock(&core->lock);
+	list_for_each_entry(inst, &core->instances, list) {
+		dprintk(VIDC_ERR,
+			"---Buffer details for inst: %p of type: %d---\n",
+			inst, inst->session_type);
+		mutex_lock(&inst->registeredbufs.lock);
+		dprintk(VIDC_ERR, "registered buffer list:\n");
+		list_for_each_entry(temp, &inst->registeredbufs.list, list)
+			for (i = 0; i < temp->num_planes; i++)
+				dprintk(VIDC_ERR,
+					"type: %d plane: %d addr: %pa size: %d\n",
+					temp->type, i, &temp->device_addr[i],
+					temp->size[i]);
+
+		mutex_unlock(&inst->registeredbufs.lock);
+
+		mutex_lock(&inst->scratchbufs.lock);
+		dprintk(VIDC_ERR, "scratch buffer list:\n");
+		list_for_each_entry(buf, &inst->scratchbufs.list, list)
+			dprintk(VIDC_ERR, "type: %d addr: %pa size: %lu\n",
+				buf->buffer_type, &buf->handle->device_addr,
+				buf->handle->size);
+		mutex_unlock(&inst->scratchbufs.lock);
+
+		mutex_lock(&inst->persistbufs.lock);
+		dprintk(VIDC_ERR, "persist buffer list:\n");
+		list_for_each_entry(buf, &inst->persistbufs.list, list)
+			dprintk(VIDC_ERR, "type: %d addr: %pa size: %lu\n",
+				buf->buffer_type, &buf->handle->device_addr,
+				buf->handle->size);
+		mutex_unlock(&inst->persistbufs.lock);
+
+		mutex_lock(&inst->outputbufs.lock);
+		dprintk(VIDC_ERR, "dpb buffer list:\n");
+		list_for_each_entry(buf, &inst->outputbufs.list, list)
+			dprintk(VIDC_ERR, "type: %d addr: %pa size: %lu\n",
+				buf->buffer_type, &buf->handle->device_addr,
+				buf->handle->size);
+		mutex_unlock(&inst->outputbufs.lock);
+	}
+	core->smmu_fault_handled = true;
+	mutex_unlock(&core->lock);
+	/*
+	 * Return -ENOSYS to elicit the default behaviour of smmu driver.
+	 * If we return -ENOSYS, then smmu driver assumes page fault handler
+	 * is not installed and prints a list of useful debug information like
+	 * FAR, SID etc. This information is not printed if we return 0.
+	 */
+	return -ENOSYS;
+}
+
 static int msm_vidc_populate_context_bank(struct device *dev,
-		struct msm_vidc_platform_resources *res)
+		struct msm_vidc_core *core)
 {
 	int rc = 0;
 	struct context_bank_info *cb = NULL;
 	struct device_node *np = NULL;
 
-	if (!dev || !res) {
+	if (!dev || !core) {
 		dprintk(VIDC_ERR, "%s - invalid inputs\n", __func__);
 		return -EINVAL;
 	}
@@ -801,7 +942,7 @@ static int msm_vidc_populate_context_bank(struct device *dev,
 	}
 
 	INIT_LIST_HEAD(&cb->list);
-	list_add_tail(&cb->list, &res->context_banks);
+	list_add_tail(&cb->list, &core->resources.context_banks);
 
 	rc = of_property_read_string(np, "label", &cb->name);
 	if (rc) {
@@ -842,7 +983,108 @@ static int msm_vidc_populate_context_bank(struct device *dev,
 		goto err_setup_cb;
 	}
 
+	iommu_set_fault_handler(cb->mapping->domain,
+		msm_vidc_smmu_fault_handler, (void *)core);
+
 	return 0;
+
+err_setup_cb:
+	list_del(&cb->list);
+	return rc;
+}
+
+static int msm_vidc_populate_legacy_context_bank(
+			struct msm_vidc_platform_resources *res)
+{
+	int rc = 0;
+	struct platform_device *pdev = NULL;
+	struct device_node *domains_parent_node = NULL;
+	struct device_node *domains_child_node = NULL;
+	struct device_node *ctx_node = NULL;
+	struct context_bank_info *cb;
+
+	if (!res || !res->pdev) {
+		dprintk(VIDC_ERR, "%s - invalid inputs\n", __func__);
+		return -EINVAL;
+	}
+	pdev = res->pdev;
+
+	domains_parent_node = of_find_node_by_name(pdev->dev.of_node,
+			"qcom,vidc-iommu-domains");
+	if (!domains_parent_node) {
+		dprintk(VIDC_DBG,
+			"%s legacy iommu domains not present\n", __func__);
+		return 0;
+	}
+
+	/* set up each context bank for legacy DT bindings*/
+	for_each_child_of_node(domains_parent_node,
+		domains_child_node) {
+		cb = devm_kzalloc(&pdev->dev, sizeof(*cb), GFP_KERNEL);
+		if (!cb) {
+			dprintk(VIDC_ERR,
+				"%s - Failed to allocate cb\n", __func__);
+			return -ENOMEM;
+		}
+		INIT_LIST_HEAD(&cb->list);
+		list_add_tail(&cb->list, &res->context_banks);
+
+		ctx_node = of_parse_phandle(domains_child_node,
+				"qcom,vidc-domain-phandle", 0);
+		if (!ctx_node) {
+			dprintk(VIDC_ERR,
+				"%s Unable to parse pHandle\n", __func__);
+			rc = -EBADHANDLE;
+			goto err_setup_cb;
+		}
+
+		rc = of_property_read_string(ctx_node, "label", &(cb->name));
+		if (rc) {
+			dprintk(VIDC_ERR,
+				"%s Could not find label\n", __func__);
+			goto err_setup_cb;
+		}
+
+		rc = of_property_read_u32_array(ctx_node,
+			"qcom,virtual-addr-pool", (u32 *)&cb->addr_range, 2);
+		if (rc) {
+			dprintk(VIDC_ERR,
+				"%s Could not read addr pool for group : %s (%d)\n",
+				__func__, cb->name, rc);
+			goto err_setup_cb;
+		}
+
+		cb->is_secure =
+			of_property_read_bool(ctx_node, "qcom,secure-domain");
+
+		rc = of_property_read_u32(domains_child_node,
+				"qcom,vidc-buffer-types", &cb->buffer_type);
+		if (rc) {
+			dprintk(VIDC_ERR,
+				"%s Could not read buffer type (%d)\n",
+				__func__, rc);
+			goto err_setup_cb;
+		}
+
+		cb->dev = msm_iommu_get_ctx(cb->name);
+		if (IS_ERR_OR_NULL(cb->dev)) {
+			dprintk(VIDC_ERR, "%s could not get device for cb %s\n",
+					__func__, cb->name);
+			rc = -ENOENT;
+			goto err_setup_cb;
+		}
+
+		rc = msm_vidc_setup_context_bank(cb, cb->dev);
+		if (rc) {
+			dprintk(VIDC_ERR, "Cannot setup context bank %d\n", rc);
+			goto err_setup_cb;
+		}
+		dprintk(VIDC_DBG,
+			"%s: context bank %s secure %d addr start = %#x addr size = %#x buffer_type = %#x\n",
+			__func__, cb->name, cb->is_secure, cb->addr_range.start,
+			cb->addr_range.size, cb->buffer_type);
+	}
+	return rc;
 
 err_setup_cb:
 	list_del(&cb->list);
@@ -888,8 +1130,7 @@ int read_context_bank_resources_from_dt(struct platform_device *pdev)
 			}
 		}
 	} else {
-		rc = msm_vidc_populate_context_bank(&pdev->dev,
-					&core->resources);
+		rc = msm_vidc_populate_context_bank(&pdev->dev, core);
 		if (rc)
 			dprintk(VIDC_ERR, "Failed to probe context bank\n");
 		else

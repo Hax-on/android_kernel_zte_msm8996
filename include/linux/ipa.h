@@ -18,8 +18,17 @@
 #include <linux/types.h>
 #include <linux/msm-sps.h>
 #include <linux/if_ether.h>
+#include "linux/msm_gsi.h"
 
 #define IPA_APPS_MAX_BW_IN_MBPS 200
+/**
+ * enum ipa_transport_type
+ * transport type: either GSI or SPS
+ */
+enum ipa_transport_type {
+	IPA_TRANSPORT_TYPE_SPS,
+	IPA_TRANSPORT_TYPE_GSI
+};
 
 /**
  * enum ipa_nat_en_type - NAT setting type in IPA end-point
@@ -172,9 +181,10 @@ struct ipa_ep_cfg_hdr {
  *	byte alignment). Valid for Output Pipes only (IPA Producer).
  * @hdr_total_len_or_pad_offset: Offset to length field containing either
  *	total length or pad length, per hdr_total_len_or_pad config
- * @hdr_payload_len_inc_padding: 0-IPA_ENDP_INIT_HDR_n’s HDR_OFST_PKT_SIZE does
+ * @hdr_payload_len_inc_padding: 0-IPA_ENDP_INIT_HDR_n's
+ *	HDR_OFST_PKT_SIZE does
  *	not includes padding bytes size, payload_len = packet length,
- *	1-IPA_ENDP_INIT_HDR_n’s HDR_OFST_PKT_SIZE includes
+ *	1-IPA_ENDP_INIT_HDR_n's HDR_OFST_PKT_SIZE includes
  *	padding bytes size, payload_len = packet length + padding
  * @hdr_total_len_or_pad: field is used as PAD length ot as Total length
  *	(header + packet + padding)
@@ -265,7 +275,7 @@ struct ipa_ep_cfg_holb {
 /**
  * struct ipa_ep_cfg_deaggr - deaggregation configuration in IPA end-point
  * @deaggr_hdr_len: Deaggregation Header length in bytes. Valid only for Input
- *	Pipes, which are configured for ’Generic’ deaggregation.
+ *	Pipes, which are configured for 'Generic' deaggregation.
  * @packet_offset_valid: - 0: PACKET_OFFSET is not used, 1: PACKET_OFFSET is
  *	used.
  * @packet_offset_location: Location of packet offset field, which specifies
@@ -686,8 +696,14 @@ struct ipa_rx_data {
 	dma_addr_t dma_addr;
 };
 
+/**
+ * enum ipa_irq_type - IPA Interrupt Type
+ * Used to register handlers for IPA interrupts
+ *
+ * Below enum is a logical mapping and not the actual interrupt bit in HW
+ */
 enum ipa_irq_type {
-	IPA_BAD_SNOC_ACCESS_IRQ = 0,
+	IPA_BAD_SNOC_ACCESS_IRQ,
 	IPA_EOT_COAL_IRQ,
 	IPA_UC_IRQ_0,
 	IPA_UC_IRQ_1,
@@ -703,9 +719,9 @@ enum ipa_irq_type {
 	IPA_TX_ERR_IRQ,
 	IPA_STEP_MODE_IRQ,
 	IPA_PROC_ERR_IRQ,
-	IPA_TX_SUSPEND_IRQ = 16,
-	IPA_TX_HOLB_DROP_IRQ = 17,
-
+	IPA_TX_SUSPEND_IRQ,
+	IPA_TX_HOLB_DROP_IRQ,
+	IPA_BAM_IDLE_IRQ,
 	IPA_IRQ_MAX
 };
 
@@ -1085,6 +1101,174 @@ struct ipa_mhi_connect_params {
 	u8 channel_id;
 };
 
+/**
+ * struct ipa_gsi_ep_config - IPA GSI endpoint configurations
+ *
+ * @ipa_ep_num: IPA EP pipe number
+ * @ipa_gsi_chan_num: GSI channel number
+ * @ipa_if_tlv: number of IPA_IF TLV
+ * @ipa_if_aos: number of IPA_IF AOS
+ * @ee: Execution environment
+ */
+struct ipa_gsi_ep_config {
+	int ipa_ep_num;
+	int ipa_gsi_chan_num;
+	int ipa_if_tlv;
+	int ipa_if_aos;
+	int ee;
+};
+
+enum ipa_usb_teth_prot {
+	IPA_USB_RNDIS = 0,
+	IPA_USB_ECM = 1,
+	IPA_USB_RMNET = 2,
+	IPA_USB_MBIM = 3,
+	IPA_USB_DIAG = 4,
+	IPA_USB_MAX_TETH_PROT_SIZE
+};
+
+/**
+ * ipa_usb_teth_params - parameters for RDNIS/ECM initialization API
+ *
+ * @host_ethaddr:        host Ethernet address in network order
+ * @device_ethaddr:      device Ethernet address in network order
+ */
+struct ipa_usb_teth_params {
+	u8 host_ethaddr[ETH_ALEN];
+	u8 device_ethaddr[ETH_ALEN];
+};
+
+enum ipa_usb_notify_event {
+	IPA_USB_DEVICE_READY,
+	IPA_USB_REMOTE_WAKEUP,
+	IPA_USB_SUSPEND_COMPLETED
+};
+
+enum ipa_usb_max_usb_packet_size {
+	IPA_USB_HIGH_SPEED_512B = 512,
+	IPA_USB_SUPER_SPEED_1024B = 1024
+};
+
+/**
+ * ipa_usb_xdci_chan_scratch - xDCI protocol SW config area of
+ * channel scratch
+ *
+ * @last_trb_addr:       Address (LSB - based on alignment restrictions) of
+ *                       last TRB in queue. Used to identify roll over case
+ * @const_buffer_size:   TRB buffer size in KB (similar to IPA aggregation
+ *                       configuration). Must be aligned to max USB Packet Size.
+ *                       Should be 1 <= const_buffer_size <= 31.
+ * @depcmd_low_addr:     Used to generate "Update Transfer" command
+ * @depcmd_hi_addr:      Used to generate "Update Transfer" command.
+ */
+struct ipa_usb_xdci_chan_scratch {
+	u16 last_trb_addr;
+	u8 const_buffer_size;
+	u32 depcmd_low_addr;
+	u8 depcmd_hi_addr;
+};
+
+/**
+ * ipa_usb_xdci_chan_params - xDCI channel related properties
+ *
+ * @client:              type of "client"
+ * @ipa_ep_cfg:          IPA EP configuration
+ * @keep_ipa_awake:      when true, IPA will not be clock gated
+ * @teth_prot:           tethering protocol for which the channel is created
+ * @gevntcount_low_addr: GEVNCOUNT low address for event scratch
+ * @gevntcount_hi_addr:  GEVNCOUNT high address for event scratch
+ * @dir:                 channel direction
+ * @xfer_ring_len:       length of transfer ring in bytes (must be integral
+ *                       multiple of transfer element size - 16B for xDCI)
+ * @xfer_ring_base_addr: physical base address of transfer ring. Address must be
+ *                       aligned to xfer_ring_len rounded to power of two
+ * @xfer_scratch:        parameters for xDCI channel scratch
+ *
+ */
+struct ipa_usb_xdci_chan_params {
+	/* IPA EP params */
+	enum ipa_client_type client;
+	struct ipa_ep_cfg ipa_ep_cfg;
+	bool keep_ipa_awake;
+	enum ipa_usb_teth_prot teth_prot;
+	/* event ring params */
+	u32 gevntcount_low_addr;
+	u8 gevntcount_hi_addr;
+	/* transfer ring params */
+	enum gsi_chan_dir dir;
+	u16 xfer_ring_len;
+	u64 xfer_ring_base_addr;
+	struct ipa_usb_xdci_chan_scratch xfer_scratch;
+};
+
+/**
+ * ipa_usb_chan_out_params - out parameters for channel request
+ *
+ * @clnt_hdl:            opaque client handle assigned by IPA to client
+ * @db_reg_phs_addr_lsb: Physical address of doorbell register where the 32
+ *                       LSBs of the doorbell value should be written
+ * @db_reg_phs_addr_msb: Physical address of doorbell register where the 32
+ *                       MSBs of the doorbell value should be written
+ *
+ */
+struct ipa_req_chan_out_params {
+	u32 clnt_hdl;
+	u32 db_reg_phs_addr_lsb;
+	u32 db_reg_phs_addr_msb;
+};
+
+/**
+ * ipa_usb_teth_prot_params - parameters for connecting RNDIS
+ *
+ * @max_xfer_size_bytes_to_dev:   max size of UL packets in bytes
+ * @max_packet_number_to_dev:     max number of UL aggregated packets
+ * @max_xfer_size_bytes_to_host:  max size of DL packets in bytes
+ *
+ */
+struct ipa_usb_teth_prot_params {
+	u32 max_xfer_size_bytes_to_dev;
+	u32 max_packet_number_to_dev;
+	u32 max_xfer_size_bytes_to_host;
+};
+
+/**
+ * ipa_usb_xdci_connect_params - parameters required to start IN, OUT
+ * channels, and connect RNDIS/ECM/teth_bridge
+ *
+ * @max_pkt_size:          high speed or full speed
+ * @ipa_to_usb_clnt_hdl:   client handle received from
+ *                         ipa_usb_request_xdci_channel() for IN channel
+ * @ipa_to_usb_xferrscidx: Transfer Resource Index (XferRscIdx) for IN channel.
+ *                         The hardware-assigned transfer resource index for the
+ *                         transfer, which was returned in response to the
+ *                         Start Transfer command. This field is used for
+ *                         "Update Transfer" command.
+ *                         Should be 0 =< ipa_to_usb_xferrscidx <= 127.
+ * @ipa_to_usb_xferrscidx_valid: true if xferRscIdx should be updated for IN
+ *                         channel
+ * @usb_to_ipa_clnt_hdl:   client handle received from
+ *                         ipa_usb_request_xdci_channel() for OUT channel
+ * @usb_to_ipa_xferrscidx: Transfer Resource Index (XferRscIdx) for OUT channel
+ *                         Should be 0 =< usb_to_ipa_xferrscidx <= 127.
+ * @usb_to_ipa_xferrscidx_valid: true if xferRscIdx should be updated for OUT
+ *                         channel
+ * @teth_prot:             tethering protocol
+ * @teth_prot_params:      parameters for connecting the tethering protocol.
+ * @max_supported_bandwidth_mbps: maximum bandwidth need of the client in Mbps
+ */
+struct ipa_usb_xdci_connect_params {
+	enum ipa_usb_max_usb_packet_size max_pkt_size;
+	u32 ipa_to_usb_clnt_hdl;
+	u8 ipa_to_usb_xferrscidx;
+	bool ipa_to_usb_xferrscidx_valid;
+	u32 usb_to_ipa_clnt_hdl;
+	u8 usb_to_ipa_xferrscidx;
+	bool usb_to_ipa_xferrscidx_valid;
+	enum ipa_usb_teth_prot teth_prot;
+	struct ipa_usb_teth_prot_params teth_prot_params;
+	u32 max_supported_bandwidth_mbps;
+};
+
 #if defined CONFIG_IPA || defined CONFIG_IPA3
 
 /*
@@ -1327,6 +1511,15 @@ int teth_bridge_disconnect(enum ipa_client_type client);
 int teth_bridge_connect(struct teth_bridge_connect_params *connect_params);
 
 /*
+ * Tethering client info
+ */
+void ipa_set_client(int index, enum ipacm_client_enum client, bool uplink);
+
+enum ipacm_client_enum ipa_get_client(int pipe_idx);
+
+bool ipa_get_client_uplink(int pipe_idx);
+
+/*
  * ODU bridge
  */
 
@@ -1376,6 +1569,134 @@ int ipa_mhi_resume(void);
 int ipa_mhi_destroy(void);
 
 /*
+ * IPA_USB
+ */
+
+/**
+ * ipa_usb_init_teth_prot - Peripheral should call this function to initialize
+ * RNDIS/ECM/teth_bridge, prior to calling ipa_usb_xdci_connect()
+ *
+ * @usb_teth_type: tethering protocol type
+ * @teth_params:   pointer to tethering protocol parameters.
+ *                 Should be struct ipa_usb_teth_params for RNDIS/ECM,
+ *                 or NULL for teth_bridge
+ * @ipa_usb_notify_cb: will be called to notify USB driver on certain events
+ * @user_data:     cookie used for ipa_usb_notify_cb
+ *
+ * @Return 0 on success, negative on failure
+ */
+int ipa_usb_init_teth_prot(enum ipa_usb_teth_prot teth_prot,
+			   struct ipa_usb_teth_params *teth_params,
+			   int (*ipa_usb_notify_cb)(enum ipa_usb_notify_event,
+			   void *),
+			   void *user_data);
+
+/**
+ * ipa_usb_request_xdci_channel - Peripheral should call this function to allocate
+ * an xDCI channel, and initialize IPA EP.
+ *
+ * @params:     parameters for allocating xDCI channel. containing required
+ *              info on event and transfer rings, and IPA EP configuration
+ * @out_params: [out] opaque client handle assigned by IPA to client & DB
+ *              registers physical address
+ *
+ * Note: Should not be called from atomic context
+ *
+ * @Return 0 on success, negative on failure
+ *
+ */
+int ipa_usb_request_xdci_channel(struct ipa_usb_xdci_chan_params *params,
+				 struct ipa_req_chan_out_params *out_params);
+
+/**
+ * ipa_usb_xdci_connect - Peripheral should call this function to start IN &
+ * OUT xDCI channels, and connect RNDIS/ECM/MBIM/RMNET.
+ * For DIAG, only starts IN channel.
+ *
+ * @params: handles and scratch params of the required channels, tethering
+ * protocol and the tethering protocol parameters.
+ *
+ * Note: Should not be called from atomic context
+ *
+ * @Return 0 on success, negative on failure
+ */
+int ipa_usb_xdci_connect(struct ipa_usb_xdci_connect_params *params);
+
+/**
+ * ipa_usb_xdci_disconnect - Peripheral should call this function to stop
+ * IN & OUT xDCI channels
+ * For DIAG, only stops IN channel.
+ *
+ * @ul_clnt_hdl:    client handle received from ipa_usb_request_xdci_channel()
+ *                  for OUT channel
+ * @dl_clnt_hdl:    client handle received from ipa_usb_request_xdci_channel()
+ *                  for IN channel
+ * @teth_prot:      tethering protocol
+ *
+ * Note: Should not be called from atomic context
+ *
+ * @Return 0 on success, negative on failure
+ */
+int ipa_usb_xdci_disconnect(u32 ul_clnt_hdl, u32 dl_clnt_hdl,
+			    enum ipa_usb_teth_prot teth_prot);
+
+/**
+ * ipa_usb_release_xdci_channel - Peripheral should call this function to
+ * deallocate an xDCI channel
+ *
+ * @clnt_hdl:  client handle received from ipa_usb_request_xdci_channel()
+ * @teth_prot: tethering protocol
+ *
+ * Note: Should not be called from atomic context
+ *
+ * @Return 0 on success, negative on failure
+ */
+int ipa_usb_release_xdci_channel(u32 clnt_hdl,
+				 enum ipa_usb_teth_prot teth_prot);
+
+/**
+ * ipa_usb_deinit_teth_prot - Peripheral should call this function to deinit
+ * RNDIS/ECM/MBIM/RMNET
+ *
+ * @teth_prot: tethering protocol
+ *
+ * @Return 0 on success, negative on failure
+ */
+int ipa_usb_deinit_teth_prot(enum ipa_usb_teth_prot teth_prot);
+
+/**
+ * ipa_usb_xdci_suspend - Peripheral should call this function to suspend
+ * IN & OUT xDCI channels
+ *
+ * @ul_clnt_hdl: client handle previously obtained from
+ *               ipa_usb_request_xdci_channel() for OUT channel
+ * @dl_clnt_hdl: client handle previously obtained from
+ *               ipa_usb_request_xdci_channel() for IN channel
+ * @teth_prot:   tethering protocol
+ *
+ * Note: Should not be called from atomic context
+ *
+ * @Return 0 on success, negative on failure
+ */
+int ipa_usb_xdci_suspend(u32 ul_clnt_hdl, u32 dl_clnt_hdl,
+			 enum ipa_usb_teth_prot teth_prot);
+
+/**
+ * ipa_usb_xdci_resume - Peripheral should call this function to resume
+ * IN & OUT xDCI channels
+ *
+ * @ul_clnt_hdl:   client handle received from ipa_usb_request_xdci_channel()
+ *                 for OUT channel
+ * @dl_clnt_hdl:   client handle received from ipa_usb_request_xdci_channel()
+ *                 for IN channel
+ *
+ * Note: Should not be called from atomic context
+ *
+ * @Return 0 on success, negative on failure
+ */
+int ipa_usb_xdci_resume(u32 ul_clnt_hdl, u32 dl_clnt_hdl);
+
+/*
  * mux id
  */
 int ipa_write_qmap_id(struct ipa_ioc_write_qmapid *param_in);
@@ -1395,8 +1716,6 @@ int ipa_remove_interrupt_handler(enum ipa_irq_type interrupt);
  */
 void ipa_bam_reg_dump(void);
 
-bool ipa_emb_ul_pipes_empty(void);
-
 int ipa_get_ep_mapping(enum ipa_client_type client);
 
 bool ipa_is_ready(void);
@@ -1413,10 +1732,17 @@ enum ipa_client_type ipa_get_client_mapping(int pipe_idx);
 enum ipa_rm_resource_name ipa_get_rm_resource_from_ep(int pipe_idx);
 
 bool ipa_get_modem_cfg_emb_pipe_flt(void);
+
+enum ipa_transport_type ipa_get_transport_type(void);
+
 struct device *ipa_get_dma_dev(void);
 struct iommu_domain *ipa_get_smmu_domain(void);
 
 int ipa_disable_apps_wan_cons_deaggr(uint32_t agg_size, uint32_t agg_count);
+
+struct ipa_gsi_ep_config *ipa_get_gsi_ep_info(int ipa_ep_idx);
+
+int ipa_stop_gsi_channel(u32 clnt_hdl);
 
 #else /* (CONFIG_IPA || CONFIG_IPA3) */
 
@@ -1931,6 +2257,26 @@ static inline int teth_bridge_connect(struct teth_bridge_connect_params
 }
 
 /*
+ * Tethering client info
+ */
+static inline void ipa_set_client(int index, enum ipacm_client_enum client,
+	bool uplink)
+{
+	return -EPERM;
+}
+
+static inline enum ipacm_client_enum ipa_get_client(int pipe_idx)
+{
+	return -EPERM;
+}
+
+static inline bool ipa_get_client_uplink(int pipe_idx)
+{
+	return -EPERM;
+}
+
+
+/*
  * ODU bridge
  */
 static inline int odu_bridge_init(struct odu_bridge_params *params)
@@ -2040,6 +2386,60 @@ static inline int ipa_mhi_destroy(void)
 }
 
 /*
+ * IPA_USB
+ */
+
+static inline int ipa_usb_init_teth_prot(enum ipa_usb_teth_prot teth_prot,
+			   struct ipa_usb_teth_params *teth_params,
+			   int (*ipa_usb_notify_cb)(enum ipa_usb_notify_event,
+			   void *),
+			   void *user_data)
+{
+	return -EPERM;
+}
+
+static inline int ipa_usb_request_xdci_channel(
+	struct ipa_usb_xdci_chan_params *params,
+	struct ipa_req_chan_out_params *out_params)
+{
+	return -EPERM;
+}
+
+static inline int ipa_usb_xdci_connect(
+	struct ipa_usb_xdci_connect_params *params)
+{
+	return -EPERM;
+}
+
+static inline int ipa_usb_xdci_disconnect(u32 ul_clnt_hdl, u32 dl_clnt_hdl,
+			    enum ipa_usb_teth_prot teth_prot)
+{
+	return -EPERM;
+}
+
+static inline int ipa_usb_release_xdci_channel(u32 clnt_hdl,
+				 enum ipa_usb_teth_prot teth_prot)
+{
+	return -EPERM;
+}
+
+static inline int ipa_usb_deinit_teth_prot(enum ipa_usb_teth_prot teth_prot)
+{
+	return -EPERM;
+}
+
+static inline int ipa_usb_xdci_suspend(u32 ul_clnt_hdl, u32 dl_clnt_hdl,
+			 enum ipa_usb_teth_prot teth_prot)
+{
+	return -EPERM;
+}
+
+static inline int ipa_usb_xdci_resume(u32 ul_clnt_hdl, u32 dl_clnt_hdl)
+{
+	return -EPERM;
+}
+
+/*
  * mux id
  */
 static inline int ipa_write_qmap_id(struct ipa_ioc_write_qmapid *param_in)
@@ -2069,11 +2469,6 @@ static inline int ipa_remove_interrupt_handler(enum ipa_irq_type interrupt)
 static inline void ipa_bam_reg_dump(void)
 {
 	return;
-}
-
-static inline bool ipa_emb_ul_pipes_empty(void)
-{
-	return false;
 }
 
 static inline int ipa_get_wdi_stats(struct IpaHwStatsWDIInfoData_t *stats)
@@ -2125,6 +2520,11 @@ static inline bool ipa_get_modem_cfg_emb_pipe_flt(void)
 	return -EINVAL;
 }
 
+static inline enum ipa_transport_type ipa_get_transport_type(void)
+{
+	return -EFAULT;
+}
+
 static inline struct device *ipa_get_dma_dev(void)
 {
 	return NULL;
@@ -2150,6 +2550,16 @@ static inline int ipa_release_wdi_mapping(u32 num_buffers,
 static inline int ipa_disable_apps_wan_cons_deaggr(void)
 {
 	return -EINVAL;
+}
+
+static inline struct ipa_gsi_ep_config *ipa_get_gsi_ep_info(int ipa_ep_idx)
+{
+	return NULL;
+}
+
+static inline int ipa_stop_gsi_channel(u32 clnt_hdl)
+{
+	return -EPERM;
 }
 
 #endif /* (CONFIG_IPA || CONFIG_IPA3) */

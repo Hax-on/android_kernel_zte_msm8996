@@ -629,7 +629,8 @@ static void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 				mbhc->mbhc_cb->compute_impedance(mbhc,
 						&mbhc->zl, &mbhc->zr);
 			if ((mbhc->zl > mbhc->mbhc_cfg->linein_th) &&
-				(mbhc->zr > mbhc->mbhc_cfg->linein_th)) {
+				(mbhc->zr > mbhc->mbhc_cfg->linein_th) &&
+				(jack_type == SND_JACK_HEADPHONE)) {
 				jack_type = SND_JACK_LINEOUT;
 				mbhc->current_plug = MBHC_PLUG_TYPE_HIGH_HPH;
 				if (mbhc->hph_status) {
@@ -1160,6 +1161,10 @@ exit:
 	}
 	if (mbhc->mbhc_cb->set_cap_mode)
 		mbhc->mbhc_cb->set_cap_mode(codec, micbias1, micbias2);
+
+	if (mbhc->mbhc_cb->hph_pull_down_ctrl)
+		mbhc->mbhc_cb->hph_pull_down_ctrl(codec, true);
+
 	mbhc->mbhc_cb->lock_sleep(mbhc, false);
 	pr_debug("%s: leave\n", __func__);
 }
@@ -1175,6 +1180,10 @@ static void wcd_mbhc_detect_plug_type(struct wcd_mbhc *mbhc)
 
 	pr_debug("%s: enter\n", __func__);
 	WCD_MBHC_RSC_ASSERT_LOCKED(mbhc);
+
+	if (mbhc->mbhc_cb->hph_pull_down_ctrl)
+		mbhc->mbhc_cb->hph_pull_down_ctrl(codec, false);
+
 	if (mbhc->mbhc_cb->micbias_enable_status)
 		micbias1 = mbhc->mbhc_cb->micbias_enable_status(mbhc,
 								MIC_BIAS_1);
@@ -1196,7 +1205,8 @@ static void wcd_mbhc_detect_plug_type(struct wcd_mbhc *mbhc)
 		pr_debug("%s: cross con found, start polling\n",
 			 __func__);
 		plug_type = MBHC_PLUG_TYPE_GND_MIC_SWAP;
-		mbhc->current_plug = plug_type;
+		if (!mbhc->current_plug)
+			mbhc->current_plug = plug_type;
 		pr_debug("%s: Plug found, plug type is %d\n",
 			 __func__, plug_type);
 	}
@@ -1229,17 +1239,6 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_MECH_DETECTION_TYPE,
 				 !detection_type);
 
-	/*
-	 * For faster pull-up, adjust the pull-up current to 3uA.
-	 * Possible that some codecs may choose not to update the
-	 * pull up current, in which case this callback function
-	 * will not be defined.
-	 */
-	if (mbhc->mbhc_cb->hph_pull_up_control) {
-		mbhc->mbhc_cb->hph_pull_up_control(codec,
-				(detection_type ? REMOVE : INSERT));
-	}
-
 	pr_debug("%s: mbhc->current_plug: %d detection_type: %d\n", __func__,
 			mbhc->current_plug, detection_type);
 	wcd_cancel_hs_detect_plug(mbhc, &mbhc->correct_plug_swch);
@@ -1263,6 +1262,8 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 			 * is using internal micbias*/
 			mbhc->mbhc_cb->micb_internal(codec, 1, true);
 
+		/* Remove micbias pulldown */
+		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_PULLDOWN_CTRL, 0);
 		/* Apply trim if needed on the device */
 		if (mbhc->mbhc_cb->trim_btn_reg)
 			mbhc->mbhc_cb->trim_btn_reg(codec);
@@ -1296,6 +1297,8 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 			if (mbhc->mbhc_cb->micb_internal)
 				mbhc->mbhc_cb->micb_internal(codec, 1, false);
 
+			/* Pulldown micbias */
+			WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_PULLDOWN_CTRL, 1);
 			mbhc->mbhc_cb->irq_control(codec,
 					mbhc->intr_ids->mbhc_hs_rem_intr,
 					false);
@@ -1432,7 +1435,7 @@ static irqreturn_t wcd_mbhc_hs_ins_irq(int irq, void *data)
 				msleep(20);
 				WCD_MBHC_REG_UPDATE_BITS(
 						WCD_MBHC_ELECT_SCHMT_ISRC,
-						3);
+						1);
 			}
 			if (hphl_sch) {
 				hphl_trigerred++;
@@ -1462,8 +1465,6 @@ determine_plug:
 				   false);
 
 	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_ELECT_SCHMT_ISRC, 0);
-	/* Enable HW FSM */
-	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_FSM_EN, 1);
 	hphl_trigerred = 0;
 	mic_trigerred = 0;
 	mbhc->is_extn_cable = true;
@@ -1792,6 +1793,18 @@ static irqreturn_t wcd_mbhc_hphr_ocp_irq(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+static void wcd_mbhc_moisture_config(struct wcd_mbhc *mbhc)
+{
+	if (mbhc->mbhc_cfg->moist_cfg.m_vref_ctl == V_OFF)
+		return;
+
+	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_MOISTURE_VREF,
+				 mbhc->mbhc_cfg->moist_cfg.m_vref_ctl);
+	if (mbhc->mbhc_cb->hph_pull_up_control)
+		mbhc->mbhc_cb->hph_pull_up_control(mbhc->codec,
+				mbhc->mbhc_cfg->moist_cfg.m_iref_ctl);
+}
+
 static int wcd_mbhc_initialise(struct wcd_mbhc *mbhc)
 {
 	int ret = 0;
@@ -1802,9 +1815,12 @@ static int wcd_mbhc_initialise(struct wcd_mbhc *mbhc)
 
 	/* enable HS detection */
 	if (mbhc->mbhc_cb->hph_pull_up_control)
-		mbhc->mbhc_cb->hph_pull_up_control(codec, INSERT);
+		mbhc->mbhc_cb->hph_pull_up_control(codec, I_DEFAULT);
 	else
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_HS_L_DET_PULL_UP_CTRL, 3);
+
+	wcd_mbhc_moisture_config(mbhc);
+
 	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_HPHL_PLUG_TYPE, mbhc->hphl_swh);
 	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_GND_PLUG_TYPE, mbhc->gnd_swh);
 	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_SW_HPH_LP_100K_TO_GND, 1);

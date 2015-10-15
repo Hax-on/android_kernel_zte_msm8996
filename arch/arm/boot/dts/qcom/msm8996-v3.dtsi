@@ -18,6 +18,7 @@
 
 #include "msm8996.dtsi"
 #include "msm8996-coresight-v3.dtsi"
+#include "msm-arm-smmu-impl-defs-8996-v3.dtsi"
 
 / {
 	model = "Qualcomm Technologies, Inc. MSM 8996 v3";
@@ -42,20 +43,20 @@
 	qcom,gfxfreq-corner-v2 =
 		<	   0  0  0 >,
 		<  133000000  2  4 >,
-		<  210000000  3  4 >,
-		<  300000000  4  4 >,
+		<  214000000  3  4 >,
+		<  315000000  4  4 >,
 		<  401800000  5  5 >,
 		<  510000000  6  5 >,
-		<  549000000  7  7 >,
+		<  560000000  7  7 >,
 		<  624000000  8  7 >;
 	qcom,gpufreq-mx-corner-v2 =
 		<	   0  0 >,
 		<  133000000  4 >,
-		<  210000000  4 >,
-		<  300000000  4 >,
+		<  214000000  4 >,
+		<  315000000  4 >,
 		<  401800000  5 >,
 		<  510000000  5 >,
-		<  549000000  7 >,
+		<  560000000  7 >,
 		<  624000000  7 >;
 };
 
@@ -85,75 +86,136 @@
 	qcom,initial-pwrlevel = <5>;
 	qcom,bus-width = <32>;
 
-	/* Power levels */
-	qcom,gpu-pwrlevels {
+	qcom,gpu-pwrlevel-bins {
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		compatible = "qcom,gpu-pwrlevels";
+		compatible="qcom,gpu-pwrlevel-bins";
 
-		qcom,gpu-pwrlevel@0 {
-			reg = <0>;
-			qcom,gpu-freq = <624000000>;
-			qcom,bus-freq = <11>;
-			qcom,bus-min = <10>;
-			qcom,bus-max = <11>;
+		qcom,gpu-pwrlevels-0 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			qcom,speed-bin = <0>;
+
+			qcom,gpu-pwrlevel@0 {
+				reg = <0>;
+				qcom,gpu-freq = <624000000>;
+				qcom,bus-freq = <12>;
+				qcom,bus-min = <11>;
+				qcom,bus-max = <12>;
+			};
+
+			qcom,gpu-pwrlevel@1 {
+				reg = <1>;
+				qcom,gpu-freq = <560000000>;
+				qcom,bus-freq = <11>;
+				qcom,bus-min = <9>;
+				qcom,bus-max = <12>;
+			};
+
+			qcom,gpu-pwrlevel@2 {
+				reg = <2>;
+				qcom,gpu-freq = <510000000>;
+				qcom,bus-freq = <9>;
+				qcom,bus-min = <8>;
+				qcom,bus-max = <11>;
+			};
+
+			qcom,gpu-pwrlevel@3 {
+				reg = <3>;
+				qcom,gpu-freq = <401800000>;
+				qcom,bus-freq = <8>;
+				qcom,bus-min = <7>;
+				qcom,bus-max = <9>;
+			};
+
+			qcom,gpu-pwrlevel@4 {
+				reg = <4>;
+				qcom,gpu-freq = <315000000>;
+				qcom,bus-freq = <6>;
+				qcom,bus-min = <5>;
+				qcom,bus-max = <7>;
+			};
+
+			qcom,gpu-pwrlevel@5 {
+				reg = <5>;
+				qcom,gpu-freq = <214000000>;
+				qcom,bus-freq = <4>;
+				qcom,bus-min = <3>;
+				qcom,bus-max = <5>;
+			};
+
+			qcom,gpu-pwrlevel@6 {
+				reg = <6>;
+				qcom,gpu-freq = <133000000>;
+				qcom,bus-freq = <3>;
+				qcom,bus-min = <2>;
+				qcom,bus-max = <4>;
+			};
+
+			qcom,gpu-pwrlevel@7 {
+				reg = <7>;
+				qcom,gpu-freq = <27000000>;
+				qcom,bus-freq = <0>;
+				qcom,bus-min = <0>;
+				qcom,bus-max = <0>;
+			};
 		};
 
-		qcom,gpu-pwrlevel@1 {
-			reg = <1>;
-			qcom,gpu-freq = <549000000>;
-			qcom,bus-freq = <10>;
-			qcom,bus-min = <9>;
-			qcom,bus-max = <11>;
-		};
+		qcom,gpu-pwrlevels-1 {
+			#address-cells = <1>;
+			#size-cells = <0>;
 
-		qcom,gpu-pwrlevel@2 {
-			reg = <2>;
-			qcom,gpu-freq = <510000000>;
-			qcom,bus-freq = <9>;
-			qcom,bus-min = <8>;
-			qcom,bus-max = <10>;
-		};
+			qcom,speed-bin = <1>;
 
-		qcom,gpu-pwrlevel@3 {
-			reg = <3>;
-			qcom,gpu-freq = <401800000>;
-			qcom,bus-freq = <8>;
-			qcom,bus-min = <7>;
-			qcom,bus-max = <9>;
-		};
+			qcom,gpu-pwrlevel@0 {
+				reg = <0>;
+				qcom,gpu-freq = <510000000>;
+				qcom,bus-freq = <9>;
+				qcom,bus-min = <8>;
+				qcom,bus-max = <10>;
+			};
 
-		qcom,gpu-pwrlevel@4 {
-			reg = <4>;
-			qcom,gpu-freq = <300000000>;
-			qcom,bus-freq = <6>;
-			qcom,bus-min = <5>;
-			qcom,bus-max = <7>;
-		};
+			qcom,gpu-pwrlevel@1 {
+				reg = <1>;
+				qcom,gpu-freq = <401800000>;
+				qcom,bus-freq = <8>;
+				qcom,bus-min = <7>;
+				qcom,bus-max = <9>;
+			};
 
-		qcom,gpu-pwrlevel@5 {
-			reg = <5>;
-			qcom,gpu-freq = <210000000>;
-			qcom,bus-freq = <4>;
-			qcom,bus-min = <3>;
-			qcom,bus-max = <5>;
-		};
+			qcom,gpu-pwrlevel@2 {
+				reg = <2>;
+				qcom,gpu-freq = <315000000>;
+				qcom,bus-freq = <6>;
+				qcom,bus-min = <5>;
+				qcom,bus-max = <7>;
+			};
 
-		qcom,gpu-pwrlevel@6 {
-			reg = <6>;
-			qcom,gpu-freq = <133000000>;
-			qcom,bus-freq = <3>;
-			qcom,bus-min = <2>;
-			qcom,bus-max = <4>;
-		};
+			qcom,gpu-pwrlevel@3 {
+				reg = <3>;
+				qcom,gpu-freq = <214000000>;
+				qcom,bus-freq = <4>;
+				qcom,bus-min = <3>;
+				qcom,bus-max = <5>;
+			};
 
-		qcom,gpu-pwrlevel@7 {
-			reg = <7>;
-			qcom,gpu-freq = <27000000>;
-			qcom,bus-freq = <0>;
-			qcom,bus-min = <0>;
-			qcom,bus-max = <0>;
+			qcom,gpu-pwrlevel@4 {
+				reg = <4>;
+				qcom,gpu-freq = <133000000>;
+				qcom,bus-freq = <3>;
+				qcom,bus-min = <2>;
+				qcom,bus-max = <4>;
+			};
+
+			qcom,gpu-pwrlevel@5 {
+				reg = <5>;
+				qcom,gpu-freq = <27000000>;
+				qcom,bus-freq = <0>;
+				qcom,bus-min = <0>;
+				qcom,bus-max = <0>;
+			};
 		};
 
 	};
@@ -222,18 +284,37 @@
 };
 
 &msm_vidc {
+	/* Table lists <video_core_freq imem_ab> pairs.
+	 * imem_ab value determines the imem clock frequency for the
+	 * corresponding video core frequency.
+	 */
+	qcom,imem-ab-tbl =
+		<75000000  1500000>, /* imem @ svs2 freq 75 Mhz */
+		<150000000 1500000>, /* imem @ svs2 freq 75 Mhz */
+		<346666667 2500000>, /* imem @ svs freq 171 Mhz */
+		<520000000 6000000>; /* imem @ noimal freq 320 Mhz */
+
 	qcom,load-freq-tbl =
 			/* Encoders */
-			<972000 533000000 0x55555555>, /* 4k UHD @ 30 */
-			<489600 355333333 0x55555555>, /* 1080p @ 60 */
+			<972000 520000000 0x55555555>, /* 4k UHD @ 30 */
+			<489600 346666667 0x55555555>, /* 1080p @ 60 */
 			<244800 150000000 0x55555555>, /* 1080p @ 30 */
 			<108000  75000000 0x55555555>, /* 720p @ 30 */
 
 			/* Decoders */
-			<1944000 533000000 0xffffffff>, /* 4k UHD @ 60 */
-			< 972000 355333333 0xffffffff>, /* 4k UHD @ 30 */
+			<1944000 520000000 0xffffffff>, /* 4k UHD @ 60 */
+			< 972000 346666667 0xffffffff>, /* 4k UHD @ 30 */
 			< 489600 150000000 0xffffffff>, /* 1080p @ 60 */
 			< 244800  75000000 0xffffffff>; /* 1080p @ 30 */
+	qcom,pm-qos-latency-us = <501>;
+};
+
+&gdsc_venus_core0 {
+	qcom,support-hw-trigger;
+};
+
+&gdsc_venus_core1 {
+	qcom,support-hw-trigger;
 };
 
 &soc {
@@ -254,7 +335,25 @@
 		clocks = <&clock_gcc clk_ipa_clk>;
 		clock-names = "core_clk";
 		qcom,use-dma-zone;
+		qcom,msm-bus,name = "ipa";
+		qcom,msm-bus,num-cases = <3>;
+		qcom,msm-bus,num-paths = <2>;
+		qcom,msm-bus,vectors-KBps =
+		<90 512 0 0>, <90 585 0 0>,         /* No vote */
+		<90 512 80000 640000>, <90 585 80000 640000>,    /* SVS */
+		<90 512 206000 960000>, <90 585 206000 960000>;    /* PERF */
+		qcom,bus-vector-names = "MIN", "SVS", "PERF";
 	};
+
+	qcom,m4m-hwmon@6530000 {
+		compatible = "qcom,m4m-hwmon";
+		reg = <0x6530000 0x160>;
+		interrupts = <0 19 4>;
+		qcom,counter-event-sel = <4 0x8000>,
+					 <5 0x4000>;
+		qcom,target-dev = <&m4m_cache>;
+	};
+
 };
 
 &clock_cpu {
@@ -466,6 +565,7 @@
 	};
 	lmh: qcom,lmh {
 		vdd-apss-supply = <&pm8994_s11>;
+		qcom,lmh-odcm-disable-threshold-mA = <850>;
 	};
 };
 

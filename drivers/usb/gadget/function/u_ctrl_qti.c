@@ -55,6 +55,11 @@ struct qti_ctrl_port {
 
 	spinlock_t	lock;
 	enum gadget_type	gtype;
+	unsigned	host_to_modem;
+	unsigned	copied_to_modem;
+	unsigned	copied_from_modem;
+	unsigned	modem_to_host;
+	unsigned	drp_cpkt_cnt;
 };
 static struct qti_ctrl_port *ctrl_port[NR_QTI_PORTS];
 
@@ -138,12 +143,14 @@ static int gqti_ctrl_send_cpkt_tomodem(u8 portno, void *buf, size_t len)
 	if (!port->is_open) {
 		pr_debug("rmnet file handler %p(index=%d) is not open",
 		       port, port->index);
+		port->drp_cpkt_cnt++;
 		spin_unlock_irqrestore(&port->lock, flags);
 		free_rmnet_ctrl_pkt(cpkt);
 		return 0;
 	}
 
 	list_add_tail(&cpkt->list, &port->cpkt_req_q);
+	port->host_to_modem++;
 	spin_unlock_irqrestore(&port->lock, flags);
 
 	/* wakeup read thread */
@@ -192,8 +199,7 @@ int gqti_ctrl_connect(void *gr, u8 port_num, unsigned intf,
 
 	spin_lock_irqsave(&port->lock, flags);
 	port->gtype = gtype;
-	if (dxport == USB_GADGET_XPORT_BAM ||
-			dxport == USB_GADGET_XPORT_BAM_DMUX) {
+	if (dxport == USB_GADGET_XPORT_BAM_DMUX) {
 		/*
 		 * BAM-DMUX data transport is used for RMNET and DPL
 		 * on some targets where IPA is not available.
@@ -230,6 +236,12 @@ int gqti_ctrl_connect(void *gr, u8 port_num, unsigned intf,
 		pr_err("%s(): Port is used without gtype.\n", __func__);
 		return -ENODEV;
 	}
+
+	port->host_to_modem = 0;
+	port->copied_to_modem = 0;
+	port->copied_from_modem = 0;
+	port->modem_to_host = 0;
+	port->drp_cpkt_cnt = 0;
 
 	spin_unlock_irqrestore(&port->lock, flags);
 
@@ -422,6 +434,7 @@ qti_ctrl_read(struct file *fp, char __user *buf, size_t count, loff_t *pos)
 	} else {
 		pr_debug("%s: copied %d bytes to user\n", __func__, cpkt->len);
 		ret = cpkt->len;
+		port->copied_to_modem++;
 	}
 
 	free_rmnet_ctrl_pkt(cpkt);
@@ -478,6 +491,7 @@ qti_ctrl_write(struct file *fp, const char __user *buf, size_t count,
 		qti_ctrl_unlock(&port->write_excl);
 		return -EFAULT;
 	}
+	port->copied_from_modem++;
 
 	spin_lock_irqsave(&port->lock, flags);
 	if (port && port->port_usb) {
@@ -495,6 +509,7 @@ qti_ctrl_write(struct file *fp, const char __user *buf, size_t count,
 							kbuf, count);
 			if (ret)
 				pr_err("%d failed to send ctrl packet.\n", ret);
+			port->modem_to_host++;
 		} else {
 			pr_err("send_cpkt_response callback is NULL\n");
 			ret = -EINVAL;
@@ -632,6 +647,92 @@ static unsigned int qti_ctrl_poll(struct file *file, poll_table *wait)
 	return mask;
 }
 
+static int qti_ctrl_read_stats(struct seq_file *s, void *unused)
+{
+	struct qti_ctrl_port	*port = s->private;
+	unsigned long		flags;
+	int			i;
+
+	for (i = 0; i < NR_QTI_PORTS; i++) {
+		port = ctrl_port[i];
+		if (!port)
+			continue;
+		spin_lock_irqsave(&port->lock, flags);
+
+		seq_printf(s, "\n#PORT:%d port: %p\n", i, port);
+		seq_printf(s, "name:			%s\n", port->name);
+		seq_printf(s, "host_to_modem:		%d\n",
+				port->host_to_modem);
+		seq_printf(s, "copied_to_modem:	%d\n",
+				port->copied_to_modem);
+		seq_printf(s, "copied_from_modem:	%d\n",
+				port->copied_from_modem);
+		seq_printf(s, "modem_to_host:		%d\n",
+				port->modem_to_host);
+		seq_printf(s, "cpkt_drp_cnt:		%d\n",
+				port->drp_cpkt_cnt);
+		spin_unlock_irqrestore(&port->lock, flags);
+	}
+
+	return 0;
+}
+
+static int qti_ctrl_stats_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, qti_ctrl_read_stats, inode->i_private);
+}
+
+static ssize_t qti_ctrl_reset_stats(struct file *file,
+	const char __user *buf, size_t count, loff_t *ppos)
+{
+	struct seq_file *s = file->private_data;
+	struct qti_ctrl_port *port = s->private;
+	int                     i;
+	unsigned long           flags;
+
+	for (i = 0; i < NR_QTI_PORTS; i++) {
+		port = ctrl_port[i];
+		if (!port)
+			continue;
+
+		spin_lock_irqsave(&port->lock, flags);
+		port->host_to_modem = 0;
+		port->copied_to_modem = 0;
+		port->copied_from_modem = 0;
+		port->modem_to_host = 0;
+		port->drp_cpkt_cnt = 0;
+		spin_unlock_irqrestore(&port->lock, flags);
+	}
+	return count;
+}
+
+const struct file_operations qti_ctrl_stats_ops = {
+	.open = qti_ctrl_stats_open,
+	.read = seq_read,
+	.write = qti_ctrl_reset_stats,
+};
+
+static struct dentry   *qti_ctrl_dent;
+static void qti_ctrl_debugfs_init(void)
+{
+	struct dentry   *qti_ctrl_dfile;
+
+	qti_ctrl_dent = debugfs_create_dir("usb_qti", 0);
+	if (IS_ERR(qti_ctrl_dent))
+		return;
+
+	qti_ctrl_dfile =
+		debugfs_create_file("status", 0444, qti_ctrl_dent, 0,
+				&qti_ctrl_stats_ops);
+	if (!qti_ctrl_dfile || IS_ERR(qti_ctrl_dfile))
+		debugfs_remove(qti_ctrl_dent);
+}
+
+static void qti_ctrl_debugfs_exit(void)
+{
+	debugfs_remove_recursive(qti_ctrl_dent);
+}
+
 /* file operations for rmnet device /dev/rmnet_ctrl */
 static const struct file_operations qti_ctrl_fops = {
 	.owner = THIS_MODULE,
@@ -659,7 +760,7 @@ static const struct file_operations dpl_qti_ctrl_fops = {
 	.poll = qti_ctrl_poll,
 };
 
-static int __init gqti_ctrl_init(void)
+int gqti_ctrl_init(void)
 {
 	int ret, i, sz = QTI_CTRL_NAME_LEN;
 	struct qti_ctrl_port *port = NULL;
@@ -710,6 +811,7 @@ static int __init gqti_ctrl_init(void)
 			goto fail_init;
 		}
 	}
+	qti_ctrl_debugfs_init();
 
 	return ret;
 
@@ -721,9 +823,8 @@ fail_init:
 	}
 	return ret;
 }
-module_init(gqti_ctrl_init);
 
-static void __exit gqti_ctrl_cleanup(void)
+void gqti_ctrl_cleanup(void)
 {
 	int i;
 
@@ -732,5 +833,5 @@ static void __exit gqti_ctrl_cleanup(void)
 		kfree(ctrl_port[i]);
 		ctrl_port[i] = NULL;
 	}
+	qti_ctrl_debugfs_exit();
 }
-module_exit(gqti_ctrl_cleanup);

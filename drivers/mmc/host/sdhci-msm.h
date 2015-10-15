@@ -16,6 +16,7 @@
 #define __SDHCI_MSM_H__
 
 #include <linux/mmc/mmc.h>
+#include <linux/pm_qos.h>
 #include "sdhci-pltfm.h"
 
 /* This structure keeps information per regulator */
@@ -83,6 +84,49 @@ struct sdhci_msm_bus_voting_data {
 	unsigned int bw_vecs_size;
 };
 
+struct sdhci_msm_cpu_group_map {
+	int nr_groups;
+	cpumask_t *mask;
+};
+
+struct sdhci_msm_pm_qos_latency {
+	s32 latency[SDHCI_POWER_POLICY_NUM];
+};
+
+struct sdhci_msm_pm_qos_data {
+	struct sdhci_msm_cpu_group_map cpu_group_map;
+	enum pm_qos_req_type irq_req_type;
+	int irq_cpu;
+	struct sdhci_msm_pm_qos_latency irq_latency;
+	struct sdhci_msm_pm_qos_latency *cmdq_latency;
+	struct sdhci_msm_pm_qos_latency *latency;
+	bool irq_valid;
+	bool cmdq_valid;
+	bool legacy_valid;
+};
+
+/*
+ * PM QoS for group voting management - each cpu group defined is associated
+ * with 1 instance of this structure.
+ */
+struct sdhci_msm_pm_qos_group {
+	struct pm_qos_request req;
+	struct work_struct unvote_work;
+	atomic_t counter;
+	s32 latency;
+};
+
+/* PM QoS HW IRQ voting */
+struct sdhci_msm_pm_qos_irq {
+	struct pm_qos_request req;
+	struct work_struct unvote_work;
+	struct device_attribute enable_attr;
+	struct device_attribute status_attr;
+	atomic_t counter;
+	s32 latency;
+	bool enabled;
+};
+
 struct sdhci_msm_pltfm_data {
 	/* Supported UHS-I Modes */
 	u32 caps;
@@ -98,16 +142,15 @@ struct sdhci_msm_pltfm_data {
 	bool pin_cfg_sts;
 	struct sdhci_msm_pin_data *pin_data;
 	struct sdhci_pinctrl_data *pctrl_data;
-	u32 cpu_dma_latency_us;
 	int status_gpio; /* card detection GPIO that is configured as IRQ */
 	struct sdhci_msm_bus_voting_data *voting_data;
 	u32 *sup_clk_table;
 	unsigned char sup_clk_cnt;
-	enum pm_qos_req_type cpu_affinity_type;
 	u32 *sup_ice_clk_table;
 	unsigned char sup_ice_clk_cnt;
 	u32 ice_clk_max;
 	u32 ice_clk_min;
+	struct sdhci_msm_pm_qos_data pm_qos_data;
 };
 
 struct sdhci_msm_bus_vote {
@@ -157,11 +200,29 @@ struct sdhci_msm_host {
 	bool use_updated_dll_reset;
 	bool use_14lpp_dll;
 	bool enhanced_strobe;
+	bool rclk_delay_fix;
 	u32 caps_0;
 	struct sdhci_msm_ice_data ice;
 	u32 ice_clk_rate;
+	struct sdhci_msm_pm_qos_group *pm_qos;
+	int pm_qos_prev_cpu;
+	struct device_attribute pm_qos_group_enable_attr;
+	struct device_attribute pm_qos_group_status_attr;
+	bool pm_qos_group_enable;
+	struct sdhci_msm_pm_qos_irq pm_qos_irq;
 };
 
 extern char *saved_command_line;
+
+void sdhci_msm_pm_qos_irq_init(struct sdhci_host *host);
+void sdhci_msm_pm_qos_irq_vote(struct sdhci_host *host);
+void sdhci_msm_pm_qos_irq_unvote(struct sdhci_host *host, bool async);
+
+void sdhci_msm_pm_qos_cpu_init(struct sdhci_host *host,
+		struct sdhci_msm_pm_qos_latency *latency);
+void sdhci_msm_pm_qos_cpu_vote(struct sdhci_host *host,
+		struct sdhci_msm_pm_qos_latency *latency, int cpu);
+bool sdhci_msm_pm_qos_cpu_unvote(struct sdhci_host *host, int cpu, bool async);
+
 
 #endif /* __SDHCI_MSM_H__ */

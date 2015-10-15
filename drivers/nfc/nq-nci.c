@@ -215,6 +215,7 @@ static ssize_t nfc_write(struct file *filp, const char __user *buf,
 	struct nqx_dev *nqx_dev = filp->private_data;
 	char tmp[MAX_BUFFER_SIZE];
 	int ret = 0;
+
 	if (count > MAX_BUFFER_SIZE) {
 		dev_err(&nqx_dev->client->dev, "%s: out of memory\n",
 			__func__);
@@ -253,22 +254,20 @@ static int nfc_open(struct inode *inode, struct file *filp)
 	return ret;
 }
 
-/*
- * Inside nfc_ioctl_power_states
+/**
+ * nfc_ioctl_power_states() - power control
+ * @filp:	pointer to the file descriptor
+ * @arg:	mode that we want to move to
  *
- * @brief	ioctl functions
- *
- *
- * Device control
- * remove control via ioctl
+ * Device power control. Depending on the arg value, device moves to
+ * different states
  * (arg = 0): NFC_ENABLE	GPIO = 0, FW_DL GPIO = 0
  * (arg = 1): NFC_ENABLE	GPIO = 1, FW_DL GPIO = 0
  * (arg = 2): FW_DL GPIO = 1
  *
- *
+ * Return: -ENOIOCTLCMD if arg is not supported, 0 in any other case
  */
-int nfc_ioctl_power_states(struct file *filp, unsigned int cmd,
-							unsigned long arg)
+int nfc_ioctl_power_states(struct file *filp, unsigned long arg)
 {
 	int r = 0;
 	struct nqx_dev *nqx_dev = filp->private_data;
@@ -319,11 +318,11 @@ static long nfc_compat_ioctl(struct file *pfile, unsigned int cmd,
 				unsigned long arg)
 {
 	long r = 0;
-	arg = (compat_u64)arg;
 
+	arg = (compat_u64)arg;
 	switch (cmd) {
 	case NFC_SET_PWR:
-		nfc_ioctl_power_states(pfile, cmd, arg);
+		nfc_ioctl_power_states(pfile, arg);
 		break;
 	case SET_RX_BLOCK:
 		break;
@@ -336,20 +335,18 @@ static long nfc_compat_ioctl(struct file *pfile, unsigned int cmd,
 }
 #endif
 
-/*
- * Inside nfc_ioctl_core_reset_ntf
- *
- * @brief	nfc_ioctl_core_reset_ntf
+/**
+ * nfc_ioctl_core_reset_ntf()
+ * @filp:       pointer to the file descriptor
  *
  * Allows callers to determine if a CORE_RESET_NTF has arrived
  *
- * Returns the value of variable core_reset_ntf
- *
+ * Return: the value of variable core_reset_ntf
  */
-int nfc_ioctl_core_reset_ntf(struct file *filp, unsigned int cmd,
-				unsigned long arg)
+int nfc_ioctl_core_reset_ntf(struct file *filp)
 {
 	struct nqx_dev *nqx_dev = filp->private_data;
+
 	dev_dbg(&nqx_dev->client->dev, "%s: returning = %d\n", __func__,
 		nqx_dev->core_reset_ntf);
 	return nqx_dev->core_reset_ntf;
@@ -362,7 +359,7 @@ static long nfc_ioctl(struct file *pfile, unsigned int cmd,
 
 	switch (cmd) {
 	case NFC_SET_PWR:
-		r = nfc_ioctl_power_states(pfile, cmd, arg);
+		r = nfc_ioctl_power_states(pfile, arg);
 		break;
 	case NFC_CLK_REQ:
 		break;
@@ -371,7 +368,7 @@ static long nfc_ioctl(struct file *pfile, unsigned int cmd,
 	case SET_EMULATOR_TEST_POINT:
 		break;
 	case NFCC_INITIAL_CORE_RESET_NTF:
-		r = nfc_ioctl_core_reset_ntf(pfile, cmd, arg);
+		r = nfc_ioctl_core_reset_ntf(pfile);
 		break;
 	default:
 		r = -ENOIOCTLCMD;
@@ -425,6 +422,7 @@ static inline int gpio_input_init(const struct device * const dev,
 			const int gpio, const char * const gpio_name)
 {
 	int r = gpio_request(gpio, gpio_name);
+
 	if (r) {
 		dev_err(dev, "unable to request gpio [%d]\n", gpio);
 		return r;
@@ -449,11 +447,8 @@ static int nqx_probe(struct i2c_client *client,
 	if (client->dev.of_node) {
 		platform_data = devm_kzalloc(&client->dev,
 			sizeof(struct nqx_platform_data), GFP_KERNEL);
-		if (!platform_data) {
-			dev_err(&client->dev,
-			"%s: Failed to allocate memory\n", __func__);
+		if (!platform_data)
 			return -ENOMEM;
-		}
 		r = nfc_parse_dt(&client->dev, platform_data);
 		if (r)
 			return r;
@@ -472,11 +467,8 @@ static int nqx_probe(struct i2c_client *client,
 		return -ENODEV;
 	}
 	nqx_dev = kzalloc(sizeof(*nqx_dev), GFP_KERNEL);
-	if (nqx_dev == NULL) {
-		dev_err(&client->dev,
-		"%s: failed to allocate memory for module data\n", __func__);
+	if (nqx_dev == NULL)
 		return -ENOMEM;
-	}
 	nqx_dev->client = client;
 
 	/* if coherent_dma_mask not set by the device, set it to ULONG_MAX */

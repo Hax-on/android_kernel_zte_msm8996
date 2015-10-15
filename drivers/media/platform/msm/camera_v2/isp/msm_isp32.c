@@ -36,7 +36,7 @@ static const struct platform_device_id msm_vfe32_dev_id[] = {
 #define VFE32_XBAR_BASE(idx) (0x40 + 0x4 * (idx / 4))
 #define VFE32_XBAR_SHIFT(idx) ((idx % 4) * 8)
 #define VFE32_PING_PONG_BASE(wm, ping_pong) \
-	(VFE32_WM_BASE(wm) + 0x4 * (1 + (~(ping_pong >> wm) & 0x1)))
+	(VFE32_WM_BASE(wm) + 0x4 * (1 + ((~ping_pong) & 0x1)))
 
 static uint8_t stats_pingpong_offset_map[] = {
 	7, 8, 9, 10, 11, 12, 13};
@@ -408,12 +408,6 @@ static void msm_vfe32_process_camif_irq(struct vfe_device *vfe_dev,
 	if (!(irq_status0 & 0x1F))
 		return;
 
-	if (irq_status0 & 0x1)
-		vfe_dev->axi_data.src_info[VFE_PIX_0].camif_sof_frame_id++;
-
-	if (vfe_dev->axi_data.src_info[VFE_PIX_0].camif_sof_frame_id == 0)
-		vfe_dev->axi_data.src_info[VFE_PIX_0].camif_sof_frame_id = 1;
-
 	if (irq_status0 & BIT(0)) {
 		ISP_DBG("%s: SOF IRQ\n", __func__);
 		if (vfe_dev->axi_data.src_info[VFE_PIX_0].raw_stream_count > 0
@@ -682,17 +676,17 @@ static void msm_vfe32_axi_reload_wm(
 	}
 }
 
-static void msm_vfe32_axi_enable_wm(struct vfe_device *vfe_dev,
+static void msm_vfe32_axi_enable_wm(void __iomem *vfe_base,
 	uint8_t wm_idx, uint8_t enable)
 {
 	uint32_t val = msm_camera_io_r(
-	   vfe_dev->vfe_base + VFE32_WM_BASE(wm_idx));
+	   vfe_base + VFE32_WM_BASE(wm_idx));
 	if (enable)
 		val |= 0x1;
 	else
 		val &= ~0x1;
 	msm_camera_io_w_mb(val,
-		vfe_dev->vfe_base + VFE32_WM_BASE(wm_idx));
+		vfe_base + VFE32_WM_BASE(wm_idx));
 }
 
 static void msm_vfe32_axi_cfg_comp_mask(struct vfe_device *vfe_dev,
@@ -1164,12 +1158,12 @@ static void msm_vfe32_cfg_axi_ub(struct vfe_device *vfe_dev)
 }
 
 static void msm_vfe32_update_ping_pong_addr(void __iomem *vfe_base,
-	uint8_t wm_idx, uint32_t pingpong_status, dma_addr_t paddr,
+	uint8_t wm_idx, uint32_t pingpong_bit, dma_addr_t paddr,
 	int32_t buf_size)
 {
 	uint32_t paddr32 = (paddr & 0xFFFFFFFF);
 	msm_camera_io_w(paddr32, vfe_base +
-		VFE32_PING_PONG_BASE(wm_idx, pingpong_status));
+		VFE32_PING_PONG_BASE(wm_idx, pingpong_bit));
 }
 
 static int msm_vfe32_axi_halt(struct vfe_device *vfe_dev, uint32_t blocking)

@@ -14,6 +14,8 @@
 //#include "msm8996-camera-sensor-mtp.dtsi"  
 #include "zte-camera-sensor-mtp.dtsi" //yichangming 400001
 #include "zte-usb-type-c.dtsi"
+#include "msm8996-camera-sensor-mtp.dtsi"
+#include "msm8996-wsa881x.dtsi"
 
 / {
 	bluetooth: bt_qca6174 {
@@ -374,10 +376,6 @@
 	qpnp,qpnp-labibb-mode = "lcd";
 };
 
-&ibb_regulator {
-	qcom,qpnp-ibb-discharge-resistor = <32>;
-};
-
 &dsi_dual_sharp_video {
 	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_wled";
 	qcom,mdss-dsi-bl-min-level = <1>;
@@ -401,7 +399,7 @@
 	qcom,cont-splash-enabled;
 	qcom,panel-supply-entries = <&dsi_panel_pwr_supply>;
 	qcom,partial-update-enabled;
-	qcom,panel-roi-alignment = <360 16 360 16 360 16>;
+	qcom,panel-roi-alignment = <720 128 720 64 720 64>;
 };
 
 &dsi_SAM_S6E3FA3_SAM_6p0_1080P_video_vid {
@@ -446,6 +444,18 @@
 	qcom,panel-supply-entries = <&dsi_panel_pwr_supply>;
 	qcom,partial-update-enabled;
 	qcom,panel-roi-alignment = <4 4 2 2 20 20>;
+};
+
+&dsi_dual_jdi_4k_nofbc_video {
+	pwms = <&pmi8994_pwm_4 0 0>;
+	pwm-names = "backlight";
+	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_pwm";
+	qcom,mdss-dsi-bl-pwm-pmi;
+	qcom,mdss-dsi-bl-pmic-pwm-frequency = <100>;
+	qcom,mdss-dsi-bl-min-level = <1>;
+	qcom,mdss-dsi-bl-max-level = <4095>;
+	qcom,cont-splash-enabled;
+	qcom,panel-supply-entries = <&dsi_panel_pwr_supply>;
 };
 
 /{
@@ -704,13 +714,28 @@
 		qcom,hph-en1-gpio = <&pmi8994_gpios 10 0>;
 		qcom,hph-en0-gpio = <&pm8994_gpios 13 0>;
 		qcom,us-euro-gpios = <&pm8994_mpps 2 0>;
-		qcom,aux-codec = <&wsa881x_1>, <&wsa881x_2>;
+		qcom,wsa-max-devs = <2>;
+		qcom,wsa-devs = <&wsa881x_211>, <&wsa881x_212>,
+				<&wsa881x_213>, <&wsa881x_214>;
+		qcom,wsa-aux-dev-prefix = "SpkrRight", "SpkrLeft",
+					  "SpkrRight", "SpkrLeft";
 	};
 #endif
 
 };
 
 &pm8994_gpios {
+	gpio@c600 { /* GPIO 7 - NFC DWL REQ */
+		qcom,mode = <1>;
+		qcom,output-type = <0>;
+		qcom,pull = <5>;
+		qcom,vin-sel = <2>;
+		qcom,out-strength = <3>;
+		qcom,src-sel = <0>;
+		qcom,master-en = <1>;
+		status = "okay";
+	};
+
 	gpio@c700 { /* GPIO 8 - WLAN_EN */
 		qcom,mode = <1>;		/* Digital output*/
 		qcom,pull = <4>;		/* Pulldown 10uA */
@@ -747,6 +772,22 @@
 		qcom,pull = <0>;
 		qcom,vin-sel = <2>;
 		qcom,src-sel = <0>;
+	gpio@c900 { /* GPIO 10 - NFC CLK _REQ*/
+		qcom,mode = <0>;
+		qcom,vin-sel = <2>;
+		qcom,src-sel = <0>;
+		qcom,master-en = <1>;
+		status = "okay";
+	};
+
+	gpio@cd00 { /* GPIO 14 - lcd_bklt_reg_en */
+		qcom,mode = <1>;	/* DIGITAL OUT */
+		qcom,output-type = <0>;		/* CMOS logic */
+		qcom,invert = <1>; 	/* output hight initially */
+		qcom,vin-sel = <2>;	/* 1.8 */
+		qcom,src-sel = <0>;	/* CONSTANT */
+		qcom,out-strength = <1>;	/* Low drive strength */
+		qcom,master-en = <1>;	/* ENABLE GPIO */
 		status = "okay";
 	};
 	gpio@c200 { /* GPIO 3 */

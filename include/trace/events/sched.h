@@ -1,3 +1,6 @@
+#ifdef CONFIG_SCHED_QHMP
+#include "qhmp_sched.h"
+#else
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM sched
 
@@ -116,9 +119,9 @@ TRACE_EVENT(sched_enq_deq_task,
 TRACE_EVENT(sched_task_load,
 
 	TP_PROTO(struct task_struct *p, int boost, int reason,
-		 int sync, int need_idle),
+		 int sync, int need_idle, int best_cpu),
 
-	TP_ARGS(p, boost, reason, sync, need_idle),
+	TP_ARGS(p, boost, reason, sync, need_idle, best_cpu),
 
 	TP_STRUCT__entry(
 		__array(	char,	comm,	TASK_COMM_LEN	)
@@ -131,6 +134,8 @@ TRACE_EVENT(sched_task_load,
 		__field(	int,	reason			)
 		__field(	int,	sync			)
 		__field(	int,	need_idle		)
+		__field(	int,	best_cpu		)
+		__field(	u64,	latency			)
 	),
 
 	TP_fast_assign(
@@ -144,12 +149,16 @@ TRACE_EVENT(sched_task_load,
 		__entry->reason		= reason;
 		__entry->sync		= sync;
 		__entry->need_idle	= need_idle;
+		__entry->best_cpu	= best_cpu;
+		__entry->latency	= p->state == TASK_WAKING ?
+					 sched_clock() - p->ravg.mark_start : 0;
 	),
 
-	TP_printk("%d (%s): sum=%u, sum_scaled=%u, period=%u demand=%u boost=%d reason=%d sync=%d, need_idle=%d",
+	TP_printk("%d (%s): sum=%u, sum_scaled=%u, period=%u demand=%u boost=%d reason=%d sync=%d need_idle=%d best_cpu=%d latency=%llu",
 		__entry->pid, __entry->comm, __entry->sum,
 		__entry->sum_scaled, __entry->period, __entry->demand,
-		__entry->boost, __entry->reason, __entry->sync, __entry->need_idle)
+		__entry->boost, __entry->reason, __entry->sync,
+		__entry->need_idle, __entry->best_cpu, __entry->latency)
 );
 
 TRACE_EVENT(sched_cpu_load,
@@ -171,6 +180,7 @@ TRACE_EVENT(sched_cpu_load,
 		__field(unsigned int, max_freq			)
 		__field(unsigned int, power_cost		)
 		__field(	 int, cstate			)
+		__field(	 int, dstate			)
 		__field(	 int, temp			)
 	),
 
@@ -187,14 +197,16 @@ TRACE_EVENT(sched_cpu_load,
 		__entry->max_freq		= rq->max_freq;
 		__entry->power_cost		= power_cost;
 		__entry->cstate			= rq->cstate;
+		__entry->dstate			= rq->dstate;
 		__entry->temp			= temp;
 	),
 
-	TP_printk("cpu %u idle %d nr_run %u nr_big %u lsf %u capacity %u cr_avg %llu irqload %llu fcur %u fmax %u power_cost %u cstate %d temp %d",
+	TP_printk("cpu %u idle %d nr_run %u nr_big %u lsf %u capacity %u cr_avg %llu irqload %llu fcur %u fmax %u power_cost %u cstate %d dstate %d temp %d",
 	__entry->cpu, __entry->idle, __entry->nr_running, __entry->nr_big_tasks,
 	__entry->load_scale_factor, __entry->capacity,
 	__entry->cumulative_runnable_avg, __entry->irqload, __entry->cur_freq,
-	__entry->max_freq, __entry->power_cost, __entry->cstate, __entry->temp)
+	__entry->max_freq, __entry->power_cost, __entry->cstate,
+	__entry->dstate, __entry->temp)
 );
 
 TRACE_EVENT(sched_set_boost,
@@ -241,6 +253,9 @@ TRACE_EVENT(sched_update_task_ravg,
 		__field(	u64,	ps			)
 		__field(	u32,	curr_window		)
 		__field(	u32,	prev_window		)
+		__field(	u64,	nt_cs			)
+		__field(	u64,	nt_ps			)
+		__field(	u32,	active_windows		)
 #endif
 	),
 
@@ -264,12 +279,15 @@ TRACE_EVENT(sched_update_task_ravg,
 		__entry->ps             = rq->prev_runnable_sum;
 		__entry->curr_window	= p->ravg.curr_window;
 		__entry->prev_window	= p->ravg.prev_window;
+		__entry->nt_cs		= rq->nt_curr_runnable_sum;
+		__entry->nt_ps		= rq->nt_prev_runnable_sum;
+		__entry->active_windows	= p->ravg.active_windows;
 #endif
 	),
 
 	TP_printk("wc %llu ws %llu delta %llu event %s cpu %d cur_freq %u cur_pid %d task %d (%s) ms %llu delta %llu demand %u sum %u irqtime %llu"
 #ifdef CONFIG_SCHED_FREQ_INPUT
-		" cs %llu ps %llu cur_window %u prev_window %u"
+		" cs %llu ps %llu cur_window %u prev_window %u nt_cs %llu nt_ps %llu active_wins %u"
 #endif
 		, __entry->wallclock, __entry->win_start, __entry->delta,
 		task_event_names[__entry->evt], __entry->cpu,
@@ -279,7 +297,9 @@ TRACE_EVENT(sched_update_task_ravg,
 		__entry->sum, __entry->irqtime
 #ifdef CONFIG_SCHED_FREQ_INPUT
 		, __entry->cs, __entry->ps, __entry->curr_window,
-		  __entry->prev_window
+		  __entry->prev_window,
+		  __entry->nt_cs, __entry->nt_ps,
+		  __entry->active_windows
 #endif
 		)
 );
@@ -371,37 +391,44 @@ TRACE_EVENT(sched_migration_update_sum,
 		__field(int,		pid			)
 		__field(	u64,	cs			)
 		__field(	u64,	ps			)
+		__field(	s64,	nt_cs			)
+		__field(	s64,	nt_ps			)
 	),
 
 	TP_fast_assign(
 		__entry->cpu		= cpu_of(rq);
 		__entry->cs		= rq->curr_runnable_sum;
 		__entry->ps		= rq->prev_runnable_sum;
+		__entry->nt_cs		= (s64)rq->nt_curr_runnable_sum;
+		__entry->nt_ps		= (s64)rq->nt_prev_runnable_sum;
 		__entry->pid		= p->pid;
 	),
 
-	TP_printk("cpu %d: cs %llu ps %llu pid %d", __entry->cpu,
-		      __entry->cs, __entry->ps, __entry->pid)
+	TP_printk("cpu %d: cs %llu ps %llu nt_cs %lld nt_ps %lld pid %d",
+		  __entry->cpu, __entry->cs, __entry->ps,
+		  __entry->nt_cs, __entry->nt_ps, __entry->pid)
 );
 
 TRACE_EVENT(sched_get_busy,
 
-	TP_PROTO(int cpu, u64 load),
+	TP_PROTO(int cpu, u64 load, u64 nload),
 
-	TP_ARGS(cpu, load),
+	TP_ARGS(cpu, load, nload),
 
 	TP_STRUCT__entry(
 		__field(	int,	cpu			)
 		__field(	u64,	load			)
+		__field(	u64,	nload			)
 	),
 
 	TP_fast_assign(
 		__entry->cpu		= cpu;
 		__entry->load		= load;
+		__entry->nload		= nload;
 	),
 
-	TP_printk("cpu %d load %lld",
-		__entry->cpu, __entry->load)
+	TP_printk("cpu %d load %lld new_task_load %lld",
+		__entry->cpu, __entry->load, __entry->nload)
 );
 
 TRACE_EVENT(sched_freq_alert,
@@ -1034,3 +1061,4 @@ TRACE_EVENT(sched_get_nr_running_avg,
 
 /* This part must be outside protection */
 #include <trace/define_trace.h>
+#endif /* CONFIG_SCHED_QHMP */

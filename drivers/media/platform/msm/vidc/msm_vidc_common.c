@@ -82,6 +82,16 @@ int msm_comm_g_ctrl(struct msm_vidc_inst *inst, int id)
 	return rc ?: ctrl.value;
 }
 
+static inline bool is_non_realtime_session(struct msm_vidc_inst *inst)
+{
+	int rc = 0;
+	struct v4l2_control ctrl = {
+		.id = V4L2_CID_MPEG_VIDC_VIDEO_PRIORITY
+	};
+	rc = v4l2_g_ctrl(&inst->ctrl_handler, &ctrl);
+	return (!rc && ctrl.value);
+}
+
 enum multi_stream msm_comm_get_stream_output_mode(struct msm_vidc_inst *inst)
 {
 	switch (msm_comm_g_ctrl(inst,
@@ -97,19 +107,30 @@ enum multi_stream msm_comm_get_stream_output_mode(struct msm_vidc_inst *inst)
 static int msm_comm_get_mbs_per_sec(struct msm_vidc_inst *inst)
 {
 	int output_port_mbs, capture_port_mbs;
+	int fps, rc;
+	struct v4l2_control ctrl;
+
 	output_port_mbs = NUM_MBS_PER_FRAME(inst->prop.width[OUTPUT_PORT],
 		inst->prop.height[OUTPUT_PORT]);
 	capture_port_mbs = NUM_MBS_PER_FRAME(inst->prop.width[CAPTURE_PORT],
 		inst->prop.height[CAPTURE_PORT]);
-	return max(output_port_mbs, capture_port_mbs) * inst->prop.fps;
+
+	ctrl.id = V4L2_CID_MPEG_VIDC_VIDEO_OPERATING_RATE;
+	rc = v4l2_g_ctrl(&inst->ctrl_handler, &ctrl);
+	if (!rc && ctrl.value) {
+		fps = (ctrl.value >> 16) ? ctrl.value >> 16 : 1;
+		return max(output_port_mbs, capture_port_mbs) * fps;
+	} else
+		return max(output_port_mbs, capture_port_mbs) * inst->prop.fps;
 }
 
 int msm_comm_get_inst_load(struct msm_vidc_inst *inst,
 		enum load_calc_quirks quirks)
 {
 	int load = 0;
+
 	if (!(inst->state >= MSM_VIDC_OPEN_DONE &&
-			inst->state < MSM_VIDC_STOP_DONE))
+		inst->state < MSM_VIDC_STOP_DONE))
 		return 0;
 
 	load = msm_comm_get_mbs_per_sec(inst);
@@ -124,6 +145,22 @@ int msm_comm_get_inst_load(struct msm_vidc_inst *inst,
 			load = inst->core->resources.max_load;
 	}
 
+	/*  Clock and Load calculations for REALTIME/NON-REALTIME
+	 *                        OPERATING RATE SET/NO OPERATING RATE SET
+	 *
+	 *                 | OPERATING RATE SET   | OPERATING RATE NOT SET |
+	 * ----------------|--------------------- |------------------------|
+	 * REALTIME        | load = res * op_rate |  load = res * fps      |
+	 *                 | clk  = res * op_rate |  clk  = res * fps      |
+	 * ----------------|----------------------|------------------------|
+	 * NON-REALTIME    | load = res * 1 fps   |  load = res * 1 fps    |
+	 *                 | clk  = res * op_rate |  clk  = res * fps      |
+	 * ----------------|----------------------|------------------------|
+	 */
+
+	if (is_non_realtime_session(inst) &&
+		(quirks & LOAD_CALC_IGNORE_NON_REALTIME_LOAD))
+		load = msm_comm_get_mbs_per_sec(inst) / inst->prop.fps;
 	return load;
 }
 
@@ -260,6 +297,7 @@ static int msm_comm_vote_bus(struct msm_vidc_core *core)
 	struct hfi_device *hdev;
 	struct msm_vidc_inst *inst = NULL;
 	struct vidc_bus_vote_data *vote_data = NULL;
+	unsigned long core_freq = 0;
 
 	if (!core) {
 		dprintk(VIDC_ERR, "%s Invalid args: %p\n", __func__, core);
@@ -285,6 +323,9 @@ static int msm_comm_vote_bus(struct msm_vidc_core *core)
 		goto fail_alloc;
 	}
 
+	core_freq = call_hfi_op(hdev, get_core_clock_rate,
+			hdev->hfi_device_data, 0);
+
 	list_for_each_entry(inst, &core->instances, list) {
 		int codec = 0, yuv = 0;
 
@@ -307,6 +348,12 @@ static int msm_comm_vote_bus(struct msm_vidc_core *core)
 			vote_data[i].power_mode = VIDC_POWER_LOW;
 		else
 			vote_data[i].power_mode = VIDC_POWER_NORMAL;
+		if (i == 0) {
+			vote_data[i].imem_ab_tbl = core->resources.imem_ab_tbl;
+			vote_data[i].imem_ab_tbl_size =
+				core->resources.imem_ab_tbl_size;
+			vote_data[i].core_freq = core_freq;
+		}
 
 		/*
 		 * TODO: support for OBP-DBP split mode hasn't been yet
@@ -934,7 +981,7 @@ static void handle_session_prop_info(enum hal_command_response cmd, void *data)
 	}
 
 	getprop->data = kmemdup(&response->data.property,
-			response->size, GFP_KERNEL);
+			sizeof(union hal_get_property), GFP_KERNEL);
 	if (!getprop->data) {
 		dprintk(VIDC_ERR, "%s: kmemdup failed\n", __func__);
 		kfree(getprop);
@@ -1377,7 +1424,7 @@ static void handle_ebd(enum hal_command_response cmd, void *data)
 	}
 
 	vb = get_vb_from_device_addr(&inst->bufq[OUTPUT_PORT],
-				response->clnt_data);
+			response->input_done.packet_buffer);
 	if (vb) {
 		vb->v4l2_planes[0].bytesused = response->input_done.filled_len;
 		vb->v4l2_planes[0].data_offset = response->input_done.offset;
@@ -1386,8 +1433,8 @@ static void handle_ebd(enum hal_command_response cmd, void *data)
 		if (vb->v4l2_planes[0].bytesused > vb->v4l2_planes[0].length)
 			dprintk(VIDC_INFO, "bytesused overflow length\n");
 		if (vb->v4l2_planes[0].m.userptr !=
-			response->input_done.packet_buffer)
-			dprintk(VIDC_INFO, "Unexpected buffer address\n");
+			response->clnt_data)
+			dprintk(VIDC_INFO, "Client data != bufaddr\n");
 		empty_buf_done = (struct vidc_hal_ebd *)&response->input_done;
 		if (empty_buf_done) {
 			if (empty_buf_done->status == VIDC_ERR_NOT_SUPPORTED) {
@@ -1947,7 +1994,7 @@ static unsigned long msm_comm_get_clock_rate(struct msm_vidc_core *core)
 	}
 	hdev = core->device;
 
-	freq = call_hfi_op(hdev, get_core_clock_rate, hdev->hfi_device_data);
+	freq = call_hfi_op(hdev, get_core_clock_rate, hdev->hfi_device_data, 1);
 	dprintk(VIDC_DBG, "clock freq %ld\n", freq);
 
 	return freq;
@@ -2164,7 +2211,7 @@ static int msm_comm_init_core(struct msm_vidc_inst *inst)
 		goto fail_core_init;
 	}
 	core->state = VIDC_CORE_INIT;
-
+	core->smmu_fault_handled = false;
 core_already_inited:
 	change_inst_state(inst, MSM_VIDC_CORE_INIT);
 	mutex_unlock(&core->lock);
@@ -2317,7 +2364,8 @@ static int msm_vidc_load_resources(int flipped_state,
 	int num_mbs_per_sec = 0;
 	struct msm_vidc_core *core;
 	enum load_calc_quirks quirks = LOAD_CALC_IGNORE_TURBO_LOAD |
-		LOAD_CALC_IGNORE_THUMBNAIL_LOAD;
+		LOAD_CALC_IGNORE_THUMBNAIL_LOAD |
+		LOAD_CALC_IGNORE_NON_REALTIME_LOAD;
 
 	if (!inst || !inst->core || !inst->core->device) {
 		dprintk(VIDC_ERR, "%s invalid parameters\n", __func__);
@@ -4332,7 +4380,8 @@ static int msm_vidc_load_supported(struct msm_vidc_inst *inst)
 {
 	int num_mbs_per_sec = 0;
 	enum load_calc_quirks quirks = LOAD_CALC_IGNORE_TURBO_LOAD |
-		LOAD_CALC_IGNORE_THUMBNAIL_LOAD;
+		LOAD_CALC_IGNORE_THUMBNAIL_LOAD |
+		LOAD_CALC_IGNORE_NON_REALTIME_LOAD;
 
 	if (inst->state == MSM_VIDC_OPEN_DONE) {
 		num_mbs_per_sec = msm_comm_get_load(inst->core,

@@ -312,7 +312,8 @@ struct ufs_hba_variant_ops {
 	int	(*init)(struct ufs_hba *);
 	void	(*exit)(struct ufs_hba *);
 	u32	(*get_ufs_hci_version)(struct ufs_hba *);
-	int	(*clk_scale_notify)(struct ufs_hba *, bool, bool);
+	int	(*clk_scale_notify)(struct ufs_hba *, bool,
+				    enum ufs_notify_change_status);
 	int	(*setup_clocks)(struct ufs_hba *, bool, bool);
 	int	(*setup_regulators)(struct ufs_hba *, bool);
 	int	(*hce_enable_notify)(struct ufs_hba *,
@@ -535,7 +536,6 @@ struct debugfs_files {
 	u32 dme_peer_attr_id;
 	struct dentry *reset_controller;
 #ifdef CONFIG_UFS_FAULT_INJECTION
-	struct dentry *err_inj_codes;
 	struct dentry *err_inj_scenario;
 	struct dentry *err_inj_stats;
 	u32 err_inj_scenario_mask;
@@ -1105,7 +1105,7 @@ static inline u32 ufshcd_vops_get_ufs_hci_version(struct ufs_hba *hba)
 }
 
 static inline int ufshcd_vops_clk_scale_notify(struct ufs_hba *hba,
-						bool up, bool status)
+			bool up, enum ufs_notify_change_status status)
 {
 	if (hba->var && hba->var->vops && hba->var->vops->clk_scale_notify)
 		return hba->var->vops->clk_scale_notify(hba, up, status);

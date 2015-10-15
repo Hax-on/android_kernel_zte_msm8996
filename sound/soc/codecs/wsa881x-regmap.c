@@ -281,6 +281,7 @@ static bool wsa881x_volatile_register(struct device *dev, unsigned int reg)
 	case WSA881X_TEMP_DOUT_LSB:
 	case WSA881X_TEMP_OP:
 	case WSA881X_SPKR_PROT_SAR:
+	case WSA881X_SPKR_OCP_CTL:
 		return true;
 	default:
 		return false;
@@ -298,4 +299,5 @@ struct regmap_config wsa881x_regmap_config = {
 	.readable_reg = wsa881x_readable_register,
 	.reg_format_endian = REGMAP_ENDIAN_NATIVE,
 	.val_format_endian = REGMAP_ENDIAN_NATIVE,
+	.can_multi_write = true,
 };

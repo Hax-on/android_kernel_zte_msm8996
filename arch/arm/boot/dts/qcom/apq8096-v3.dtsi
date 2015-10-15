@@ -20,5 +20,5 @@
 
 / {
 	model = "Qualcomm Technologies, Inc. APQ 8096 v3";
-	qcom,msm-id = <291 0x30000>;
+	qcom,msm-id = <291 0x30001>;
 };

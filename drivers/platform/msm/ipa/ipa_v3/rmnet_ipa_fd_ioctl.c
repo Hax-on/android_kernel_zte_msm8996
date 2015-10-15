@@ -35,6 +35,18 @@
 #define WAN_IOC_SET_DATA_QUOTA32 _IOWR(WAN_IOC_MAGIC, \
 		WAN_IOCTL_SET_DATA_QUOTA, \
 		compat_uptr_t)
+#define WAN_IOC_SET_TETHER_CLIENT_PIPE32 _IOWR(WAN_IOC_MAGIC, \
+		WAN_IOCTL_SET_TETHER_CLIENT_PIPE, \
+		compat_uptr_t)
+#define WAN_IOC_QUERY_TETHER_STATS32 _IOWR(WAN_IOC_MAGIC, \
+		WAN_IOCTL_QUERY_TETHER_STATS, \
+		compat_uptr_t)
+#define WAN_IOC_RESET_TETHER_STATS32 _IOWR(WAN_IOC_MAGIC, \
+		WAN_IOCTL_RESET_TETHER_STATS, \
+		compat_uptr_t)
+#define WAN_IOC_QUERY_DL_FILTER_STATS32 _IOWR(WAN_IOC_MAGIC, \
+		WAN_IOCTL_QUERY_DL_FILTER_STATS, \
+		compat_uptr_t)
 #endif
 
 static unsigned int dev_num = 1;
@@ -63,7 +75,7 @@ static long ipa3_wan_ioctl(struct file *filp,
 	case WAN_IOC_ADD_FLT_RULE:
 		IPAWANDBG("device %s got WAN_IOC_ADD_FLT_RULE :>>>\n",
 		DRIVER_NAME);
-		pyld_sz = sizeof(struct ipa_install_fltr_rule_req_msg_v01);
+		pyld_sz = sizeof(struct ipa3_install_fltr_rule_req_msg_v01);
 		param = kzalloc(pyld_sz, GFP_KERNEL);
 		if (!param) {
 			retval = -ENOMEM;
@@ -74,7 +86,7 @@ static long ipa3_wan_ioctl(struct file *filp,
 			break;
 		}
 		if (ipa3_qmi_filter_request_send(
-			(struct ipa_install_fltr_rule_req_msg_v01 *)param)) {
+			(struct ipa3_install_fltr_rule_req_msg_v01 *)param)) {
 			IPAWANDBG("IPACM->Q6 add filter rule failed\n");
 			retval = -EFAULT;
 			break;
@@ -88,7 +100,7 @@ static long ipa3_wan_ioctl(struct file *filp,
 	case WAN_IOC_ADD_FLT_RULE_INDEX:
 		IPAWANDBG("device %s got WAN_IOC_ADD_FLT_RULE_INDEX :>>>\n",
 		DRIVER_NAME);
-		pyld_sz = sizeof(struct ipa_fltr_installed_notif_req_msg_v01);
+		pyld_sz = sizeof(struct ipa3_fltr_installed_notif_req_msg_v01);
 		param = kzalloc(pyld_sz, GFP_KERNEL);
 		if (!param) {
 			retval = -ENOMEM;
@@ -99,7 +111,7 @@ static long ipa3_wan_ioctl(struct file *filp,
 			break;
 		}
 		if (ipa3_qmi_filter_notify_send(
-		(struct ipa_fltr_installed_notif_req_msg_v01 *)param)) {
+		(struct ipa3_fltr_installed_notif_req_msg_v01 *)param)) {
 			IPAWANDBG("IPACM->Q6 rule index fail\n");
 			retval = -EFAULT;
 			break;
@@ -123,7 +135,7 @@ static long ipa3_wan_ioctl(struct file *filp,
 			retval = -EFAULT;
 			break;
 		}
-		if (vote_for_bus_bw((uint32_t *)param)) {
+		if (ipa3_vote_for_bus_bw((uint32_t *)param)) {
 			IPAWANERR("Failed to vote for bus BW\n");
 			retval = -EFAULT;
 			break;
@@ -184,6 +196,75 @@ static long ipa3_wan_ioctl(struct file *filp,
 		}
 		break;
 
+	case WAN_IOC_SET_TETHER_CLIENT_PIPE:
+		IPAWANDBG("device %s got WAN_IOC_SET_TETHER_CLIENT_PIPE :>>>\n",
+				DRIVER_NAME);
+		pyld_sz = sizeof(struct wan_ioctl_set_tether_client_pipe);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (u8 *)arg, pyld_sz)) {
+			retval = -EFAULT;
+			break;
+		}
+		if (rmnet_ipa3_set_tether_client_pipe(
+			(struct wan_ioctl_set_tether_client_pipe *)param)) {
+			IPAWANERR("WAN_IOC_SET_TETHER_CLIENT_PIPE failed\n");
+			retval = -EFAULT;
+			break;
+		}
+		break;
+
+	case WAN_IOC_QUERY_TETHER_STATS:
+		IPAWANDBG("device %s got WAN_IOC_QUERY_TETHER_STATS :>>>\n",
+				DRIVER_NAME);
+		pyld_sz = sizeof(struct wan_ioctl_query_tether_stats);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (u8 *)arg, pyld_sz)) {
+			retval = -EFAULT;
+			break;
+		}
+
+		if (rmnet_ipa3_query_tethering_stats(
+			(struct wan_ioctl_query_tether_stats *)param, false)) {
+			IPAWANERR("WAN_IOC_QUERY_TETHER_STATS failed\n");
+			retval = -EFAULT;
+			break;
+		}
+
+		if (copy_to_user((u8 *)arg, param, pyld_sz)) {
+			retval = -EFAULT;
+			break;
+		}
+		break;
+
+	case WAN_IOC_RESET_TETHER_STATS:
+		IPAWANDBG("device %s got WAN_IOC_RESET_TETHER_STATS :>>>\n",
+				DRIVER_NAME);
+		pyld_sz = sizeof(struct wan_ioctl_reset_tether_stats);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (u8 *)arg, pyld_sz)) {
+			retval = -EFAULT;
+			break;
+		}
+
+		if (rmnet_ipa3_query_tethering_stats(NULL, true)) {
+			IPAWANERR("WAN_IOC_QUERY_TETHER_STATS failed\n");
+			retval = -EFAULT;
+			break;
+		}
+		break;
+
 	default:
 		retval = -ENOTTY;
 	}
@@ -208,6 +289,18 @@ long ipa3_compat_wan_ioctl(struct file *file,
 		break;
 	case WAN_IOC_SET_DATA_QUOTA32:
 		cmd = WAN_IOC_SET_DATA_QUOTA;
+		break;
+	case WAN_IOC_SET_TETHER_CLIENT_PIPE32:
+		cmd = WAN_IOC_SET_TETHER_CLIENT_PIPE;
+		break;
+	case WAN_IOC_QUERY_TETHER_STATS32:
+		cmd = WAN_IOC_QUERY_TETHER_STATS;
+		break;
+	case WAN_IOC_RESET_TETHER_STATS32:
+		cmd = WAN_IOC_RESET_TETHER_STATS;
+		break;
+	case WAN_IOC_QUERY_DL_FILTER_STATS32:
+		cmd = WAN_IOC_QUERY_DL_FILTER_STATS;
 		break;
 	default:
 		return -ENOIOCTLCMD;

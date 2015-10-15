@@ -17,6 +17,7 @@
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
 #include <linux/memblock.h>
+#include <video/msm_hdmi_modes.h>
 
 #include "mdss_fb.h"
 #include "mdss_mdp.h"
@@ -244,6 +245,9 @@ static int mdss_mdp_video_timegen_setup(struct mdss_mdp_ctl *ctl,
 	vsync_period = p->vsync_pulse_width + p->v_back_porch +
 			p->height + p->v_front_porch;
 
+	MDSS_XLOG(p->vsync_pulse_width, p->v_back_porch,
+			p->height, p->v_front_porch);
+
 	display_v_start = ((p->vsync_pulse_width + p->v_back_porch) *
 			hsync_period) + p->hsync_skew;
 	display_v_end = ((vsync_period - p->v_front_porch) * hsync_period) +
@@ -327,6 +331,7 @@ static int mdss_mdp_video_timegen_setup(struct mdss_mdp_ctl *ctl,
 	mdp_video_write(ctx, MDSS_MDP_REG_INTF_HSYNC_SKEW, p->hsync_skew);
 	mdp_video_write(ctx, MDSS_MDP_REG_INTF_POLARITY_CTL, polarity_ctl);
 	mdp_video_write(ctx, MDSS_MDP_REG_INTF_FRAME_LINE_COUNT_EN, 0x3);
+	MDSS_XLOG(hsync_period, vsync_period);
 
 	/*
 	 * If CDM is present Interface should have destination
@@ -705,7 +710,9 @@ static void mdss_mdp_video_underrun_intr_done(void *arg)
 	pr_debug("display underrun detected for ctl=%d count=%d\n", ctl->num,
 			ctl->underrun_cnt);
 
-	if (ctl->opmode & MDSS_MDP_CTL_OP_PACK_3D_ENABLE)
+	if (!test_bit(MDSS_CAPS_3D_MUX_UNDERRUN_RECOVERY_SUPPORTED,
+		ctl->mdata->mdss_caps_map) &&
+		(ctl->opmode & MDSS_MDP_CTL_OP_PACK_3D_ENABLE))
 		schedule_work(&ctl->recover_work);
 }
 
@@ -740,6 +747,7 @@ static int mdss_mdp_video_timegen_update(struct mdss_mdp_video_ctx *ctx,
 	mdp_video_write(ctx, MDSS_MDP_REG_INTF_DISPLAY_V_START_F0,
 						display_v_start);
 	mdp_video_write(ctx, MDSS_MDP_REG_INTF_DISPLAY_V_END_F0, display_v_end);
+	MDSS_XLOG(ctx->intf_num, hsync_ctl, vsync_period, hsync_period);
 
 	return 0;
 }
@@ -801,6 +809,8 @@ static int mdss_mdp_video_vfp_fps_update(struct mdss_mdp_video_ctx *ctx,
 		mdp_video_write(ctx, MDSS_MDP_REG_INTF_VSYNC_PERIOD_F0,
 			new_vsync_period_f0 & 0x7fffff);
 	}
+	MDSS_XLOG(ctx->intf_num, current_vsync_period_f0,
+		hsync_period, vsync_period, new_vsync_period_f0);
 
 	return 0;
 }
@@ -834,14 +844,23 @@ static int mdss_mdp_video_dfps_wait4vsync(struct mdss_mdp_ctl *ctl)
 	reinit_completion(&ctx->vsync_comp);
 	rc = wait_for_completion_timeout(&ctx->vsync_comp,
 		usecs_to_jiffies(VSYNC_TIMEOUT_US));
-	WARN(rc <= 0, "timeout (%d) vsync interrupt on ctl=%d\n",
-		rc, ctl->num);
 
+	if (rc <= 0) {
+		pr_warn("vsync timeout %d fallback to poll mode\n",
+			ctl->num);
+		rc = mdss_mdp_video_pollwait(ctl);
+		if (rc) {
+			pr_err("error polling for vsync\n");
+			MDSS_XLOG_TOUT_HANDLER("mdp", "dsi0_ctrl", "dsi0_phy",
+				"dsi1_ctrl", "dsi1_phy", "vbif", "dbg_bus",
+				"vbif_dbg_bus", "panic");
+		}
+	} else {
+		rc = 0;
+	}
 	video_vsync_irq_disable(ctl);
-	if (rc <= 0)
-		return -EPERM;
 
-	return 0;
+	return rc;
 }
 
 static int mdss_mdp_video_dfps_check_line_cnt(struct mdss_mdp_ctl *ctl)
@@ -869,6 +888,7 @@ static void mdss_mdp_video_timegen_flush(struct mdss_mdp_ctl *ctl,
 {
 	u32 ctl_flush;
 	struct mdss_data_type *mdata;
+
 	mdata = ctl->mdata;
 	ctl_flush = (BIT(31) >> (ctl->intf_num - MDSS_MDP_INTF0));
 	if (sctx) {
@@ -880,24 +900,40 @@ static void mdss_mdp_video_timegen_flush(struct mdss_mdp_ctl *ctl,
 					(sctx->intf_num - MDSS_MDP_INTF0));
 	}
 	mdss_mdp_ctl_write(ctl, MDSS_MDP_REG_CTL_FLUSH, ctl_flush);
+	MDSS_XLOG(ctl->intf_num, sctx?sctx->intf_num:0xf00, ctl_flush);
 }
 
-static int mdss_mdp_video_config_fps(struct mdss_mdp_ctl *ctl,
-					struct mdss_mdp_ctl *sctl, int new_fps)
+/**
+ * mdss_mdp_video_config_fps() - modify the fps.
+ * @ctl: pointer to the master controller.
+ * @new_fps: new fps to be set.
+ *
+ * This function configures the hardware to modify the fps.
+ * Note that this function will flush the DSI and MDP
+ * to reconfigure the fps in VFP and HFP methods.
+ * Given above statement, is callers responsibility to call
+ * this function at the beginning of the frame, so it can be
+ * guaranteed that flush of both (DSI and MDP) happen within
+ * the same frame.
+ *
+ * Return: 0 - succeed, otherwise - fail
+ */
+static int mdss_mdp_video_config_fps(struct mdss_mdp_ctl *ctl, int new_fps)
 {
 	struct mdss_mdp_video_ctx *ctx, *sctx = NULL;
 	struct mdss_panel_data *pdata;
 	int rc = 0;
 	u32 hsync_period, vsync_period;
-	struct mdss_data_type *mdata;
+	struct mdss_data_type *mdata = ctl->mdata;
+	struct mdss_mdp_ctl *sctl = NULL;
 
 	ctx = (struct mdss_mdp_video_ctx *) ctl->intf_ctx[MASTER_CTX];
-	if (!ctx) {
-		pr_err("invalid ctx\n");
-		return -ENODEV;
+	if (!ctx || !ctx->timegen_en || !ctx->ref_cnt) {
+		pr_err("invalid ctx or interface is powered off\n");
+		return -EINVAL;
 	}
 
-	mdata = ctl->mdata;
+	sctl = mdss_mdp_get_split_ctl(ctl);
 	if (sctl) {
 		sctx = (struct mdss_mdp_video_ctx *) sctl->intf_ctx[MASTER_CTX];
 		if (!sctx) {
@@ -906,26 +942,27 @@ static int mdss_mdp_video_config_fps(struct mdss_mdp_ctl *ctl,
 		}
 	} else if (is_pingpong_split(ctl->mfd)) {
 		sctx = (struct mdss_mdp_video_ctx *) ctl->intf_ctx[SLAVE_CTX];
-		if (!sctx) {
-			pr_err("invalid sctx\n");
-			return -ENODEV;
+		if (!sctx || !sctx->timegen_en || !sctx->ref_cnt) {
+			pr_err("invalid sctx or interface is powered off\n");
+			return -EINVAL;
 		}
 	}
 
+	mutex_lock(&ctl->offlock);
 	pdata = ctl->panel_data;
 	if (pdata == NULL) {
 		pr_err("%s: Invalid panel data\n", __func__);
-		return -EINVAL;
-	}
-
-	if (!pdata->panel_info.dynamic_fps) {
-		pr_err("%s: Dynamic fps not enabled for this panel\n",
-						__func__);
-		return -EINVAL;
+		rc = -EINVAL;
+		goto end;
 	}
 
 	vsync_period = mdss_panel_get_vtotal(&pdata->panel_info);
 	hsync_period = mdss_panel_get_htotal(&pdata->panel_info, true);
+
+	pr_debug("ctl:%d dfps_update:%d fps:%d\n",
+		ctl->num, pdata->panel_info.dfps_update, new_fps);
+	MDSS_XLOG(ctl->num, pdata->panel_info.dfps_update,
+		new_fps, XLOG_FUNC_ENTRY);
 
 	if (pdata->panel_info.dfps_update
 			!= DFPS_SUSPEND_RESUME_MODE) {
@@ -933,12 +970,14 @@ static int mdss_mdp_video_config_fps(struct mdss_mdp_ctl *ctl,
 				== DFPS_IMMEDIATE_CLK_UPDATE_MODE) {
 			if (!ctx->timegen_en) {
 				pr_err("TG is OFF. DFPS mode invalid\n");
-				return -EINVAL;
+				rc = -EINVAL;
+				goto end;
 			}
 			rc = mdss_mdp_ctl_intf_event(ctl,
 					MDSS_EVENT_PANEL_UPDATE_FPS,
 					(void *) (unsigned long) new_fps,
 					false);
+
 			WARN(rc, "intf %d panel fps update error (%d)\n",
 							ctl->intf_num, rc);
 		} else if (pdata->panel_info.dfps_update
@@ -948,39 +987,31 @@ static int mdss_mdp_video_config_fps(struct mdss_mdp_ctl *ctl,
 			unsigned long flags;
 			if (!ctx->timegen_en) {
 				pr_err("TG is OFF. DFPS mode invalid\n");
-				return -EINVAL;
-			}
-
-			/*
-			 * there is possibility that the time of mdp flush
-			 * bit set and the time of dsi flush bit are cross
-			 * vsync boundary. therefore wait4vsync is needed
-			 * to guarantee both flush bits are set within same
-			 * vsync period regardless of mdp revision.
-			 */
-			rc = mdss_mdp_video_dfps_wait4vsync(ctl);
-			if (rc < 0) {
-				pr_err("Error during wait4vsync\n");
-				return rc;
+				rc = -EINVAL;
+				goto end;
 			}
 
 			mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
 			spin_lock_irqsave(&ctx->dfps_lock, flags);
 
-			rc = mdss_mdp_video_dfps_check_line_cnt(ctl);
-			if (rc < 0)
-				goto exit_dfps;
+			if (mdata->mdp_rev < MDSS_MDP_HW_REV_105) {
+				rc = mdss_mdp_video_dfps_check_line_cnt(ctl);
+				if (rc < 0)
+					goto exit_dfps;
+			}
 
 			rc = mdss_mdp_video_fps_update(ctx, pdata, new_fps);
 			if (rc < 0) {
-				pr_err("%s: Error during DFPS\n", __func__);
+				pr_err("%s: Error during DFPS: %d\n", __func__,
+					new_fps);
 				goto exit_dfps;
 			}
 			if (sctx) {
 				rc = mdss_mdp_video_fps_update(sctx,
 							pdata->next, new_fps);
 				if (rc < 0) {
-					pr_err("%s: DFPS error\n", __func__);
+					pr_err("%s: DFPS error fps:%d\n",
+						__func__, new_fps);
 					goto exit_dfps;
 				}
 			}
@@ -991,6 +1022,7 @@ static int mdss_mdp_video_config_fps(struct mdss_mdp_ctl *ctl,
 			WARN(rc, "intf %d panel fps update error (%d)\n",
 							ctl->intf_num, rc);
 
+			rc = 0;
 			mdss_mdp_fetch_start_config(ctx, ctl);
 			if (sctx)
 				mdss_mdp_fetch_start_config(sctx, ctl);
@@ -1012,10 +1044,26 @@ static int mdss_mdp_video_config_fps(struct mdss_mdp_ctl *ctl,
 exit_dfps:
 			spin_unlock_irqrestore(&ctx->dfps_lock, flags);
 			mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
+
+			/*
+			 * Wait for one vsync to make sure these changes
+			 * are applied as part of one single frame and
+			 * no mixer changes happen at the same time.
+			 * A potential optimization would be not to wait
+			 * here, but next mixer programming would need
+			 * to wait before programming the flush bits.
+			 */
+			if (!rc) {
+				rc = mdss_mdp_video_dfps_wait4vsync(ctl);
+				if (rc < 0)
+					pr_err("Error in dfps_wait: %d\n", rc);
+			}
+
 		} else {
 			pr_err("intf %d panel, unknown FPS mode\n",
 							ctl->intf_num);
-			return -EINVAL;
+			rc = -EINVAL;
+			goto end;
 		}
 	} else {
 		rc = mdss_mdp_ctl_intf_event(ctl,
@@ -1026,6 +1074,9 @@ exit_dfps:
 						ctl->intf_num, rc);
 	}
 
+end:
+	MDSS_XLOG(ctl->num, new_fps, XLOG_FUNC_EXIT);
+	mutex_unlock(&ctl->offlock);
 	return rc;
 }
 
@@ -1211,6 +1262,7 @@ static void mdss_mdp_fetch_end_config(struct mdss_mdp_video_ctx *ctx,
 
 	mdp_video_write(ctx, MDSS_MDP_REG_INTF_VBLANK_END_CONF, fetch_stop);
 	mdp_video_write(ctx, MDSS_MDP_REG_INTF_CONFIG, vblank_end_enable);
+	MDSS_XLOG(ctx->intf_num, fetch_stop, vblank_end_enable);
 }
 
 static void mdss_mdp_fetch_start_config(struct mdss_mdp_video_ctx *ctx,
@@ -1247,6 +1299,13 @@ static void mdss_mdp_fetch_start_config(struct mdss_mdp_video_ctx *ctx,
 
 	mdp_video_write(ctx, MDSS_MDP_REG_INTF_PROG_FETCH_START, fetch_start);
 	mdp_video_write(ctx, MDSS_MDP_REG_INTF_CONFIG, fetch_enable);
+	MDSS_XLOG(ctx->intf_num, fetch_enable, fetch_start);
+}
+
+static inline bool mdss_mdp_video_need_pixel_drop(u32 vic)
+{
+	return vic == HDMI_VFRMT_4096x2160p50_256_135 ||
+		vic == HDMI_VFRMT_4096x2160p60_256_135;
 }
 
 static int mdss_mdp_video_cdm_setup(struct mdss_mdp_cdm *cdm,
@@ -1278,8 +1337,13 @@ static int mdss_mdp_video_cdm_setup(struct mdss_mdp_cdm *cdm,
 		setup.vert_downsampling_type = MDP_CDM_CDWN_DISABLE;
 		break;
 	case MDSS_MDP_CHROMA_420:
-		setup.horz_downsampling_type = MDP_CDM_CDWN_COSITE;
-		setup.vert_downsampling_type = MDP_CDM_CDWN_OFFSITE;
+		if (mdss_mdp_video_need_pixel_drop(pinfo->vic)) {
+			setup.horz_downsampling_type = MDP_CDM_CDWN_PIXEL_DROP;
+			setup.vert_downsampling_type = MDP_CDM_CDWN_PIXEL_DROP;
+		} else {
+			setup.horz_downsampling_type = MDP_CDM_CDWN_COSITE;
+			setup.vert_downsampling_type = MDP_CDM_CDWN_OFFSITE;
+		}
 		break;
 	case MDSS_MDP_CHROMA_H1V2:
 	default:
@@ -1310,6 +1374,8 @@ static void mdss_mdp_handoff_programmable_fetch(struct mdss_mdp_ctl *ctl,
 			((fetch_start_handoff - 1)/h_total_handoff);
 		pr_debug("programmable fetch lines %d start:%d\n",
 			pinfo->prg_fet, fetch_start_handoff);
+		MDSS_XLOG(pinfo->prg_fet, fetch_start_handoff,
+			h_total_handoff, v_total_handoff);
 	}
 }
 
@@ -1346,7 +1412,7 @@ static int mdss_mdp_video_ctx_setup(struct mdss_mdp_ctl *ctl,
 
 	if (mdss_mdp_is_cdm_supported(mdata, ctl->intf_type, 0)) {
 		ctl->cdm = mdss_mdp_cdm_init(ctl, MDP_CDM_CDWN_OUTPUT_HDMI);
-		if (ctl->cdm) {
+		if (!IS_ERR_OR_NULL(ctl->cdm)) {
 			if (mdss_mdp_video_cdm_setup(ctl->cdm, pinfo)) {
 				pr_err("%s: setting up cdm failed\n",
 				       __func__);

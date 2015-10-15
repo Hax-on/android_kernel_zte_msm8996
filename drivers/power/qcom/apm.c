@@ -25,6 +25,7 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/power/qcom/apm.h>
+#include <soc/qcom/scm.h>
 
 /*
  *        VDD_APCC
@@ -77,6 +78,14 @@
 
 #define MSM_APM_DRIVER_NAME        "qcom,msm-apm"
 
+asmlinkage int __invoke_psci_fn_smc(u64, u64, u64, u64);
+
+enum {
+	CLOCK_ASSERT_ENABLE,
+	CLOCK_ASSERT_DISABLE,
+	CLOCK_ASSERT_TOGGLE,
+};
+
 struct msm_apm_ctrl_dev {
 	struct list_head	list;
 	struct device		*dev;
@@ -87,6 +96,7 @@ struct msm_apm_ctrl_dev {
 	void __iomem		**apcs_spm_events_addr;
 	void __iomem		*apc0_pll_ctl_addr;
 	void __iomem		*apc1_pll_ctl_addr;
+	bool			clk_src_override;
 	u32			version;
 	struct dentry		*debugfs;
 };
@@ -138,6 +148,12 @@ static int msm_apm_ctrl_devm_ioremap(struct platform_device *pdev,
 		dev_err(dev, "Failed to map APCS CSR registers\n");
 		return -ENOMEM;
 	}
+
+	ctrl->clk_src_override = of_property_read_bool(dev->of_node,
+					       "qcom,clock-source-override");
+
+	if (ctrl->clk_src_override)
+		dev_info(dev, "overriding clock sources across APM switch\n");
 
 	ctrl->version = readl_relaxed(ctrl->apcs_csr_base + APCS_VERSION);
 
@@ -215,6 +231,23 @@ free_events:
 	return ret;
 }
 
+static int msm_apm_secure_clock_source_override(
+			struct msm_apm_ctrl_dev *ctrl_dev, bool enable)
+{
+	int ret;
+
+	if (ctrl_dev->clk_src_override) {
+		ret = __invoke_psci_fn_smc(0xC4000020, 3, enable ?
+					   CLOCK_ASSERT_ENABLE :
+					   CLOCK_ASSERT_DISABLE, 0);
+		if (ret)
+			dev_err(ctrl_dev->dev, "PSCI request to switch to %s clock source failed\n",
+				enable ? "GPLL0" : "original");
+	}
+
+	return 0;
+}
+
 static int msm_apm_switch_to_mx(struct msm_apm_ctrl_dev *ctrl_dev)
 {
 	int i, timeout = MSM_APM_SWITCH_TIMEOUT_US;
@@ -222,7 +255,12 @@ static int msm_apm_switch_to_mx(struct msm_apm_ctrl_dev *ctrl_dev)
 	int ret = 0;
 	unsigned long flags;
 
+	mutex_lock(&scm_lmh_lock);
 	spin_lock_irqsave(&ctrl_dev->lock, flags);
+
+	ret = msm_apm_secure_clock_source_override(ctrl_dev, true);
+	if (ret)
+		return ret;
 
 	/* Perform revision-specific programming steps */
 	if (ctrl_dev->version < HMSS_VERSION_1P2) {
@@ -291,12 +329,17 @@ static int msm_apm_switch_to_mx(struct msm_apm_ctrl_dev *ctrl_dev)
 				       ctrl_dev->apcs_spm_events_addr[i]);
 	}
 
+	ret = msm_apm_secure_clock_source_override(ctrl_dev, false);
+	if (ret)
+		return ret;
+
 	if (!ret) {
 		ctrl_dev->supply = MSM_APM_SUPPLY_MX;
 		dev_dbg(ctrl_dev->dev, "APM supply switched to MX\n");
 	}
 
 	spin_unlock_irqrestore(&ctrl_dev->lock, flags);
+	mutex_unlock(&scm_lmh_lock);
 
 	return ret;
 }
@@ -308,7 +351,12 @@ static int msm_apm_switch_to_apcc(struct msm_apm_ctrl_dev *ctrl_dev)
 	int ret = 0;
 	unsigned long flags;
 
+	mutex_lock(&scm_lmh_lock);
 	spin_lock_irqsave(&ctrl_dev->lock, flags);
+
+	ret = msm_apm_secure_clock_source_override(ctrl_dev, true);
+	if (ret)
+		return ret;
 
 	/* Perform revision-specific programming steps */
 	if (ctrl_dev->version < HMSS_VERSION_1P2) {
@@ -377,12 +425,17 @@ static int msm_apm_switch_to_apcc(struct msm_apm_ctrl_dev *ctrl_dev)
 			       ctrl_dev->apc1_pll_ctl_addr);
 	}
 
+	ret = msm_apm_secure_clock_source_override(ctrl_dev, false);
+	if (ret)
+		return ret;
+
 	if (!ret) {
 		ctrl_dev->supply = MSM_APM_SUPPLY_APCC;
 		dev_dbg(ctrl_dev->dev, "APM supply switched to APCC\n");
 	}
 
 	spin_unlock_irqrestore(&ctrl_dev->lock, flags);
+	mutex_unlock(&scm_lmh_lock);
 
 	return ret;
 }

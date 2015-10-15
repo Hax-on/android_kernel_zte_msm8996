@@ -1260,7 +1260,7 @@ tasks - they may be woken up on busy CPUs.
 
 Appears at: /proc/sys/kernel/sched_init_task_load
 
-Default value: 15
+Default value: 100
 
 This tunable is a percentage. When a task is first created it has no
 history, so the task load tracking mechanism cannot determine a
@@ -1484,6 +1484,17 @@ not upmigrated. Any task of the cgroup is allowed to upmigrate only under
 overcommitted scenario. See notes on sched_spill_nr_run and sched_spill_load for
 how overcommitment threshold is defined and also notes on
 'sched_upmigrate_min_nice' tunable.
+
+** 7.26 power_aware_timer_migration
+
+Appears at: /proc/sys/kernel/power_aware_timer_migration
+
+Default value: 0
+
+This tunable helps save power by offloading timer activity to cpus of lesser
+power cost (power cluster). Both high-res and low-res timers that are not pinned
+to one cpu are now enqueued on an online CPU found in least shallow C-state in
+the power-cluster. The current CPU is preferred in case of a tie.
 
 =========================
 8. HMP SCHEDULER TRACE POINTS

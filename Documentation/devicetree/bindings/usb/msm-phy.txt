@@ -19,7 +19,7 @@ Required properties:
 Optional properties:
  - reg: Additional registers
 	"tcsr" : top-level CSR register to be written during power-on reset
-		 intialize the internal MUX that controls whether this PHY is
+		 initialize the internal MUX that controls whether this PHY is
 		 used with the USB3 or the USB2 controller.
 
  - qcom,hsphy-init: Init value used to override HSPHY parameters into
@@ -98,7 +98,6 @@ Required properties:
  - reg: Address and length of the register set for the device
    Required regs are:
    "qmp_phy_base" : QMP PHY Base register set.
-   "qmp_ahb2phy_base" : SS AHB2PHY CSR register set.
  - "vls_clamp_reg" : top-level CSR register to be written to enable phy vls
    clamp which allows phy to detect autonomous mode.
  - <supply-name>-supply: phandle to the regulator device tree node
@@ -113,18 +112,14 @@ Optional properties:
  - qcom,vbus-valid-override: If present, indicates VBUS pin is not connected to
    the USB PHY and the controller must rely on external VBUS notification in
    order to manually relay the notification to the SSPHY.
- - qcom,no-pipe-clk-switch: If present, indicates that the pipe_clk does not need
-   to switch sources between the XO and the PHY PIPE clock output.
  - qcom,emulation: Indicates that we are running on emulation platform.
 
 Example:
 	ssphy0: ssphy@f9b38000 {
 		compatible = "qcom,usb-ssphy-qmp";
 		reg = <0xf9b38000 0x16c>,
-			<0xf9b3e000 0x3ff>,
 			<0x01947244 0x4>;
 		reg-names = "qmp_phy_base",
-			"qmp_ahb2phy_base",
 			"vls_clamp_reg";
 		vdd-supply = <&pmd9635_l4>;
 		vdda18-supply = <&pmd9635_l8>;
@@ -149,7 +144,7 @@ Required properties:
  - clocks: a list of phandles to the PHY clocks. Use as per
    Documentation/devicetree/bindings/clock/clock-bindings.txt
  - clock-names: Names of the clocks in 1-1 correspondence with the "clocks"
-   property. Required clocks are "ref_clk_src", "ref_clk", "cfg_ahb_clk" and "phy_reset".
+   property. Required clocks are "ref_clk_src", "cfg_ahb_clk" and "phy_reset".
  - phy_type: Should be one of "ulpi" or "utmi". ChipIdea core uses "ulpi" mode.
 
 Optional properties:
@@ -157,14 +152,20 @@ Optional properties:
    "qscratch_base" : QSCRATCH base register set.
    "tune2_efuse_addr": EFUSE based register address to read TUNE2 parameter.
    via the QSCRATCH interface.
+   "emu_phy_base" : phy base address used for programming emulation target phy.
+   "ref_clk_addr" : ref_clk bcr address used for on/off ref_clk before reset.
  - reg-names: Should be "qscratch_base". The qscratch register bank
    allows us to manipulate QUSB PHY bits eg. to enable D+ pull-up using s/w
    control in device mode. The reg-names property is required if the
    reg property is specified.
  - qcom,qusb-phy-init-seq: QUSB PHY initialization sequence with value,reg pair.
+ - qcom,emu-init-seq : emulation initialization sequence with value,reg pair.
+ - qcom,phy-pll-reset-seq : emulation PLL reset sequence with value,reg pair.
+ - qcom,emu-dcm-reset-seq : emulation DCM reset sequence with value,reg pair.
  - qcom,tune2-efuse-bit-pos: TUNE2 parameter related start bit position with EFUSE register
  - qcom,tune2-efuse-num-bits: Number of bits based value to use for TUNE2 high nibble
  - qcom,emulation: Indicates that we are running on emulation platform.
+ - qcom,hold-reset: Indicates that hold QUSB PHY into reset state.
 
 Example:
 	qusb_phy: qusb@f9b39000 {

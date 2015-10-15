@@ -579,7 +579,8 @@ static int create_bulk_endpoints(struct acc_dev *dev,
 
 	/* now allocate requests for our endpoints */
 	for (i = 0; i < TX_REQ_MAX; i++) {
-		req = acc_request_new(dev->ep_in, BULK_BUFFER_SIZE);
+		req = acc_request_new(dev->ep_in,
+			BULK_BUFFER_SIZE + cdev->gadget->extra_buf_alloc);
 		if (!req)
 			goto fail;
 		req->complete = acc_complete_in;
@@ -939,6 +940,8 @@ int acc_ctrlrequest(struct usb_composite_dev *cdev,
 			memset(dev->serial, 0, sizeof(dev->serial));
 			dev->start_requested = 0;
 			dev->audio_mode = 0;
+			strlcpy(dev->manufacturer, "Android", ACC_STRING_SIZE);
+			strlcpy(dev->model, "Android", ACC_STRING_SIZE);
 		}
 	}
 

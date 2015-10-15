@@ -79,39 +79,6 @@ static struct msm_bus_scale_pdata msm_isp_bus_client_pdata = {
 	.name = "msm_camera_isp",
 };
 
-
-void msm_camera_io_dump_2(void __iomem *addr, int size)
-{
-	char line_str[128], *p_str;
-	int i;
-	u32 *p = (u32 *) addr;
-	u32 data;
-	pr_err("%s: %p %d\n", __func__, addr, size);
-	line_str[0] = '\0';
-	p_str = line_str;
-	for (i = 0; i < size/4; i++) {
-		if (i % 4 == 0) {
-#ifdef CONFIG_COMPAT
-			snprintf(p_str, 20, "%016lx: ", (unsigned long) p);
-			p_str += 18;
-#else
-			snprintf(p_str, 12, "%08lx: ", (unsigned long) p);
-			p_str += 10;
-#endif
-		}
-		data = readl_relaxed(p++);
-		snprintf(p_str, 12, "%08x ", data);
-		p_str += 9;
-		if ((i + 1) % 4 == 0) {
-			pr_err("%s\n", line_str);
-			line_str[0] = '\0';
-			p_str = line_str;
-		}
-	}
-	if (line_str[0] != '\0')
-		pr_err("%s\n", line_str);
-}
-
 void msm_isp_print_fourcc_error(const char *origin, uint32_t fourcc_format)
 {
 	int i;
@@ -373,6 +340,9 @@ static inline u32 msm_isp_evt_mask_to_isp_event(u32 evt_mask)
 		break;
 	case ISP_EVENT_MASK_INDEX_BUF_DIVERT:
 		evt_id = ISP_EVENT_BUF_DIVERT;
+		break;
+	case ISP_EVENT_MASK_INDEX_BUF_DONE:
+		evt_id = ISP_EVENT_BUF_DONE;
 		break;
 	case ISP_EVENT_MASK_INDEX_COMP_STATS_NOTIFY:
 		evt_id = ISP_EVENT_COMP_STATS_NOTIFY;
@@ -730,20 +700,17 @@ static int msm_isp_set_dual_HW_master_slave_mode(
 
 	dual_hw_ms_cmd = (struct msm_isp_set_dual_hw_ms_cmd *)arg;
 	vfe_dev->common_data->ms_resource.dual_hw_type = DUAL_HW_MASTER_SLAVE;
-
-	if (dual_hw_ms_cmd->primary_intf >= VFE_SRC_MAX) {
-		pr_err("%s: Error! Invalid SRC param %d\n", __func__,
-			dual_hw_ms_cmd->primary_intf);
-		return -EINVAL;
+	vfe_dev->vfe_ub_policy = MSM_WM_UB_EQUAL_SLICING;
+	if (dual_hw_ms_cmd->primary_intf < VFE_SRC_MAX) {
+		src_info = &vfe_dev->axi_data.
+			src_info[dual_hw_ms_cmd->primary_intf];
+		src_info->dual_hw_ms_info.dual_hw_ms_type =
+			dual_hw_ms_cmd->dual_hw_ms_type;
 	}
 
-	src_info = &vfe_dev->axi_data.src_info[dual_hw_ms_cmd->primary_intf];
-
-	src_info->dual_hw_ms_info.dual_hw_ms_type =
-		dual_hw_ms_cmd->dual_hw_ms_type;
-
 	/* No lock needed here since ioctl lock protects 2 session from race */
-	if (dual_hw_ms_cmd->dual_hw_ms_type == MS_TYPE_MASTER) {
+	if (src_info != NULL &&
+		dual_hw_ms_cmd->dual_hw_ms_type == MS_TYPE_MASTER) {
 		src_info->dual_hw_type = DUAL_HW_MASTER_SLAVE;
 		ISP_DBG("%s: Master\n", __func__);
 
@@ -751,7 +718,7 @@ static int msm_isp_set_dual_HW_master_slave_mode(
 			&vfe_dev->common_data->ms_resource.master_sof_info;
 		vfe_dev->common_data->ms_resource.sof_delta_threshold =
 			dual_hw_ms_cmd->sof_delta_threshold;
-	} else {
+	} else if (src_info != NULL) {
 		spin_lock(&vfe_dev->common_data->common_dev_data_lock);
 		src_info->dual_hw_type = DUAL_HW_MASTER_SLAVE;
 		ISP_DBG("%s: Slave\n", __func__);
@@ -780,6 +747,9 @@ static int msm_isp_set_dual_HW_master_slave_mode(
 		}
 	}
 	ISP_DBG("%s: num_src %d\n", __func__, dual_hw_ms_cmd->num_src);
+	/* This for loop is for non-primary intf to be marked with Master/Slave
+	 * in order for frame id sync. But their timestamp is not saved.
+	 * So no sof_info resource is allocated */
 	for (i = 0; i < dual_hw_ms_cmd->num_src; i++) {
 		if (dual_hw_ms_cmd->input_src[i] >= VFE_SRC_MAX) {
 			pr_err("%s: Error! Invalid SRC param %d\n", __func__,
@@ -965,9 +935,9 @@ static long msm_isp_ioctl_unlocked(struct v4l2_subdev *sd,
 		/* fallthrough */
 	case VIDIOC_MSM_ISP_DEQUEUE_BUF: {
 		/* fallthrough */
-		mutex_lock(&vfe_dev->buf_mgr_mutex);
+		mutex_lock(&vfe_dev->buf_mgr->lock);
 		rc = msm_isp_proc_buf_cmd(vfe_dev->buf_mgr, cmd, arg);
-		mutex_unlock(&vfe_dev->buf_mgr_mutex);
+		mutex_unlock(&vfe_dev->buf_mgr->lock);
 		break;
 	}
 	case VIDIOC_MSM_ISP_RELEASE_BUF: {
@@ -977,9 +947,7 @@ static long msm_isp_ioctl_unlocked(struct v4l2_subdev *sd,
 			return rc;
 		}
 		mutex_lock(&vfe_dev->buf_mgr->lock);
-		mutex_lock(&vfe_dev->buf_mgr_mutex);
 		rc = msm_isp_proc_buf_cmd(vfe_dev->buf_mgr, cmd, arg);
-		mutex_unlock(&vfe_dev->buf_mgr_mutex);
 		mutex_unlock(&vfe_dev->buf_mgr->lock);
 		break;
 	}
@@ -1005,14 +973,26 @@ static long msm_isp_ioctl_unlocked(struct v4l2_subdev *sd,
 		break;
 	case VIDIOC_MSM_ISP_AXI_RESET:
 		mutex_lock(&vfe_dev->core_mutex);
-		rc = msm_isp_stats_reset(vfe_dev);
-		rc |= msm_isp_axi_reset(vfe_dev, arg);
+		if (atomic_read(&vfe_dev->error_info.overflow_state)
+			!= HALT_ENFORCED) {
+			rc = msm_isp_stats_reset(vfe_dev);
+			rc |= msm_isp_axi_reset(vfe_dev, arg);
+		} else {
+			pr_err_ratelimited("%s: no HW reset, halt enforced.\n",
+				__func__);
+		}
 		mutex_unlock(&vfe_dev->core_mutex);
 		break;
 	case VIDIOC_MSM_ISP_AXI_RESTART:
 		mutex_lock(&vfe_dev->core_mutex);
-		rc = msm_isp_stats_restart(vfe_dev);
-		rc |= msm_isp_axi_restart(vfe_dev, arg);
+		if (atomic_read(&vfe_dev->error_info.overflow_state)
+			!= HALT_ENFORCED) {
+			rc = msm_isp_stats_restart(vfe_dev);
+			rc |= msm_isp_axi_restart(vfe_dev, arg);
+		} else {
+			pr_err_ratelimited("%s: no AXI restart, halt enforced.\n",
+				__func__);
+		}
 		mutex_unlock(&vfe_dev->core_mutex);
 		break;
 	case VIDIOC_MSM_ISP_INPUT_CFG:
@@ -2032,11 +2012,11 @@ void msm_isp_do_tasklet(unsigned long data)
 			continue;
 		}
 		msm_isp_process_error_info(vfe_dev);
-		irq_ops->process_camif_irq(vfe_dev,
-			irq_status0, irq_status1, &ts);
 		irq_ops->process_stats_irq(vfe_dev,
 			irq_status0, irq_status1, &ts);
 		irq_ops->process_axi_irq(vfe_dev,
+			irq_status0, irq_status1, &ts);
+		irq_ops->process_camif_irq(vfe_dev,
 			irq_status0, irq_status1, &ts);
 		irq_ops->process_reg_update(vfe_dev,
 			irq_status0, irq_status1, &ts);
@@ -2074,7 +2054,16 @@ static int msm_vfe_iommu_fault_handler(struct iommu_domain *domain,
 			goto end;
 		}
 
-		msm_isp_enqueue_tasklet_cmd(vfe_dev, 0, 0, 1);
+		mutex_lock(&vfe_dev->core_mutex);
+		if (vfe_dev->vfe_open_cnt > 0) {
+			atomic_set(&vfe_dev->error_info.overflow_state,
+				HALT_ENFORCED);
+			msm_isp_enqueue_tasklet_cmd(vfe_dev, 0, 0, 1);
+		} else {
+			pr_err("%s: no handling, vfe open cnt = %d\n",
+				__func__, vfe_dev->vfe_open_cnt);
+		}
+		mutex_unlock(&vfe_dev->core_mutex);
 	} else {
 		ISP_DBG("%s:%d] no token received: %p\n",
 			__func__, __LINE__, token);
@@ -2156,10 +2145,7 @@ int msm_isp_open_node(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 	/* Register page fault handler */
 	vfe_dev->buf_mgr->pagefault_debug_disable = 0;
 	cam_smmu_reg_client_page_fault_handler(
-			vfe_dev->buf_mgr->img_iommu_hdl,
-			msm_vfe_iommu_fault_handler, vfe_dev);
-	cam_smmu_reg_client_page_fault_handler(
-			vfe_dev->buf_mgr->stats_iommu_hdl,
+			vfe_dev->buf_mgr->iommu_hdl,
 			msm_vfe_iommu_fault_handler, vfe_dev);
 	mutex_unlock(&vfe_dev->core_mutex);
 	mutex_unlock(&vfe_dev->realtime_mutex);
@@ -2203,10 +2189,7 @@ int msm_isp_close_node(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 	}
 	/* Unregister page fault handler */
 	cam_smmu_reg_client_page_fault_handler(
-		vfe_dev->buf_mgr->img_iommu_hdl,
-		NULL, vfe_dev);
-	cam_smmu_reg_client_page_fault_handler(
-		vfe_dev->buf_mgr->stats_iommu_hdl,
+		vfe_dev->buf_mgr->iommu_hdl,
 		NULL, vfe_dev);
 
 	rc = vfe_dev->hw_info->vfe_ops.axi_ops.halt(vfe_dev, 1);

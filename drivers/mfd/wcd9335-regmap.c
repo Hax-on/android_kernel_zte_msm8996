@@ -1563,6 +1563,8 @@ static bool wcd9335_is_volatile_register(struct device *dev, unsigned int reg)
 	case WCD9335_ANA_MBHC_ZDET:
 	case WCD9335_ANA_MICB2:
 	case WCD9335_CPE_SS_SS_ERROR_INT_STATUS:
+	case WCD9335_CPE_SS_SS_ERROR_INT_MASK:
+	case WCD9335_CPE_SS_SS_ERROR_INT_CLEAR:
 	case WCD9335_CPE_SS_STATUS:
 	case WCD9335_CPE_SS_BACKUP_INT:
 	case WCD9335_CPE_SS_CFG:
@@ -1580,6 +1582,12 @@ static bool wcd9335_is_volatile_register(struct device *dev, unsigned int reg)
 	case WCD9335_SPLINE_SRC1_STATUS:
 	case WCD9335_SPLINE_SRC2_STATUS:
 	case WCD9335_SPLINE_SRC3_STATUS:
+	case WCD9335_SIDO_SIDO_TEST_2:
+	case WCD9335_SIDO_SIDO_CCL_8:
+	case WCD9335_BIAS_VBG_FINE_ADJ:
+	case WCD9335_VBADC_ADC_DOUTMSB:
+	case WCD9335_VBADC_ADC_DOUTLSB:
+	case WCD9335_CDC_VBAT_VBAT_GAIN_MON_VAL:
 		return true;
 	default:
 		return false;
@@ -1595,5 +1603,6 @@ struct regmap_config wcd9335_regmap_config = {
 	.max_register = WCD9335_MAX_REGISTER,
 	.volatile_reg = wcd9335_is_volatile_register,
 	.readable_reg = wcd9335_is_readable_register,
+	.can_multi_write = true,
 };
 

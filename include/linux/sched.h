@@ -1167,6 +1167,7 @@ struct ravg {
 	u32 sum_history[RAVG_HIST_SIZE_MAX];
 #ifdef CONFIG_SCHED_FREQ_INPUT
 	u32 curr_window, prev_window;
+	u16 active_windows;
 #endif
 };
 
@@ -1313,6 +1314,9 @@ struct task_struct {
 	 * of this task
 	 */
 	u32 init_load_pct;
+#ifdef CONFIG_SCHED_QHMP
+	u64 run_start;
+#endif
 #endif
 #ifdef CONFIG_CGROUP_SCHED
 	struct task_group *sched_task_group;
@@ -1960,13 +1964,26 @@ extern void thread_group_cputime_adjusted(struct task_struct *p, cputime_t *ut, 
 
 extern int task_free_register(struct notifier_block *n);
 extern int task_free_unregister(struct notifier_block *n);
+
+struct sched_load {
+	unsigned long prev_load;
+	unsigned long new_task_load;
+};
+
 #if defined(CONFIG_SCHED_FREQ_INPUT)
 extern int sched_set_window(u64 window_start, unsigned int window_size);
 extern unsigned long sched_get_busy(int cpu);
-extern void sched_get_cpus_busy(unsigned long *busy,
+extern void sched_get_cpus_busy(struct sched_load *busy,
 				const struct cpumask *query_cpus);
 extern void sched_set_io_is_busy(int val);
+#ifdef CONFIG_SCHED_QHMP
+static inline int sched_update_freq_max_load(const cpumask_t *cpumask)
+{
+	return 0;
+}
+#else
 int sched_update_freq_max_load(const cpumask_t *cpumask);
+#endif
 #else
 static inline int sched_set_window(u64 window_start, unsigned int window_size)
 {
@@ -1976,8 +1993,8 @@ static inline unsigned long sched_get_busy(int cpu)
 {
 	return 0;
 }
-static inline void sched_get_cpus_busy(unsigned long *busy,
-				const struct cpumask *query_cpus) {};
+static inline void sched_get_cpus_busy(struct sched_load *busy,
+				       const struct cpumask *query_cpus) {};
 static inline void sched_set_io_is_busy(int val) {};
 
 static inline int sched_update_freq_max_load(const cpumask_t *cpumask)
@@ -2152,6 +2169,8 @@ extern int set_cpus_allowed_ptr(struct task_struct *p,
 				const struct cpumask *new_mask);
 extern void sched_set_cpu_cstate(int cpu, int cstate,
 			 int wakeup_energy, int wakeup_latency);
+extern void sched_set_cluster_dstate(const cpumask_t *cluster_cpus, int dstate,
+				int wakeup_energy, int wakeup_latency);
 #else
 static inline void do_set_cpus_allowed(struct task_struct *p,
 				      const struct cpumask *new_mask)
@@ -2168,6 +2187,11 @@ static inline void
 sched_set_cpu_cstate(int cpu, int cstate, int wakeup_energy, int wakeup_latency)
 {
 }
+
+static inline void sched_set_cluster_dstate(const cpumask_t *cluster_cpus,
+			int dstate, int wakeup_energy, int wakeup_latency)
+{
+}
 #endif
 
 extern int sched_set_wake_up_idle(struct task_struct *p, int wake_up_idle);
@@ -2178,6 +2202,21 @@ extern u32 sched_get_wake_up_idle(struct task_struct *p);
 extern int sched_set_boost(int enable);
 extern int sched_set_init_task_load(struct task_struct *p, int init_load_pct);
 extern u32 sched_get_init_task_load(struct task_struct *p);
+extern int sched_set_static_cpu_pwr_cost(int cpu, unsigned int cost);
+extern unsigned int sched_get_static_cpu_pwr_cost(int cpu);
+extern int sched_set_static_cluster_pwr_cost(int cpu, unsigned int cost);
+extern unsigned int sched_get_static_cluster_pwr_cost(int cpu);
+#ifdef CONFIG_SCHED_QHMP
+extern int sched_set_cpu_prefer_idle(int cpu, int prefer_idle);
+extern int sched_get_cpu_prefer_idle(int cpu);
+extern int sched_set_cpu_mostly_idle_load(int cpu, int mostly_idle_pct);
+extern int sched_get_cpu_mostly_idle_load(int cpu);
+extern int sched_set_cpu_mostly_idle_nr_run(int cpu, int nr_run);
+extern int sched_get_cpu_mostly_idle_nr_run(int cpu);
+extern int
+sched_set_cpu_mostly_idle_freq(int cpu, unsigned int mostly_idle_freq);
+extern unsigned int sched_get_cpu_mostly_idle_freq(int cpu);
+#endif
 
 #else
 static inline int sched_set_boost(int enable)

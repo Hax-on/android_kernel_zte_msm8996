@@ -36,6 +36,7 @@
 #include <linux/dma-contiguous.h>
 #include <linux/cma.h>
 #include <linux/iommu.h>
+#include <linux/qcom_iommu.h>
 #include <linux/kref.h>
 #include <linux/sort.h>
 #include <linux/msm_dma_iommu_mapping.h>
@@ -145,6 +146,7 @@ struct fastrpc_channel_ctx {
 	int channel;
 	int sesscount;
 	int ssrcount;
+	void *handle;
 };
 
 struct fastrpc_apps {
@@ -168,6 +170,7 @@ struct fastrpc_mmap {
 	struct dma_buf *buf;
 	struct sg_table *table;
 	struct dma_buf_attachment *attach;
+	struct ion_handle *handle;
 	uintptr_t phys;
 	ssize_t size;
 	uintptr_t va;
@@ -310,6 +313,8 @@ static void fastrpc_mmap_free(struct fastrpc_mmap *map)
 
 	if (map->refs)
 		return;
+	if (!IS_ERR_OR_NULL(map->handle))
+		ion_free(fl->apps->client, map->handle);
 	if (map->size || map->phys)
 		msm_dma_unmap_sg(fl->sctx->smmu.dev, map->table->sgl,
 				map->table->nents, DMA_BIDIRECTIONAL, map->buf);
@@ -329,7 +334,6 @@ static int fastrpc_mmap_create(struct fastrpc_file *fl, int fd, uintptr_t va,
 	struct fastrpc_session_ctx *sess = fl->sctx;
 	struct fastrpc_mmap *map = 0;
 	struct dma_attrs attrs;
-	struct ion_handle *handle = 0;
 	unsigned long flags;
 	int err = 0;
 	if (!fastrpc_mmap_find(fl, fd, va, len, ppmap))
@@ -358,11 +362,12 @@ static int fastrpc_mmap_create(struct fastrpc_file *fl, int fd, uintptr_t va,
 				DMA_BIDIRECTIONAL, map->buf, &attrs));
 	if (err)
 		goto bail;
-	VERIFY(err, !IS_ERR_OR_NULL(handle =
+	VERIFY(err, !IS_ERR_OR_NULL(map->handle =
 				ion_import_dma_buf(fl->apps->client, fd)));
 	if (err)
 		goto bail;
-	VERIFY(err, !ion_handle_get_flags(fl->apps->client, handle, &flags));
+	VERIFY(err, !ion_handle_get_flags(fl->apps->client, map->handle,
+				&flags));
 	if (err)
 		goto bail;
 	map->uncached = !ION_IS_CACHED(flags);
@@ -385,8 +390,6 @@ static int fastrpc_mmap_create(struct fastrpc_file *fl, int fd, uintptr_t va,
 bail:
 	if (err && map)
 		fastrpc_mmap_free(map);
-	if (handle)
-		ion_free(fl->apps->client, handle);
 	return err;
 }
 
@@ -396,6 +399,11 @@ static int fastrpc_buf_alloc(struct fastrpc_file *fl, ssize_t size,
 	int err = 0;
 	struct fastrpc_buf *buf = 0, *fr = 0;
 	struct hlist_node *n;
+
+	VERIFY(err, size > 0);
+	if (err)
+		goto bail;
+
 	/* find the smallest buffer that fits in the cache */
 	spin_lock(&fl->hlock);
 	hlist_for_each_entry_safe(buf, n, &fl->bufs, hn) {
@@ -712,57 +720,6 @@ static void fastrpc_file_list_dtor(struct fastrpc_apps *me)
 	} while (free);
 }
 
-static inline int is_overlapped_outbuf(struct smq_invoke_ctx *ctx, int oix)
-{
-	int inbufs, outbufs;
-
-	inbufs = REMOTE_SCALARS_INBUFS(ctx->sc);
-	outbufs = REMOTE_SCALARS_OUTBUFS(ctx->sc);
-	if (!ctx->overps[oix]->mstart)
-		return 1;
-	oix = oix + 1;
-	if ((oix < inbufs + outbufs) && !ctx->overps[oix]->mstart &&
-			ctx->overps[oix]->raix < inbufs)
-		return 1;
-	return 0;
-}
-
-static int clear_user_outbufs(struct smq_invoke_ctx *ctx)
-{
-	remote_arg_t *pra = ctx->lpra;
-	remote_arg_t *rpra = ctx->rpra;
-	uintptr_t ptr, end;
-	int oix, err = 0;
-	int inbufs = REMOTE_SCALARS_INBUFS(ctx->sc);
-	int outbufs = REMOTE_SCALARS_OUTBUFS(ctx->sc);
-
-	for (oix = 0; oix < inbufs + outbufs; ++oix) {
-		int i = ctx->overps[oix]->raix;
-		struct fastrpc_mmap *map = ctx->maps[i];
-
-		if (map && map->uncached)
-			continue;
-		if ((i < inbufs) || (pra[i].buf.pv != rpra[i].buf.pv) ||
-			is_overlapped_outbuf(ctx, oix))
-			continue;
-		VERIFY(err, 0 == clear_user(rpra[i].buf.pv,
-				(rpra[i].buf.len < 8) ? rpra[i].buf.len : 8));
-		if (err)
-			goto bail;
-		ptr = buf_page_start(rpra[i].buf.pv) + PAGE_SIZE;
-		end = (uintptr_t)rpra[i].buf.pv + rpra[i].buf.len;
-		for (; ptr < end; ptr += PAGE_SIZE) {
-			VERIFY(err, 0 == clear_user((void *)ptr,
-					((end - ptr) < 8) ? end - ptr : 8));
-			if (err)
-				goto bail;
-		}
-	}
-
- bail:
-	return err;
-}
-
 static int get_args(uint32_t kernel, struct smq_invoke_ctx *ctx)
 {
 	remote_arg_t *rpra;
@@ -891,11 +848,6 @@ static int get_args(uint32_t kernel, struct smq_invoke_ctx *ctx)
 		rlen -= mlen;
 	}
 
-	if (!kernel) {
-		VERIFY(err, 0 == clear_user_outbufs(ctx));
-		if (err)
-			goto bail;
-	}
 	for (oix = 0; oix < inbufs + outbufs; ++oix) {
 		int i = ctx->overps[oix]->raix;
 		struct fastrpc_mmap *map = ctx->maps[i];
@@ -989,9 +941,17 @@ static void inv_args(struct smq_invoke_ctx *ctx)
 
 		if (map && map->uncached)
 			continue;
-		if (buf_page_start(rpra) == buf_page_start(rpra[i].buf.pv))
+		if (!rpra[i].buf.len)
+			continue;
+		if (buf_page_start(rpra) == buf_page_start(rpra[i].buf.pv)) {
 			inv = 1;
-		else if (rpra[i].buf.len)
+			continue;
+		}
+		if (map && map->handle)
+			msm_ion_do_cache_op(ctx->fl->apps->client, map->handle,
+				rpra[i].buf.pv, rpra[i].buf.len,
+				ION_IOC_INV_CACHES);
+		else
 			dmac_inv_range(rpra[i].buf.pv,
 				(char *)rpra[i].buf.pv + rpra[i].buf.len);
 	}
@@ -1635,6 +1595,7 @@ static const struct file_operations fops = {
 static struct of_device_id fastrpc_match_table[] = {
 	{ .compatible = "qcom,msm-fastrpc-adsp", },
 	{ .compatible = "qcom,msm-fastrpc-compute-cb", },
+	{ .compatible = "qcom,msm-fastrpc-legacy-compute-cb", },
 	{}
 };
 
@@ -1687,6 +1648,90 @@ bail:
 	return err;
 }
 
+static int fastrpc_cb_legacy_probe(struct device *dev)
+{
+	struct device_node *domains_child_node = NULL;
+	struct device_node *ctx_node = NULL;
+	struct fastrpc_channel_ctx *chan;
+	struct fastrpc_session_ctx *first_sess, *sess;
+	const char *name;
+	unsigned int *range = 0, range_size = 0;
+	unsigned int *sids = 0, sids_size = 0;
+	int err = 0, ret = 0, i;
+	int disable_htw = 1;
+
+	VERIFY(err, 0 != (domains_child_node = of_get_child_by_name(
+			dev->of_node,
+			"qcom,msm_fastrpc_compute_cb")));
+	if (err)
+		goto bail;
+	VERIFY(err, 0 != (ctx_node = of_parse_phandle(
+			domains_child_node,
+			"qcom,adsp-shared-domain-phandle", 0)));
+	if (err)
+		goto bail;
+	VERIFY(err, 0 != of_get_property(domains_child_node,
+				"qcom,adsp-shared-sids", &sids_size));
+	if (err)
+		goto bail;
+	VERIFY(err, sids = kzalloc(sids_size, GFP_KERNEL));
+	if (err)
+		goto bail;
+	ret = of_property_read_u32_array(domains_child_node,
+					"qcom,adsp-shared-sids",
+					sids,
+					sids_size/sizeof(unsigned int));
+	if (ret)
+		goto bail;
+	VERIFY(err, 0 != (name = of_get_property(ctx_node, "label", NULL)));
+	if (err)
+		goto bail;
+	VERIFY(err, 0 != of_get_property(ctx_node,
+					"qcom,virtual-addr-pool", &range_size));
+	if (err)
+		goto bail;
+	VERIFY(err, range = kzalloc(range_size, GFP_KERNEL));
+	if (err)
+		goto bail;
+	ret = of_property_read_u32_array(ctx_node,
+					"qcom,virtual-addr-pool",
+					range,
+					range_size/sizeof(unsigned int));
+	if (ret)
+		goto bail;
+
+	chan = &gcinfo[0];
+	VERIFY(err, chan->sesscount < NUM_SESSIONS);
+	if (err)
+		goto bail;
+	first_sess = &chan->session[chan->sesscount];
+	first_sess->smmu.dev = msm_iommu_get_ctx(name);
+	VERIFY(err, !IS_ERR_OR_NULL(first_sess->smmu.mapping =
+			arm_iommu_create_mapping(&platform_bus_type,
+					range[0], range[1])));
+	if (err)
+		goto bail;
+	iommu_domain_set_attr(first_sess->smmu.mapping->domain,
+			DOMAIN_ATTR_COHERENT_HTW_DISABLE,
+			&disable_htw);
+	VERIFY(err, !arm_iommu_attach_device(first_sess->smmu.dev,
+					first_sess->smmu.mapping));
+	if (err)
+		goto bail;
+	for (i = 0; i < sids_size/sizeof(unsigned int); i++) {
+		sess = &chan->session[chan->sesscount];
+		sess->smmu.cb = sids[i];
+		sess->smmu.dev = first_sess->smmu.dev;
+		sess->smmu.enabled = 1;
+		sess->smmu.mapping = first_sess->smmu.mapping;
+		chan->sesscount++;
+	}
+bail:
+	kfree(sids);
+	kfree(range);
+	return err;
+}
+
 static int fastrpc_probe(struct platform_device *pdev)
 {
 	int err = 0;
@@ -1695,6 +1740,10 @@ static int fastrpc_probe(struct platform_device *pdev)
 	if (of_device_is_compatible(dev->of_node,
 					"qcom,msm-fastrpc-compute-cb"))
 		return fastrpc_cb_probe(dev);
+
+	if (of_device_is_compatible(dev->of_node,
+					"qcom,msm-fastrpc-legacy-compute-cb"))
+		return fastrpc_cb_legacy_probe(dev);
 
 	VERIFY(err, !of_platform_populate(pdev->dev.of_node,
 					  fastrpc_match_table,
@@ -1776,8 +1825,9 @@ static int __init fastrpc_device_init(void)
 		if (err)
 			goto device_create_bail;
 		me->channel[i].ssrcount = 0;
-		me->channel[i].nb.notifier_call = fastrpc_restart_notifier_cb,
-		(void)subsys_notif_register_notifier(gcinfo[i].subsys,
+		me->channel[i].nb.notifier_call = fastrpc_restart_notifier_cb;
+		me->channel[i].handle = subsys_notif_register_notifier(
+							gcinfo[i].subsys,
 							&me->channel[i].nb);
 	}
 
@@ -1788,6 +1838,13 @@ static int __init fastrpc_device_init(void)
 	return 0;
 
 device_create_bail:
+	for (i = 0; i < NUM_CHANNELS; i++) {
+		if (IS_ERR_OR_NULL(me->channel[i].dev))
+			continue;
+		device_destroy(me->class, MKDEV(MAJOR(me->dev_no), i));
+		subsys_notif_unregister_notifier(me->channel[i].handle,
+						&me->channel[i].nb);
+	}
 	class_destroy(me->class);
 class_create_bail:
 	cdev_del(&me->cdev);
@@ -1810,7 +1867,7 @@ static void __exit fastrpc_device_exit(void)
 		if (!gcinfo[i].name)
 			continue;
 		device_destroy(me->class, MKDEV(MAJOR(me->dev_no), i));
-		subsys_notif_unregister_notifier(gcinfo[i].subsys,
+		subsys_notif_unregister_notifier(me->channel[i].handle,
 						&me->channel[i].nb);
 	}
 	class_destroy(me->class);

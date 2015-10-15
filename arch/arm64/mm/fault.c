@@ -36,6 +36,7 @@
 #include <asm/system_misc.h>
 #include <asm/pgtable.h>
 #include <asm/tlbflush.h>
+#include <asm/edac.h>
 
 #include <trace/events/exception.h>
 
@@ -283,6 +284,7 @@ retry:
 			 * starvation.
 			 */
 			mm_flags &= ~FAULT_FLAG_ALLOW_RETRY;
+			mm_flags |= FAULT_FLAG_TRIED;
 			goto retry;
 		}
 	}
@@ -371,6 +373,7 @@ static int __kprobes do_translation_fault(unsigned long addr,
  */
 static int do_bad(unsigned long addr, unsigned int esr, struct pt_regs *regs)
 {
+	arm64_check_cache_ecc(NULL);
 	return 1;
 }
 

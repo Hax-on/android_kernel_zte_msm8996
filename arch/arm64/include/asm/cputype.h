@@ -32,6 +32,10 @@
 #define MPIDR_AFFINITY_LEVEL(mpidr, level) \
 	((mpidr >> MPIDR_LEVEL_SHIFT(level)) & MPIDR_LEVEL_MASK)
 
+#define MMFR0_16KGRAN_SIZE	15
+#define MMFR0_16KGRAN_SHFT	20
+#define MMFR0_EL1_16KGRAN_MASK	(MMFR0_16KGRAN_SIZE << MMFR0_16KGRAN_SHFT)
+
 #define read_cpuid(reg) ({						\
 	u64 __val;							\
 	asm("mrs	%0, " #reg : "=r" (__val));			\
@@ -69,6 +73,7 @@
 #define ARM_CPU_PART_FOUNDATION	0xD00
 #define ARM_CPU_PART_CORTEX_A57	0xD07
 #define ARM_CPU_PART_CORTEX_A53	0xD03
+#define ARM_CPU_PART_CORTEX_A72	0xD08
 
 #define APM_CPU_PART_POTENZA	0x000
 

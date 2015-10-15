@@ -1310,19 +1310,6 @@ static int mdss_rotator_verify_config(struct mdss_rot_mgr *mgr,
 	return 0;
 }
 
-inline int __compare_session_item_rect(struct mdp_rotation_buf_info *s_rect,
-	struct mdp_rect *i_rect, uint32_t i_fmt, bool src)
-{
-	if ((s_rect->width != i_rect->w) || (s_rect->height != i_rect->h) ||
-			(s_rect->format != i_fmt)) {
-		pr_err("%s: session{%u,%u}f:%u mismatch from item{%u,%u}f:%u\n",
-			(src ? "src":"dst"), s_rect->width, s_rect->height,
-			s_rect->format, i_rect->w, i_rect->h, i_fmt);
-		return -EINVAL;
-	}
-	return 0;
-}
-
 static int mdss_rotator_validate_item_matches_session(
 	struct mdp_rotation_config *config, struct mdp_rotation_item *item)
 {
@@ -1335,6 +1322,10 @@ static int mdss_rotator_validate_item_matches_session(
 
 	ret = __compare_session_item_rect(&config->output,
 		&item->dst_rect, item->output.format, false);
+	if (ret)
+		return ret;
+
+	ret = __compare_session_rotations(config->flags, item->flags);
 	if (ret)
 		return ret;
 
@@ -1358,6 +1349,20 @@ static int mdss_rotator_validate_img_roi(struct mdp_rotation_item *item)
 			item->dst_rect.x, item->dst_rect.y);
 
 	return ret;
+}
+
+static int mdss_rotator_validate_fmt_and_item_flags(
+	struct mdp_rotation_config *config, struct mdp_rotation_item *item)
+{
+	struct mdss_mdp_format_params *fmt;
+
+	fmt = mdss_mdp_get_format_params(item->input.format);
+	if ((item->flags & MDP_ROTATION_DEINTERLACE) &&
+			mdss_mdp_is_ubwc_format(fmt)) {
+		pr_err("cannot perform mdp deinterlace on tiled formats\n");
+		return -EINVAL;
+	}
+	return 0;
 }
 
 static int mdss_rotator_validate_entry(struct mdss_rot_mgr *mgr,
@@ -1399,6 +1404,10 @@ static int mdss_rotator_validate_entry(struct mdss_rot_mgr *mgr,
 		pr_err("Image roi is invalid\n");
 		return ret;
 	}
+
+	ret = mdss_rotator_validate_fmt_and_item_flags(&perf->config, item);
+	if (ret)
+		return ret;
 
 	ret = mdss_rotator_config_dnsc_factor(mgr, entry);
 	if (ret) {
@@ -1625,7 +1634,7 @@ static void mdss_rotator_translate_rect(struct mdss_rect *dst,
 
 static u32 mdss_rotator_translate_flags(u32 input)
 {
-	u32 output;
+	u32 output = 0;
 
 	if (input & MDP_ROTATION_NOP)
 		output |= MDP_ROT_NOP;
@@ -1635,6 +1644,8 @@ static u32 mdss_rotator_translate_flags(u32 input)
 		output |= MDP_FLIP_UD;
 	if (input & MDP_ROTATION_90)
 		output |= MDP_ROT_90;
+	if (input & MDP_ROTATION_DEINTERLACE)
+		output |= MDP_DEINTERLACE;
 	if (input & MDP_ROTATION_SECURE)
 		output |= MDP_SECURE_OVERLAY_SESSION;
 	if (input & MDP_ROTATION_BWC_EN)

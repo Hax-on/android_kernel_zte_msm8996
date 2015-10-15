@@ -22,6 +22,7 @@
 #include <asm/cputype.h>
 #include <asm/sections.h>
 #include <asm/cachetype.h>
+#include <asm/fixmap.h>
 #include <asm/sections.h>
 #include <asm/setup.h>
 #include <asm/smp_plat.h>
@@ -392,6 +393,29 @@ SET_MEMORY_FN(ro, pte_set_ro)
 SET_MEMORY_FN(rw, pte_set_rw)
 SET_MEMORY_FN(x, pte_set_x)
 SET_MEMORY_FN(nx, pte_set_nx)
+
+/*
+ * To avoid TLB flush broadcasts, this uses local_flush_tlb_kernel_range().
+ * As a result, this can only be called with preemption disabled, as under
+ * stop_machine().
+ */
+void __set_fixmap(enum fixed_addresses idx, phys_addr_t phys, pgprot_t prot)
+{
+	unsigned long vaddr = __fix_to_virt(idx);
+	pte_t *pte = pte_offset_kernel(pmd_off_k(vaddr), vaddr);
+
+	/* Make sure fixmap region does not exceed available allocation. */
+	BUILD_BUG_ON(FIXADDR_START + (__end_of_fixed_addresses * PAGE_SIZE) >
+		     FIXADDR_END);
+	BUG_ON(idx >= __end_of_fixed_addresses);
+
+	if (pgprot_val(prot))
+		set_pte_at(NULL, vaddr, pte,
+			pfn_pte(phys >> PAGE_SHIFT, prot));
+	else
+		pte_clear(NULL, vaddr, pte);
+	local_flush_tlb_kernel_range(vaddr, vaddr + PAGE_SIZE);
+}
 
 /*
  * Adjust the PMD section entries according to the CPU in use.
@@ -1080,6 +1104,19 @@ void __init sanity_check_meminfo(void)
 	phys_addr_t vmalloc_limit = __pa(vmalloc_min - 1) + 1;
 	struct memblock_region *reg;
 
+#ifdef CONFIG_ENABLE_VMALLOC_SAVING
+	struct memblock_region *prev_reg = NULL;
+
+	for_each_memblock(memory, reg) {
+		if (prev_reg == NULL) {
+			prev_reg = reg;
+			continue;
+		}
+		vmalloc_limit += reg->base - (prev_reg->base + prev_reg->size);
+		prev_reg = reg;
+	}
+#endif
+
 	for_each_memblock(memory, reg) {
 		phys_addr_t block_start = reg->base;
 		phys_addr_t block_end = reg->base + reg->size;
@@ -1337,23 +1374,39 @@ static void __init map_lowmem(void)
 	struct memblock_region *reg;
 	unsigned long kernel_x_start = round_down(__pa(_stext), SECTION_SIZE);
 	unsigned long kernel_x_end = round_up(__pa(__init_end), SECTION_SIZE);
+	struct static_vm *svm;
+	phys_addr_t start;
+	phys_addr_t end;
+	unsigned long vaddr;
+	unsigned long pfn;
+	unsigned long length;
+	unsigned int type;
+	int nr = 0;
 
 	/* Map all the lowmem memory banks. */
 	for_each_memblock(memory, reg) {
-		phys_addr_t start = reg->base;
-		phys_addr_t end = start + reg->size;
 		struct map_desc map;
+		start = reg->base;
+		end = start + reg->size;
+		nr++;
 
 		if (end > arm_lowmem_limit)
 			end = arm_lowmem_limit;
 		if (start >= end)
 			break;
 
-		if (end < kernel_x_start || start >= kernel_x_end) {
+		if (end < kernel_x_start) {
 			map.pfn = __phys_to_pfn(start);
 			map.virtual = __phys_to_virt(start);
 			map.length = end - start;
 			map.type = MT_MEMORY_RWX;
+
+			create_mapping(&map);
+		} else if (start >= kernel_x_end) {
+			map.pfn = __phys_to_pfn(start);
+			map.virtual = __phys_to_virt(start);
+			map.length = end - start;
+			map.type = MT_MEMORY_RW;
 
 			create_mapping(&map);
 		} else {
@@ -1383,6 +1436,34 @@ static void __init map_lowmem(void)
 				create_mapping(&map);
 			}
 		}
+	}
+	svm = early_alloc_aligned(sizeof(*svm) * nr, __alignof__(*svm));
+
+	for_each_memblock(memory, reg) {
+		struct vm_struct *vm;
+
+		start = reg->base;
+		end = start + reg->size;
+
+		if (end > arm_lowmem_limit)
+			end = arm_lowmem_limit;
+		if (start >= end)
+			break;
+
+		vm = &svm->vm;
+		pfn = __phys_to_pfn(start);
+		vaddr = __phys_to_virt(start);
+		length = end - start;
+		type = MT_MEMORY_RW;
+
+		vm->addr = (void *)(vaddr & PAGE_MASK);
+		vm->size = PAGE_ALIGN(length + (vaddr & ~PAGE_MASK));
+		vm->phys_addr = __pfn_to_phys(pfn);
+		vm->flags = VM_LOWMEM;
+		vm->flags |= VM_ARM_MTYPE(type);
+		vm->caller = map_lowmem;
+		add_static_vm_early(svm++);
+		mark_vmalloc_reserved_area(vm->addr, vm->size);
 	}
 }
 

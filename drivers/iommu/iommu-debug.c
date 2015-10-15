@@ -22,6 +22,7 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <soc/qcom/secure_buffer.h>
+#include <linux/qcom_iommu.h>
 
 #ifdef CONFIG_IOMMU_DEBUG_TRACKING
 
@@ -34,6 +35,7 @@ struct iommu_debug_attachment {
 	struct device *dev;
 	struct dentry *dentry;
 	struct list_head list;
+	unsigned long reg_offset;
 };
 
 static int iommu_debug_attachment_info_show(struct seq_file *s, void *ignored)
@@ -93,8 +95,14 @@ static ssize_t iommu_debug_attachment_trigger_fault_write(
 	loff_t *offset)
 {
 	struct iommu_debug_attachment *attach = file->private_data;
+	unsigned long flags;
 
-	iommu_trigger_fault(attach->domain);
+	if (kstrtoul_from_user(ubuf, count, 0, &flags)) {
+		pr_err("Invalid flags format\n");
+		return -EFAULT;
+	}
+
+	iommu_trigger_fault(attach->domain, flags);
 
 	return count;
 }
@@ -105,29 +113,120 @@ iommu_debug_attachment_trigger_fault_fops = {
 	.write	= iommu_debug_attachment_trigger_fault_write,
 };
 
+static ssize_t iommu_debug_attachment_reg_offset_write(
+	struct file *file, const char __user *ubuf, size_t count,
+	loff_t *offset)
+{
+	struct iommu_debug_attachment *attach = file->private_data;
+	unsigned long reg_offset;
+
+	if (kstrtoul_from_user(ubuf, count, 0, &reg_offset)) {
+		pr_err("Invalid reg_offset format\n");
+		return -EFAULT;
+	}
+
+	attach->reg_offset = reg_offset;
+
+	return count;
+}
+
+static const struct file_operations iommu_debug_attachment_reg_offset_fops = {
+	.open	= simple_open,
+	.write	= iommu_debug_attachment_reg_offset_write,
+};
+
+static ssize_t iommu_debug_attachment_reg_read_read(
+	struct file *file, char __user *ubuf, size_t count, loff_t *offset)
+{
+	struct iommu_debug_attachment *attach = file->private_data;
+	unsigned long val;
+	char *val_str;
+	ssize_t val_str_len;
+
+	if (*offset)
+		return 0;
+
+	val = iommu_reg_read(attach->domain, attach->reg_offset);
+	val_str = kasprintf(GFP_KERNEL, "0x%lx\n", val);
+	if (!val_str)
+		return -ENOMEM;
+	val_str_len = strlen(val_str);
+
+	if (copy_to_user(ubuf, val_str, val_str_len)) {
+		pr_err("copy_to_user failed\n");
+		val_str_len = -EFAULT;
+		goto out;
+	}
+	*offset = 1;		/* non-zero means we're done */
+
+out:
+	kfree(val_str);
+	return val_str_len;
+}
+
+static const struct file_operations iommu_debug_attachment_reg_read_fops = {
+	.open	= simple_open,
+	.read	= iommu_debug_attachment_reg_read_read,
+};
+
+static ssize_t iommu_debug_attachment_reg_write_write(
+	struct file *file, const char __user *ubuf, size_t count,
+	loff_t *offset)
+{
+	struct iommu_debug_attachment *attach = file->private_data;
+	unsigned long val;
+
+	if (kstrtoul_from_user(ubuf, count, 0, &val)) {
+		pr_err("Invalid val format\n");
+		return -EFAULT;
+	}
+
+	iommu_reg_write(attach->domain, attach->reg_offset, val);
+
+	return count;
+}
+
+static const struct file_operations iommu_debug_attachment_reg_write_fops = {
+	.open	= simple_open,
+	.write	= iommu_debug_attachment_reg_write_write,
+};
+
 /* should be called with iommu_debug_attachments_lock locked */
 static int iommu_debug_attach_add_debugfs(
 	struct iommu_debug_attachment *attach)
 {
-	uuid_le uuid;
-	char *attach_name;
+	const char *attach_name;
 	struct device *dev = attach->dev;
 	struct iommu_domain *domain = attach->domain;
+	int is_dynamic;
 
-	uuid_le_gen(&uuid);
-	attach_name = kasprintf(GFP_KERNEL, "%s-%pUl", dev_name(dev), uuid.b);
-	if (!attach_name)
-		return -ENOMEM;
+	if (iommu_domain_get_attr(domain, DOMAIN_ATTR_DYNAMIC, &is_dynamic))
+		is_dynamic = 0;
+
+	if (is_dynamic) {
+		uuid_le uuid;
+
+		uuid_le_gen(&uuid);
+		attach_name = kasprintf(GFP_KERNEL, "%s-%pUl", dev_name(dev),
+					uuid.b);
+		if (!attach_name)
+			return -ENOMEM;
+	} else {
+		attach_name = dev_name(dev);
+	}
 
 	attach->dentry = debugfs_create_dir(attach_name,
 					    debugfs_attachments_dir);
 	if (!attach->dentry) {
 		pr_err("Couldn't create iommu/attachments/%s debugfs directory for domain 0x%p\n",
 		       attach_name, domain);
-		kfree(attach_name);
+		if (is_dynamic)
+			kfree(attach_name);
 		return -EIO;
 	}
-	kfree(attach_name);
+
+	if (is_dynamic)
+		kfree(attach_name);
 
 	if (!debugfs_create_file(
 		    "info", S_IRUSR, attach->dentry, attach,
@@ -141,6 +240,30 @@ static int iommu_debug_attach_add_debugfs(
 		    "trigger_fault", S_IRUSR, attach->dentry, attach,
 		    &iommu_debug_attachment_trigger_fault_fops)) {
 		pr_err("Couldn't create iommu/attachments/%s/trigger_fault debugfs file for domain 0x%p\n",
+		       dev_name(dev), domain);
+		goto err_rmdir;
+	}
+
+	if (!debugfs_create_file(
+		    "reg_offset", S_IRUSR, attach->dentry, attach,
+		    &iommu_debug_attachment_reg_offset_fops)) {
+		pr_err("Couldn't create iommu/attachments/%s/reg_offset debugfs file for domain 0x%p\n",
+		       dev_name(dev), domain);
+		goto err_rmdir;
+	}
+
+	if (!debugfs_create_file(
+		    "reg_read", S_IRUSR, attach->dentry, attach,
+		    &iommu_debug_attachment_reg_read_fops)) {
+		pr_err("Couldn't create iommu/attachments/%s/reg_read debugfs file for domain 0x%p\n",
+		       dev_name(dev), domain);
+		goto err_rmdir;
+	}
+
+	if (!debugfs_create_file(
+		    "reg_write", S_IRUSR, attach->dentry, attach,
+		    &iommu_debug_attachment_reg_write_fops)) {
+		pr_err("Couldn't create iommu/attachments/%s/reg_write debugfs file for domain 0x%p\n",
 		       dev_name(dev), domain);
 		goto err_rmdir;
 	}
@@ -307,11 +430,16 @@ static void iommu_debug_device_profiling(struct seq_file *s, struct device *dev)
 				  SZ_1M * 20, 0 };
 	unsigned long *sz;
 	struct iommu_domain *domain;
+	struct bus_type *bus;
 	unsigned long iova = 0x10000;
 	phys_addr_t paddr = 0xa000;
-	int htw_disable = 1;
+	int htw_disable = 1, atomic_domain = 1;
 
-	domain = iommu_domain_alloc(&platform_bus_type);
+	bus = msm_iommu_get_bus(dev);
+	if (!bus)
+		return;
+
+	domain = iommu_domain_alloc(bus);
 	if (!domain) {
 		seq_puts(s, "Couldn't allocate domain\n");
 		return;
@@ -320,6 +448,13 @@ static void iommu_debug_device_profiling(struct seq_file *s, struct device *dev)
 	if (iommu_domain_set_attr(domain, DOMAIN_ATTR_COHERENT_HTW_DISABLE,
 				  &htw_disable)) {
 		seq_puts(s, "Couldn't disable coherent htw\n");
+		goto out_domain_free;
+	}
+
+	if (iommu_domain_set_attr(domain, DOMAIN_ATTR_ATOMIC,
+				  &atomic_domain)) {
+		seq_printf(s, "Couldn't set atomic_domain to %d\n",
+			   atomic_domain);
 		goto out_domain_free;
 	}
 
@@ -437,8 +572,13 @@ static int iommu_debug_attach_do_attach(struct iommu_debug_device *ddev,
 					int val, bool is_secure)
 {
 	int htw_disable = 1;
+	struct bus_type *bus;
 
-	ddev->domain = iommu_domain_alloc(&platform_bus_type);
+	bus = msm_iommu_get_bus(ddev->dev);
+	if (!bus)
+		return -EINVAL;
+
+	ddev->domain = iommu_domain_alloc(bus);
 	if (!ddev->domain) {
 		pr_err("Couldn't allocate domain\n");
 		return -ENOMEM;
@@ -780,64 +920,64 @@ static const struct file_operations iommu_debug_unmap_fops = {
  * device tree bindings described in
  * Documentation/devicetree/bindings/iommu/iommu.txt
  */
-static int snarf_iommu_devices(struct device *dev, void *ignored)
+static int snarf_iommu_devices(struct device *dev, const char *name)
 {
 	struct iommu_debug_device *ddev;
 	struct dentry *dir;
 
-	if (!of_find_property(dev->of_node, "iommus", NULL))
-		return 0;
+	if (IS_ERR_OR_NULL(dev))
+		return -EINVAL;
 
 	ddev = kzalloc(sizeof(*ddev), GFP_KERNEL);
 	if (!ddev)
 		return -ENODEV;
 	ddev->dev = dev;
-	dir = debugfs_create_dir(dev_name(dev), debugfs_tests_dir);
+	dir = debugfs_create_dir(name, debugfs_tests_dir);
 	if (!dir) {
 		pr_err("Couldn't create iommu/devices/%s debugfs dir\n",
-		       dev_name(dev));
+		       name);
 		goto err;
 	}
 
 	if (!debugfs_create_file("profiling", S_IRUSR, dir, ddev,
 				 &iommu_debug_profiling_fops)) {
 		pr_err("Couldn't create iommu/devices/%s/profiling debugfs file\n",
-		       dev_name(dev));
+		       name);
 		goto err_rmdir;
 	}
 
 	if (!debugfs_create_file("attach", S_IRUSR, dir, ddev,
 				 &iommu_debug_attach_fops)) {
 		pr_err("Couldn't create iommu/devices/%s/attach debugfs file\n",
-		       dev_name(dev));
+		       name);
 		goto err_rmdir;
 	}
 
 	if (!debugfs_create_file("secure_attach", S_IRUSR, dir, ddev,
 				 &iommu_debug_secure_attach_fops)) {
 		pr_err("Couldn't create iommu/devices/%s/secure_attach debugfs file\n",
-		       dev_name(dev));
+		       name);
 		goto err_rmdir;
 	}
 
 	if (!debugfs_create_file("atos", S_IWUSR, dir, ddev,
 				 &iommu_debug_atos_fops)) {
 		pr_err("Couldn't create iommu/devices/%s/atos debugfs file\n",
-		       dev_name(dev));
+		       name);
 		goto err_rmdir;
 	}
 
 	if (!debugfs_create_file("map", S_IWUSR, dir, ddev,
 				 &iommu_debug_map_fops)) {
 		pr_err("Couldn't create iommu/devices/%s/map debugfs file\n",
-		       dev_name(dev));
+		       name);
 		goto err_rmdir;
 	}
 
 	if (!debugfs_create_file("unmap", S_IWUSR, dir, ddev,
 				 &iommu_debug_unmap_fops)) {
 		pr_err("Couldn't create iommu/devices/%s/unmap debugfs file\n",
-		       dev_name(dev));
+		       name);
 		goto err_rmdir;
 	}
 
@@ -851,6 +991,34 @@ err:
 	return 0;
 }
 
+static int pass_iommu_devices(struct device *dev, void *ignored)
+{
+	if (!of_find_property(dev->of_node, "iommus", NULL))
+		return 0;
+
+	return snarf_iommu_devices(dev, dev_name(dev));
+}
+
+static int iommu_debug_populate_devices(void)
+{
+	int ret;
+	struct device_node *np;
+	const char *cb_name;
+
+	for_each_compatible_node(np, NULL, "qcom,msm-smmu-v2-ctx") {
+		ret = of_property_read_string(np, "label", &cb_name);
+		if (ret)
+			return ret;
+
+		ret = snarf_iommu_devices(msm_iommu_get_ctx(cb_name), cb_name);
+		if (ret)
+			return ret;
+	}
+
+	return bus_for_each_dev(&platform_bus_type, NULL, NULL,
+			pass_iommu_devices);
+}
+
 static int iommu_debug_init_tests(void)
 {
 	debugfs_tests_dir = debugfs_create_dir("tests",
@@ -860,8 +1028,7 @@ static int iommu_debug_init_tests(void)
 		return -ENODEV;
 	}
 
-	return bus_for_each_dev(&platform_bus_type, NULL, NULL,
-				snarf_iommu_devices);
+	return iommu_debug_populate_devices();
 }
 
 static void iommu_debug_destroy_tests(void)

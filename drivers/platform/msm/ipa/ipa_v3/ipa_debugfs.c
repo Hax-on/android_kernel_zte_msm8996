@@ -117,13 +117,11 @@ int _ipa_read_gen_reg_v3_0(char *buff, int max_len)
 			"IPA_VERSION=0x%x\n"
 			"IPA_COMP_HW_VERSION=0x%x\n"
 			"IPA_ROUTE=0x%x\n"
-			"IPA_FILTER=0x%x\n"
 			"IPA_SHARED_MEM_RESTRICTED=0x%x\n"
 			"IPA_SHARED_MEM_SIZE=0x%x\n",
 			ipa_read_reg(ipa3_ctx->mmio, IPA_VERSION_OFST),
 			ipa_read_reg(ipa3_ctx->mmio, IPA_COMP_HW_VERSION_OFST),
 			ipa_read_reg(ipa3_ctx->mmio, IPA_ROUTE_OFST_v3_0),
-			ipa_read_reg(ipa3_ctx->mmio, IPA_FILTER_OFST_v3_0),
 			ipa_read_reg_field(ipa3_ctx->mmio,
 				IPA_SHARED_MEM_SIZE_OFST_v3_0,
 				IPA_SHARED_MEM_SIZE_SHARED_MEM_BADDR_BMSK_v3_0,
@@ -496,7 +494,7 @@ static int ipa3_attrib_dump(struct ipa_rule_attrib *attrib,
 
 	if (attrib->attrib_mask & IPA_FLT_META_DATA) {
 		pr_err(
-				   "metadata:%x metadata_mask:%x",
+				   "metadata:%x metadata_mask:%x ",
 				   attrib->meta_data, attrib->meta_data_mask);
 	}
 
@@ -619,15 +617,23 @@ static ssize_t ipa3_read_rt(struct file *file, char __user *ubuf, size_t count,
 	mutex_lock(&ipa3_ctx->lock);
 
 	if (ip ==  IPA_IP_v6) {
-		if (ipa3_ctx->ip6_rt_tbl_lcl)
-			pr_err("Table resides on local memory\n");
+		if (ipa3_ctx->ip6_rt_tbl_hash_lcl)
+			pr_err("Hashable table resides on local memory\n");
 		else
-			pr_err("Table resides on system (ddr) memory\n");
+			pr_err("Hashable table resides on system (ddr) memory\n");
+		if (ipa3_ctx->ip6_rt_tbl_nhash_lcl)
+			pr_err("Non-Hashable table resides on local memory\n");
+		else
+			pr_err("Non-Hashable table resides on system (ddr) memory\n");
 	} else if (ip == IPA_IP_v4) {
-		if (ipa3_ctx->ip4_rt_tbl_lcl)
-			pr_err("Table resides on local memory\n");
+		if (ipa3_ctx->ip4_rt_tbl_hash_lcl)
+			pr_err("Hashable table resides on local memory\n");
 		else
-			pr_err("Table resides on system (ddr) memory\n");
+			pr_err("Hashable table resides on system (ddr) memory\n");
+		if (ipa3_ctx->ip4_rt_tbl_nhash_lcl)
+			pr_err("Non-Hashable table resides on local memory\n");
+		else
+			pr_err("Non-Hashable table resides on system (ddr) memory\n");
 	}
 
 	list_for_each_entry(tbl, &set->head_rt_tbl_list, link) {
@@ -646,10 +652,16 @@ static ssize_t ipa3_read_rt(struct file *file, char __user *ubuf, size_t count,
 				pr_err("rule_idx:%d dst:%d ep:%d S:%u ",
 					i, entry->rule.dst,
 					ipa3_get_ep_mapping(entry->rule.dst),
-					!ipa3_ctx->hdr_tbl_lcl);
+					!ipa3_ctx->hdr_proc_ctx_tbl_lcl);
 				pr_err("proc_ctx[32B]:%u attrib_mask:%08x ",
 					ofst_words,
 					entry->rule.attrib.attrib_mask);
+				pr_err("rule_id:%u max_prio:%u prio:%u ",
+					entry->rule_id, entry->rule.max_prio,
+					entry->prio);
+				pr_err("hashable:%u retain_hdr:%u ",
+					entry->rule.hashable,
+					entry->rule.retain_hdr);
 			} else {
 				if (entry->hdr)
 					ofst = entry->hdr->offset_entry->offset;
@@ -666,6 +678,12 @@ static ssize_t ipa3_read_rt(struct file *file, char __user *ubuf, size_t count,
 				pr_err("hdr_ofst[words]:%u attrib_mask:%08x ",
 					ofst >> 2,
 					entry->rule.attrib.attrib_mask);
+				pr_err("rule_id:%u max_prio:%u prio:%u ",
+					entry->rule_id, entry->rule.max_prio,
+					entry->prio);
+				pr_err("hashable:%u retain_hdr:%u ",
+					entry->rule.hashable,
+					entry->rule.retain_hdr);
 			}
 
 			ipa3_attrib_dump(&entry->rule.attrib, ip);
@@ -740,37 +758,11 @@ static ssize_t ipa3_read_flt(struct file *file, char __user *ubuf, size_t count,
 	u32 bitmap;
 	bool eq;
 
-	tbl = &ipa3_ctx->glob_flt_tbl[ip];
 	mutex_lock(&ipa3_ctx->lock);
-	i = 0;
-	list_for_each_entry(entry, &tbl->head_flt_rule_list, link) {
-		if (entry->rule.eq_attrib_type) {
-			rt_tbl_idx = entry->rule.rt_tbl_idx;
-			bitmap = entry->rule.eq_attrib.rule_eq_bitmap;
-			eq = true;
-		} else {
-			rt_tbl = ipa3_id_find(entry->rule.rt_tbl_hdl);
-			if (rt_tbl)
-				rt_tbl_idx = rt_tbl->idx;
-			else
-				rt_tbl_idx = ~0;
-			bitmap = entry->rule.attrib.attrib_mask;
-			eq = false;
-		}
-		pr_err("ep_idx:global rule_idx:%d act:%d rt_tbl_idx:%d ",
-			i, entry->rule.action, rt_tbl_idx);
-		pr_err("attrib_mask:%08x to_uc:%d, retain_hdr:%d eq:%d ",
-			bitmap, entry->rule.to_uc, entry->rule.retain_hdr, eq);
-		if (eq)
-			ipa3_attrib_dump_eq(
-				&entry->rule.eq_attrib);
-		else
-			ipa3_attrib_dump(
-				&entry->rule.attrib, ip);
-		i++;
-	}
 
 	for (j = 0; j < ipa3_ctx->ipa_num_pipes; j++) {
+		if (!ipa_is_ep_support_flt(j))
+			continue;
 		tbl = &ipa3_ctx->flt_tbl[j][ip];
 		i = 0;
 		list_for_each_entry(entry, &tbl->head_flt_rule_list, link) {
@@ -789,10 +781,11 @@ static ssize_t ipa3_read_flt(struct file *file, char __user *ubuf, size_t count,
 			}
 			pr_err("ep_idx:%d rule_idx:%d act:%d rt_tbl_idx:%d ",
 				j, i, entry->rule.action, rt_tbl_idx);
-			pr_err("attrib_mask:%08x to_uc:%d, retain_hdr:%d ",
-				bitmap, entry->rule.to_uc,
-				entry->rule.retain_hdr);
-			pr_err("eq:%d ", eq);
+			pr_err("attrib_mask:%08x retain_hdr:%d eq:%d ",
+				bitmap, entry->rule.retain_hdr, eq);
+			pr_err("hashable:%u rule_id:%u max_prio:%u prio:%u ",
+				entry->rule.hashable, entry->rule_id,
+				entry->rule.max_prio, entry->prio);
 			if (eq)
 				ipa3_attrib_dump_eq(
 					&entry->rule.eq_attrib);
@@ -831,7 +824,9 @@ static ssize_t ipa3_read_stats(struct file *file, char __user *ubuf,
 			"wan_rx_empty=%u\n"
 			"wan_repl_rx_empty=%u\n"
 			"lan_rx_empty=%u\n"
-			"lan_repl_rx_empty=%u\n",
+			"lan_repl_rx_empty=%u\n"
+			"flow_enable=%u\n"
+			"flow_disable=%u\n",
 			ipa3_ctx->stats.tx_sw_pkts,
 			ipa3_ctx->stats.tx_hw_pkts,
 			ipa3_ctx->stats.tx_pkts_compl,
@@ -844,7 +839,9 @@ static ssize_t ipa3_read_stats(struct file *file, char __user *ubuf,
 			ipa3_ctx->stats.wan_rx_empty,
 			ipa3_ctx->stats.wan_repl_rx_empty,
 			ipa3_ctx->stats.lan_rx_empty,
-			ipa3_ctx->stats.lan_repl_rx_empty);
+			ipa3_ctx->stats.lan_repl_rx_empty,
+			ipa3_ctx->stats.flow_enable,
+			ipa3_ctx->stats.flow_disable);
 		cnt += nbytes;
 
 		for (i = 0; i < MAX_NUM_EXCP; i++) {
@@ -1082,6 +1079,8 @@ static ssize_t ipa3_read_wdi(struct file *file, char __user *ubuf,
 			"RX num_db=%u\n"
 			"RX num_unexpected_db=%u\n"
 			"RX num_pkts_in_dis_uninit_state=%u\n"
+			"num_ic_inj_vdev_change=%u\n"
+			"num_ic_inj_fw_desc_change=%u\n"
 			"RX reserved1=%u\n"
 			"RX reserved2=%u\n",
 			stats.rx_ch_stats.max_outstanding_pkts,
@@ -1101,6 +1100,8 @@ static ssize_t ipa3_read_wdi(struct file *file, char __user *ubuf,
 			stats.rx_ch_stats.num_db,
 			stats.rx_ch_stats.num_unexpected_db,
 			stats.rx_ch_stats.num_pkts_in_dis_uninit_state,
+			stats.rx_ch_stats.num_ic_inj_vdev_change,
+			stats.rx_ch_stats.num_ic_inj_fw_desc_change,
 			stats.rx_ch_stats.reserved1,
 			stats.rx_ch_stats.reserved2);
 		cnt += nbytes;

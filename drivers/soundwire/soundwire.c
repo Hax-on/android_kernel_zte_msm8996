@@ -129,6 +129,47 @@ err_out:
 EXPORT_SYMBOL(swr_new_device);
 
 /**
+ * swr_startup_devices - perform additional initialization for child devices
+ *
+ * @swr_dev: pointer to soundwire slave device
+ *
+ * Performs any additional initialization needed for a soundwire slave device.
+ * This is a optional functionality defined by slave devices.
+ * Removes the slave node from the list, in case there is any failure.
+ */
+int swr_startup_devices(struct swr_device *swr_dev)
+{
+	struct swr_driver *swr_drv;
+	struct device *dev;
+	int ret = 0;
+
+	if (!swr_dev)
+		return -EINVAL;
+
+	dev = &swr_dev->dev;
+	if (!dev)
+		return -EINVAL;
+
+	swr_drv = to_swr_driver(dev->driver);
+	if (!swr_drv)
+		return -EINVAL;
+
+	if (swr_drv->startup) {
+		ret = swr_drv->startup(swr_dev);
+		if (ret)
+			goto out;
+
+		dev_dbg(&swr_dev->dev,
+			"%s: startup complete for device %lx\n",
+			__func__, swr_dev->addr);
+	}
+
+out:
+	return ret;
+}
+EXPORT_SYMBOL(swr_startup_devices);
+
+/**
  * of_register_swr_devices - register child devices on to the soundwire bus
  * @master: pointer to soundwire master device
  *
@@ -405,8 +446,8 @@ EXPORT_SYMBOL(swr_get_logical_dev_num);
  * This API will read the value of the register address from
  * soundwire slave device
  */
-int swr_read(struct swr_device *dev, u8 dev_num, u32 reg_addr,
-		u32 *buf, u32 len)
+int swr_read(struct swr_device *dev, u8 dev_num, u16 reg_addr,
+	     void *buf, u32 len)
 {
 	struct swr_master *master = dev->master;
 	if (!master)
@@ -414,6 +455,33 @@ int swr_read(struct swr_device *dev, u8 dev_num, u32 reg_addr,
 	return master->read(master, dev_num, reg_addr, buf, len);
 }
 EXPORT_SYMBOL(swr_read);
+
+/**
+ * swr_bulk_write - write soundwire slave device registers
+ * @dev: pointer to soundwire slave device
+ * @dev_num: logical device num of soundwire slave device
+ * @reg_addr: register address of soundwire slave device
+ * @buf: contains value of register address
+ * @len: indicates number of registers
+ *
+ * This API will write the value of the register address to
+ * soundwire slave device
+ */
+int swr_bulk_write(struct swr_device *dev, u8 dev_num, void *reg,
+		   const void *buf, size_t len)
+{
+	struct swr_master *master;
+
+	if (!dev || !dev->master)
+		return -EINVAL;
+
+	master = dev->master;
+	if (master->bulk_write)
+		return master->bulk_write(master, dev_num, reg, buf, len);
+
+	return -ENOSYS;
+}
+EXPORT_SYMBOL(swr_bulk_write);
 
 /**
  * swr_write - write soundwire slave device registers
@@ -425,8 +493,8 @@ EXPORT_SYMBOL(swr_read);
  * This API will write the value of the register address to
  * soundwire slave device
  */
-int swr_write(struct swr_device *dev, u8 dev_num, u32 reg_addr,
-		u32 *buf)
+int swr_write(struct swr_device *dev, u8 dev_num, u16 reg_addr,
+	      const void *buf)
 {
 	struct swr_master *master = dev->master;
 	if (!master)

@@ -29,6 +29,7 @@
 #include <asm/prom.h>
 #include <asm/sections.h>
 #include <asm/setup.h>
+#include <asm/system_info.h>
 #include <asm/tlb.h>
 #include <asm/fixmap.h>
 
@@ -512,6 +513,54 @@ static void __init free_highpages(void)
 #endif
 }
 
+#define MLK(b, t) (b), (t), (((t) - (b)) >> 10)
+#define MLM(b, t) (b), (t), (((t) - (b)) >> 20)
+#define MLK_ROUNDUP(b, t) (b), (t), (DIV_ROUND_UP(((t) - (b)), SZ_1K))
+
+#ifdef CONFIG_ENABLE_VMALLOC_SAVING
+static void print_vmalloc_lowmem_info(void)
+{
+	struct memblock_region *reg, *prev_reg = NULL;
+
+	pr_notice(
+		"	   vmalloc : 0x%08lx - 0x%08lx   (%4ld MB)\n",
+		MLM((unsigned long)high_memory, VMALLOC_END));
+
+	for_each_memblock_rev(memory, reg) {
+		phys_addr_t start_phys = reg->base;
+		phys_addr_t end_phys = reg->base + reg->size;
+
+		if (start_phys > arm_lowmem_limit)
+			continue;
+
+		if (end_phys > arm_lowmem_limit)
+			end_phys = arm_lowmem_limit;
+
+		if (prev_reg == NULL) {
+			prev_reg = reg;
+
+			pr_notice(
+			"	   lowmem  : 0x%08lx - 0x%08lx   (%4ld MB)\n",
+			MLM((unsigned long)__va(start_phys),
+			(unsigned long)__va(end_phys)));
+
+			continue;
+		}
+
+		pr_notice(
+		"	   vmalloc : 0x%08lx - 0x%08lx   (%4ld MB)\n",
+		MLM((unsigned long)__va(end_phys),
+		(unsigned long)__va(prev_reg->base)));
+
+
+		pr_notice(
+		"	   lowmem  : 0x%08lx - 0x%08lx   (%4ld MB)\n",
+		MLM((unsigned long)__va(start_phys),
+		(unsigned long)__va(end_phys)));
+	}
+}
+#endif
+
 /*
  * mem_init() marks the free areas in the mem_map and tells us how much
  * memory is free.  This is done after various parts of the system have
@@ -540,39 +589,40 @@ void __init mem_init(void)
 
 	mem_init_print_info(NULL);
 
-#define MLK(b, t) b, t, ((t) - (b)) >> 10
-#define MLM(b, t) b, t, ((t) - (b)) >> 20
-#define MLK_ROUNDUP(b, t) b, t, DIV_ROUND_UP(((t) - (b)), SZ_1K)
-
 	printk(KERN_NOTICE "Virtual kernel memory layout:\n"
 			"    vector  : 0x%08lx - 0x%08lx   (%4ld kB)\n"
 #ifdef CONFIG_HAVE_TCM
 			"    DTCM    : 0x%08lx - 0x%08lx   (%4ld kB)\n"
 			"    ITCM    : 0x%08lx - 0x%08lx   (%4ld kB)\n"
 #endif
-			"    fixmap  : 0x%08lx - 0x%08lx   (%4ld kB)\n"
-			"    vmalloc : 0x%08lx - 0x%08lx   (%4ld MB)\n"
-			"    lowmem  : 0x%08lx - 0x%08lx   (%4ld MB)\n"
-#ifdef CONFIG_HIGHMEM
-			"    pkmap   : 0x%08lx - 0x%08lx   (%4ld MB)\n"
-#endif
-#ifdef CONFIG_MODULES
-			"    modules : 0x%08lx - 0x%08lx   (%4ld MB)\n"
-#endif
-			"      .text : 0x%p" " - 0x%p" "   (%4td kB)\n"
-			"      .init : 0x%p" " - 0x%p" "   (%4td kB)\n"
-			"      .data : 0x%p" " - 0x%p" "   (%4td kB)\n"
-			"       .bss : 0x%p" " - 0x%p" "   (%4td kB)\n",
-
+			"    fixmap  : 0x%08lx - 0x%08lx   (%4ld kB)\n",
 			MLK(UL(CONFIG_VECTORS_BASE), UL(CONFIG_VECTORS_BASE) +
 				(PAGE_SIZE)),
 #ifdef CONFIG_HAVE_TCM
 			MLK(DTCM_OFFSET, (unsigned long) dtcm_end),
 			MLK(ITCM_OFFSET, (unsigned long) itcm_end),
 #endif
-			MLK(FIXADDR_START, FIXADDR_END),
+			MLK(FIXADDR_START, FIXADDR_END));
+#ifdef CONFIG_ENABLE_VMALLOC_SAVING
+	print_vmalloc_lowmem_info();
+#else
+	printk(KERN_NOTICE
+		   "    vmalloc : 0x%08lx - 0x%08lx   (%4ld MB)\n"
+		   "    lowmem  : 0x%08lx - 0x%08lx   (%4ld MB)\n",
 			MLM(VMALLOC_START, VMALLOC_END),
-			MLM(PAGE_OFFSET, (unsigned long)high_memory),
+			MLM(PAGE_OFFSET, (unsigned long)high_memory));
+#endif
+	printk(KERN_NOTICE
+#ifdef CONFIG_HIGHMEM
+		   "    pkmap   : 0x%08lx - 0x%08lx   (%4ld MB)\n"
+#endif
+#ifdef CONFIG_MODULES
+		   "    modules : 0x%08lx - 0x%08lx   (%4ld MB)\n"
+#endif
+		   "      .text : 0x%p" " - 0x%p" "   (%4d kB)\n"
+		   "      .init : 0x%p" " - 0x%p" "   (%4d kB)\n"
+		   "      .data : 0x%p" " - 0x%p" "   (%4d kB)\n"
+		   "       .bss : 0x%p" " - 0x%p" "   (%4d kB)\n",
 #ifdef CONFIG_HIGHMEM
 			MLM(PKMAP_BASE, (PKMAP_BASE) + (LAST_PKMAP) *
 				(PAGE_SIZE)),
@@ -585,10 +635,6 @@ void __init mem_init(void)
 			MLK_ROUNDUP(__init_begin, __init_end),
 			MLK_ROUNDUP(_sdata, _edata),
 			MLK_ROUNDUP(__bss_start, __bss_stop));
-
-#undef MLK
-#undef MLM
-#undef MLK_ROUNDUP
 
 	/*
 	 * Check boundaries twice: Some fundamental inconsistencies can
@@ -615,7 +661,149 @@ void __init mem_init(void)
 	}
 }
 
-void free_initmem(void)
+#undef MLK
+#undef MLM
+#undef MLK_ROUNDUP
+
+#ifdef CONFIG_ARM_KERNMEM_PERMS
+struct section_perm {
+	unsigned long start;
+	unsigned long end;
+	pmdval_t mask;
+	pmdval_t prot;
+	pmdval_t clear;
+};
+
+static struct section_perm nx_perms[] = {
+	/* Make pages tables, etc before _stext RW (set NX). */
+	{
+		.start	= PAGE_OFFSET,
+		.end	= (unsigned long)_stext,
+		.mask	= ~PMD_SECT_XN,
+		.prot	= PMD_SECT_XN,
+	},
+	/* Make init RW (set NX). */
+	{
+		.start	= (unsigned long)__init_begin,
+		.end	= (unsigned long)_sdata,
+		.mask	= ~PMD_SECT_XN,
+		.prot	= PMD_SECT_XN,
+	},
+#ifdef CONFIG_DEBUG_RODATA
+	/* Make rodata NX (set RO in ro_perms below). */
+	{
+		.start  = (unsigned long)__start_rodata,
+		.end    = (unsigned long)__init_begin,
+		.mask   = ~PMD_SECT_XN,
+		.prot   = PMD_SECT_XN,
+	},
+#endif
+};
+
+#ifdef CONFIG_DEBUG_RODATA
+static struct section_perm ro_perms[] = {
+	/* Make kernel code and rodata RX (set RO). */
+	{
+		.start  = (unsigned long)_stext,
+		.end    = (unsigned long)__init_begin,
+#ifdef CONFIG_ARM_LPAE
+		.mask   = ~L_PMD_SECT_RDONLY,
+		.prot   = L_PMD_SECT_RDONLY,
+#else
+		.mask   = ~(PMD_SECT_APX | PMD_SECT_AP_WRITE),
+		.prot   = PMD_SECT_APX | PMD_SECT_AP_WRITE,
+		.clear  = PMD_SECT_AP_WRITE,
+#endif
+	},
+};
+#endif
+
+/*
+ * Updates section permissions only for the current mm (sections are
+ * copied into each mm). During startup, this is the init_mm. Is only
+ * safe to be called with preemption disabled, as under stop_machine().
+ */
+static inline void section_update(unsigned long addr, pmdval_t mask,
+				  pmdval_t prot)
+{
+	struct mm_struct *mm;
+	pmd_t *pmd;
+
+	mm = current->active_mm;
+	pmd = pmd_offset(pud_offset(pgd_offset(mm, addr), addr), addr);
+
+#ifdef CONFIG_ARM_LPAE
+	pmd[0] = __pmd((pmd_val(pmd[0]) & mask) | prot);
+#else
+	if (addr & SECTION_SIZE)
+		pmd[1] = __pmd((pmd_val(pmd[1]) & mask) | prot);
+	else
+		pmd[0] = __pmd((pmd_val(pmd[0]) & mask) | prot);
+#endif
+	flush_pmd_entry(pmd);
+	local_flush_tlb_kernel_range(addr, addr + SECTION_SIZE);
+}
+
+/* Make sure extended page tables are in use. */
+static inline bool arch_has_strict_perms(void)
+{
+	if (cpu_architecture() < CPU_ARCH_ARMv6)
+		return false;
+
+	return !!(get_cr() & CR_XP);
+}
+
+#define set_section_perms(perms, field)	{				\
+	size_t i;							\
+	unsigned long addr;						\
+									\
+	if (!arch_has_strict_perms())					\
+		return;							\
+									\
+	for (i = 0; i < ARRAY_SIZE(perms); i++) {			\
+		if (!IS_ALIGNED(perms[i].start, SECTION_SIZE) ||	\
+		    !IS_ALIGNED(perms[i].end, SECTION_SIZE)) {		\
+			pr_err("BUG: section %lx-%lx not aligned to %lx\n", \
+				perms[i].start, perms[i].end,		\
+				SECTION_SIZE);				\
+			continue;					\
+		}							\
+									\
+		for (addr = perms[i].start;				\
+		     addr < perms[i].end;				\
+		     addr += SECTION_SIZE)				\
+			section_update(addr, perms[i].mask,		\
+				       perms[i].field);			\
+	}								\
+}
+
+static inline void fix_kernmem_perms(void)
+{
+	set_section_perms(nx_perms, prot);
+}
+
+#ifdef CONFIG_DEBUG_RODATA
+void mark_rodata_ro(void)
+{
+	set_section_perms(ro_perms, prot);
+}
+
+void set_kernel_text_rw(void)
+{
+	set_section_perms(ro_perms, clear);
+}
+
+void set_kernel_text_ro(void)
+{
+	set_section_perms(ro_perms, prot);
+}
+#endif /* CONFIG_DEBUG_RODATA */
+
+#else
+static inline void fix_kernmem_perms(void) { }
+#endif /* CONFIG_ARM_KERNMEM_PERMS */
+
+void free_tcmmem(void)
 {
 #ifdef CONFIG_HAVE_TCM
 	extern char __tcm_start, __tcm_end;
@@ -623,6 +811,12 @@ void free_initmem(void)
 	poison_init_mem(&__tcm_start, &__tcm_end - &__tcm_start);
 	free_reserved_area(&__tcm_start, &__tcm_end, -1, "TCM link");
 #endif
+}
+
+void free_initmem(void)
+{
+	fix_kernmem_perms();
+	free_tcmmem();
 
 	poison_init_mem(__init_begin, __init_end - __init_begin);
 	if (!machine_is_integrator() && !machine_is_cintegrator())
@@ -653,15 +847,4 @@ static int __init keepinitrd_setup(char *__unused)
 }
 
 __setup("keepinitrd", keepinitrd_setup);
-#endif
-
-#ifdef CONFIG_KERNEL_TEXT_RDONLY
-void set_kernel_text_ro(void)
-{
-	unsigned long start = PFN_ALIGN(_stext);
-	unsigned long end = PFN_ALIGN(_etext);
-
-	/* Set the kernel identity mapping for text RO. */
-	set_memory_ro(start, (end - start) >> PAGE_SHIFT);
-}
 #endif

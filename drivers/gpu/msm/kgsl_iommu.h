@@ -19,19 +19,13 @@
 #include <linux/of.h>
 #include "kgsl.h"
 
-#define KGSL_IOMMU_SECURE_SIZE32 SZ_256M
-#define KGSL_IOMMU_SECURE_END32 KGSL_MMU_GLOBAL_MEM_BASE
-#define KGSL_IOMMU_SECURE_BASE32	\
-	(KGSL_MMU_GLOBAL_MEM_BASE - KGSL_IOMMU_SECURE_SIZE32)
+#define KGSL_IOMMU_SECURE_SIZE SZ_256M
+#define KGSL_IOMMU_SECURE_END KGSL_MMU_GLOBAL_MEM_BASE
+#define KGSL_IOMMU_SECURE_BASE	\
+	(KGSL_MMU_GLOBAL_MEM_BASE - KGSL_IOMMU_SECURE_SIZE)
 
 #define KGSL_IOMMU_SVM_BASE32		0x300000
 #define KGSL_IOMMU_SVM_END32		(0xC0000000 - SZ_16M)
-
-#define KGSL_IOMMU_SECURE_BASE64	0x300000000ULL
-/* this size is a hardware enforced maximum */
-#define KGSL_IOMMU_SECURE_SIZE64	0x0FFFFF000ULL
-#define KGSL_IOMMU_SECURE_END64 \
-	(KGSL_IOMMU_SECURE_BASE64 + KGSL_IOMMU_SECURE_SIZE64)
 
 #define KGSL_IOMMU_VA_BASE64		0x500000000ULL
 #define KGSL_IOMMU_VA_END64		0x600000000ULL
@@ -126,7 +120,6 @@ struct kgsl_iommu_context {
 
 /*
  * struct kgsl_iommu - Structure holding iommu data for kgsl driver
- * @device: Pointer to KGSL device struct
  * @ctx: Array of kgsl_iommu_context structs
  * @regbase: Virtual address of the IOMMU register base
  * @regstart: Physical address of the iommu registers
@@ -138,7 +131,6 @@ struct kgsl_iommu_context {
  * @protect: register protection settings for the iommu.
  */
 struct kgsl_iommu {
-	struct kgsl_device *device;
 	struct kgsl_iommu_context ctx[KGSL_IOMMU_CONTEXT_MAX];
 	void __iomem *regbase;
 	unsigned long regstart;
@@ -154,7 +146,6 @@ struct kgsl_iommu {
 /*
  * struct kgsl_iommu_pt - Iommu pagetable structure private to kgsl driver
  * @domain: Pointer to the iommu domain that contains the iommu pagetable
- * @iommu: Pointer to iommu structure
  * @ttbr0: register value to set when using this pagetable
  * @contextidr: register value to set when using this pagetable
  * @attached: is the pagetable attached?
@@ -169,7 +160,6 @@ struct kgsl_iommu {
  */
 struct kgsl_iommu_pt {
 	struct iommu_domain *domain;
-	struct kgsl_iommu *iommu;
 	u64 ttbr0;
 	u32 contextidr;
 	bool attached;

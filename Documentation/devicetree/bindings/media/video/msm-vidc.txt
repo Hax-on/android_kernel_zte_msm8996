@@ -48,6 +48,9 @@ Optional properties:
     supports hevc decoder = 0x0c000000
     supports hevc_hybrid encoder = 0x10000000
     supports hevc_hybrid decoder = 0x30000000
+- qcom,imem-ab-tbl : video core frequency in Hz and corresponding imem ab value
+  in kbps. The imem ab value corresponds to the clock frequency at which imem
+  should operate for a particular video core frequency.
 - qcom,reg-presets : list of offset-value pairs for registers to be written.
   The offsets are from the base offset specified in 'reg'. This is mainly
   used for QoS, VBIF, etc. presets for video.
@@ -84,6 +87,27 @@ Optional properties:
 - qcom,hfi-version = The hfi packetization version supported by venus firmware.
   If hfi version is not specified, then packetization type will default to
   legacy.
+- qcom,vidc-iommu-domains = node containing individual domain nodes, each with:
+     - a unique domain name for the domain node (e.g vidc,domain-ns)
+     - qcom,vidc-domain-phandle: phandle for the domain as defined in
+       <target>-iommu-domains.dtsi (e.g msm8974-v1-iommu-domains.dtsi)
+     - qcom,vidc-buffer-types: bitmap of buffer types that can be mapped into each
+       IOMMU domain.
+       - Buffer types are defined as the following:
+           input = 0x1
+           output = 0x2
+           output2 = 0x4
+           extradata input = 0x8
+           extradata output = 0x10
+           extradata output2 = 0x20
+           internal scratch = 0x40
+           internal scratch1 = 0x80
+           internal scratch2 = 0x100
+           internal persist = 0x200
+           internal persist1 = 0x400
+           internal cmd queue = 0x800
+- qcom,pm-qos-latency-us = The latency used to vote for QOS power manager. This
+value is typically max(latencies of every cluster at all power levels) + 1
 
 [Second level nodes]
 Context Banks
@@ -153,6 +177,13 @@ Example:
 			<72000 133330000 0x0c000000>, /* HEVC decoder VGA 60fps   */
 			<36000 133330000 0x0c000000>, /* HEVC VGA 30 fps  */
 			<36000 133330000 0x01000414>; /* Legacy encoder VGA 30 fps   */
+
+		qcom,imem-ab-tbl =
+			<75000000  1500000>, /* imem clk @ 75 Mhz  */
+			<150000000 1500000>, /* imem clk @ 75 Mhz  */
+			<355333333 2500000>, /* imem clk @ 170 Mhz */
+			<533000000 6000000>; /* imem clk @ 320 Mhz */
+
 		qcom,imem-size = <4096>;
 		qcom,firmware-name = "venus";
 		qcom,hfi-version = "3xx";

@@ -880,7 +880,8 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 	rndis->notify_req = usb_ep_alloc_request(ep, GFP_KERNEL);
 	if (!rndis->notify_req)
 		goto fail;
-	rndis->notify_req->buf = kmalloc(STATUS_BYTECOUNT, GFP_KERNEL);
+	rndis->notify_req->buf = kmalloc(STATUS_BYTECOUNT +
+			cdev->gadget->extra_buf_alloc, GFP_KERNEL);
 	if (!rndis->notify_req->buf)
 		goto fail;
 	rndis->notify_req->length = STATUS_BYTECOUNT;
@@ -1009,7 +1010,7 @@ rndis_bind_config_vendor(struct usb_configuration *c, u8 ethaddr[ETH_ALEN],
 	rndis->port.func.setup = rndis_setup;
 	rndis->port.func.disable = rndis_disable;
 
-	status = rndis_register(rndis_response_available, rndis);
+	status = rndis_register(rndis_response_available, rndis, NULL);
 	if (status < 0) {
 		kfree(rndis);
 		return status;
@@ -1185,7 +1186,7 @@ static struct usb_function *rndis_alloc(struct usb_function_instance *fi)
 	rndis->port.func.disable = rndis_disable;
 	rndis->port.func.free_func = rndis_free;
 
-	status = rndis_register(rndis_response_available, rndis);
+	status = rndis_register(rndis_response_available, rndis, NULL);
 	if (status < 0) {
 		kfree(rndis);
 		return ERR_PTR(status);

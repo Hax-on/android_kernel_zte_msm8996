@@ -628,6 +628,7 @@ config SND_SOC_WCD9320
 
 config SND_SOC_WCD9330
         tristate
+	depends on WCD9330_CODEC
 
 config SND_SOC_WCD9335
         tristate
@@ -636,18 +637,29 @@ config SND_SOC_WSA881X
         tristate
 	select REGMAP_SWR
 
+config SND_SOC_WSA881X_ANALOG
+        tristate
+	select REGMAP_I2C
+
+config SND_SOC_MSM8X16_WCD
+	tristate
+
 config SND_SOC_WCD9XXX
 	tristate
 	default y if SND_SOC_WCD9320=y || SND_SOC_WCD9330=y || SND_SOC_WCD9335=y
 
+config SND_SOC_WCD9XXX_V2
+	tristate
+	default y if SND_SOC_WCD9335=y
+
 config SND_SOC_WCD_CPE
 	tristate
-	default y if SND_SOC_WCD9330=y
+	default y if SND_SOC_WCD9330=y || SND_SOC_WCD9335=y
 
 config AUDIO_EXT_CLK
 	tristate
-	default y if SND_SOC_WCD9335=y || SND_SOC_WCD9330=y
 	default y if SND_SOC_AK4961=y
+	default y if SND_SOC_WCD9335=y || SND_SOC_WCD9330=y || SND_SOC_MSM8X16_WCD=y
 
 config SND_SOC_WCD_MBHC
 	tristate

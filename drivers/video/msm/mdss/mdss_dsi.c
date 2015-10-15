@@ -882,20 +882,16 @@ static int mdss_dsi_debugfs_setup(struct mdss_panel_data *pdata,
 
 static int mdss_dsi_debugfs_init(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
-	struct mdss_panel_data *pdata = &ctrl_pdata->panel_data;
 	int rc;
+	struct mdss_panel_data *pdata = &ctrl_pdata->panel_data;
+	struct mdss_panel_info panel_info = pdata->panel_info;
 
-	do {
-		struct mdss_panel_info panel_info = pdata->panel_info;
-		rc = mdss_dsi_debugfs_setup(pdata,
-					panel_info.debugfs_info->root);
-		if (rc) {
-			pr_err("%s: Error in initilizing dsi ctrl debugfs\n",
+	rc = mdss_dsi_debugfs_setup(pdata, panel_info.debugfs_info->root);
+	if (rc) {
+		pr_err("%s: Error in initilizing dsi ctrl debugfs\n",
 				__func__);
-			return rc;
-		}
-		pdata = pdata->next;
-	} while (pdata);
+		return rc;
+	}
 
 	pr_debug("%s: Initialized mdss_dsi_debugfs_init\n", __func__);
 	return 0;
@@ -1077,6 +1073,8 @@ panel_power_ctrl:
 	    && (panel_info->new_fps != panel_info->mipi.frame_rate))
 		panel_info->mipi.frame_rate = panel_info->new_fps;
 
+	/* Initialize Max Packet size for DCS reads */
+	ctrl_pdata->cur_max_pkt_size = 0;
 end:
 	mutex_unlock(&ctrl_pdata->mutex);
 	pr_debug("%s-:\n", __func__);
@@ -1088,6 +1086,7 @@ int mdss_dsi_switch_mode(struct mdss_panel_data *pdata, int mode)
 {
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
 	struct mipi_panel_info *pinfo;
+	bool dsi_ctrl_setup_needed = false;
 
 	if (!pdata) {
 		pr_err("%s: Invalid input data\n", __func__);
@@ -1099,15 +1098,19 @@ int mdss_dsi_switch_mode(struct mdss_panel_data *pdata, int mode)
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 		panel_data);
 
-	if (pinfo->dms_mode != DYNAMIC_MODE_SWITCH_IMMEDIATE) {
+	if ((pinfo->dms_mode != DYNAMIC_MODE_RESOLUTION_SWITCH_IMMEDIATE) &&
+			(pinfo->dms_mode != DYNAMIC_MODE_SWITCH_IMMEDIATE)) {
 		pr_debug("%s: Dynamic mode switch not enabled.\n", __func__);
 		return -EPERM;
 	}
 
 	if (mode == MIPI_VIDEO_PANEL) {
-		mode = DSI_VIDEO_MODE;
+		mode = SWITCH_TO_VIDEO_MODE;
 	} else if (mode == MIPI_CMD_PANEL) {
-		mode = DSI_CMD_MODE;
+		mode = SWITCH_TO_CMD_MODE;
+	} else if (mode == SWITCH_RESOLUTION) {
+		dsi_ctrl_setup_needed = true;
+		pr_debug("Resolution switch mode selected\n");
 	} else {
 		pr_err("Invalid mode selected, mode=%d\n", mode);
 		return -EINVAL;
@@ -1115,6 +1118,8 @@ int mdss_dsi_switch_mode(struct mdss_panel_data *pdata, int mode)
 
 	mdss_dsi_clk_ctrl(ctrl_pdata, ctrl_pdata->dsi_clk_handle,
 			  MDSS_DSI_ALL_CLKS, MDSS_DSI_CLK_ON);
+	if (dsi_ctrl_setup_needed)
+		mdss_dsi_ctrl_setup(ctrl_pdata);
 	ctrl_pdata->switch_mode(pdata, mode);
 	mdss_dsi_clk_ctrl(ctrl_pdata, ctrl_pdata->dsi_clk_handle,
 			  MDSS_DSI_ALL_CLKS, MDSS_DSI_CLK_OFF);
@@ -1355,8 +1360,9 @@ static int mdss_dsi_unblank(struct mdss_panel_data *pdata)
 				panel_data);
 	mipi  = &pdata->panel_info.mipi;
 
-	pr_debug("%s+: ctrl=%p ndx=%d cur_blank_state=%d\n", __func__,
-		ctrl_pdata, ctrl_pdata->ndx, pdata->panel_info.blank_state);
+	pr_debug("%s+: ctrl=%p ndx=%d cur_blank_state=%d ctrl_state=%x\n",
+			__func__, ctrl_pdata, ctrl_pdata->ndx,
+			pdata->panel_info.blank_state, ctrl_pdata->ctrl_state);
 
 	if (mdss_dsi_is_ctrl_clk_master(ctrl_pdata))
 		sctrl = mdss_dsi_get_ctrl_clk_slave();
@@ -1444,9 +1450,9 @@ static int mdss_dsi_blank(struct mdss_panel_data *pdata, int power_state)
 		pr_info("%s: switching to %s mode\n", __func__,
 			(pdata->panel_info.mipi.mode ? "video" : "command"));
 		if (pdata->panel_info.type == MIPI_CMD_PANEL) {
-			ctrl_pdata->switch_mode(pdata, DSI_VIDEO_MODE);
+			ctrl_pdata->switch_mode(pdata, SWITCH_TO_VIDEO_MODE);
 		} else if (pdata->panel_info.type == MIPI_VIDEO_PANEL) {
-			ctrl_pdata->switch_mode(pdata, DSI_CMD_MODE);
+			ctrl_pdata->switch_mode(pdata, SWITCH_TO_CMD_MODE);
 			mdss_dsi_set_tear_off(ctrl_pdata);
 		}
 	}
@@ -1579,7 +1585,10 @@ static void __mdss_dsi_update_video_mode_total(struct mdss_panel_data *pdata,
 
 	if (ctrl_pdata->shared_data->timing_db_mode)
 		MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x1e4, 0x1);
+
 	ctrl_pdata->panel_data.panel_info.mipi.frame_rate = new_fps;
+	MDSS_XLOG(current_dsi_v_total, new_dsi_v_total, new_fps,
+		ctrl_pdata->shared_data->timing_db_mode);
 
 }
 
@@ -1991,46 +2000,6 @@ int mdss_dsi_register_recovery_handler(struct mdss_dsi_ctrl_pdata *ctrl,
 	return 0;
 }
 
-static int mdss_dsi_clk_refresh(struct mdss_panel_data *pdata)
-{
-	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
-	int rc = 0;
-
-	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
-							panel_data);
-	rc = mdss_dsi_clk_div_config(&pdata->panel_info,
-			pdata->panel_info.mipi.frame_rate);
-	if (rc) {
-		pr_err("%s: unable to initialize the clk dividers\n",
-								__func__);
-		return rc;
-	}
-	ctrl_pdata->refresh_clk_rate = false;
-	ctrl_pdata->pclk_rate = pdata->panel_info.mipi.dsi_pclk_rate;
-	ctrl_pdata->byte_clk_rate = pdata->panel_info.clk_rate / 8;
-	pr_debug("%s ctrl_pdata->byte_clk_rate=%d ctrl_pdata->pclk_rate=%d\n",
-		__func__, ctrl_pdata->byte_clk_rate, ctrl_pdata->pclk_rate);
-
-	rc = mdss_dsi_clk_set_link_rate(ctrl_pdata->dsi_clk_handle,
-		MDSS_DSI_LINK_BYTE_CLK, ctrl_pdata->byte_clk_rate,
-		MDSS_DSI_CLK_UPDATE_CLK_RATE_AT_ON);
-	if (rc) {
-		pr_err("%s: dsi_byte_clk - clk_set_rate failed\n",
-				__func__);
-		return rc;
-	}
-
-	rc = mdss_dsi_clk_set_link_rate(ctrl_pdata->dsi_clk_handle,
-		MDSS_DSI_LINK_PIX_CLK, ctrl_pdata->pclk_rate,
-		MDSS_DSI_CLK_UPDATE_CLK_RATE_AT_ON);
-	if (rc) {
-		pr_err("%s: dsi_pixel_clk - clk_set_rate failed\n",
-			__func__);
-		return rc;
-	}
-	return rc;
-}
-
 static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 				  int event, void *arg)
 {
@@ -2097,7 +2066,8 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 		rc = mdss_dsi_cont_splash_on(pdata);
 		break;
 	case MDSS_EVENT_PANEL_CLK_CTRL:
-		mdss_dsi_clk_req(ctrl_pdata, (int) (unsigned long) arg);
+		mdss_dsi_clk_req(ctrl_pdata,
+			(struct dsi_panel_clk_ctrl *) arg);
 		break;
 	case MDSS_EVENT_DSI_CMDLIST_KOFF:
 		mdss_dsi_cmdlist_commit(ctrl_pdata, 1);
@@ -2144,6 +2114,9 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 	case MDSS_EVENT_DSI_PANEL_STATUS:
 		if (ctrl_pdata->check_status)
 			rc = ctrl_pdata->check_status(ctrl_pdata);
+		break;
+	case MDSS_EVENT_PANEL_TIMING_SWITCH:
+		rc = mdss_dsi_panel_timing_switch(ctrl_pdata, arg);
 		break;
 	case MDSS_EVENT_FB_REGISTERED:
 		mdss_dsi_debugfs_init(ctrl_pdata);
@@ -2617,6 +2590,7 @@ static int mdss_dsi_ctrl_probe(struct platform_device *pdev)
 	return 0;
 
 error_pan_node:
+	mdss_dsi_unregister_bl_settings(ctrl_pdata);
 	of_node_put(dsi_pan_node);
 	return rc;
 }
@@ -2836,7 +2810,7 @@ static int mdss_dsi_parse_hw_cfg(struct platform_device *pdev, char *pan_cfg)
 	struct mdss_dsi_data *dsi_res = platform_get_drvdata(pdev);
 	struct dsi_shared_data *sdata;
 	char dsi_cfg[20];
-	char *cfg_prim = NULL, *cfg_sec = NULL;
+	char *cfg_prim = NULL, *cfg_sec = NULL, *ch = NULL;
 	int i = 0;
 
 	if (!dsi_res) {
@@ -2869,6 +2843,13 @@ static int mdss_dsi_parse_hw_cfg(struct platform_device *pdev, char *pan_cfg)
 	}
 
 	if (data) {
+		/*
+		 * To handle the  override parameter (#override:sim)
+		 * passed for simulator panels
+		 */
+		ch = strnstr(data, "#", strlen(data));
+		ch ? *ch = '\0' : false;
+
 		if (!strcmp(data, "dual_dsi"))
 			sdata->hw_config = DUAL_DSI;
 		else if (!strcmp(data, "split_dsi"))
@@ -3203,6 +3184,9 @@ static int mdss_dsi_parse_ctrl_params(struct platform_device *ctrl_pdev,
 	int i, len;
 	struct mdss_panel_info *pinfo = &(ctrl_pdata->panel_data.panel_info);
 	const char *data;
+
+	ctrl_pdata->null_insert_enabled = of_property_read_bool(
+		ctrl_pdev->dev.of_node, "qcom,null-insertion-enabled");
 
 	data = of_get_property(ctrl_pdev->dev.of_node,
 		"qcom,platform-strength-ctrl", &len);

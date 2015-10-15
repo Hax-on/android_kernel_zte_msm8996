@@ -358,6 +358,7 @@ int afe_get_port_type(u16 port_id)
 	case AFE_PORT_ID_TERTIARY_MI2S_RX:
 	case AFE_PORT_ID_QUATERNARY_MI2S_RX:
 	case AFE_PORT_ID_SECONDARY_PCM_RX:
+	case AFE_PORT_ID_QUINARY_MI2S_RX:
 		ret = MSM_AFE_PORT_TYPE_RX;
 		break;
 
@@ -383,6 +384,8 @@ int afe_get_port_type(u16 port_id)
 	case AFE_PORT_ID_TERTIARY_MI2S_TX:
 	case AFE_PORT_ID_QUATERNARY_MI2S_TX:
 	case AFE_PORT_ID_SECONDARY_PCM_TX:
+	case AFE_PORT_ID_QUINARY_MI2S_TX:
+	case AFE_PORT_ID_SENARY_MI2S_TX:
 		ret = MSM_AFE_PORT_TYPE_TX;
 		break;
 
@@ -410,6 +413,8 @@ int afe_sizeof_cfg_cmd(u16 port_id)
 	case AFE_PORT_ID_PRIMARY_MI2S_TX:
 	case AFE_PORT_ID_QUATERNARY_MI2S_RX:
 	case AFE_PORT_ID_QUATERNARY_MI2S_TX:
+	case AFE_PORT_ID_QUINARY_MI2S_RX:
+	case AFE_PORT_ID_QUINARY_MI2S_TX:
 		ret_size = SIZEOF_CFG_CMD(afe_param_id_i2s_cfg);
 		break;
 	case HDMI_RX:
@@ -2059,10 +2064,9 @@ int afe_port_start(u16 port_id, union afe_port_config *afe_config,
 		/* One time call: only for first time */
 		afe_send_custom_topology();
 		afe_send_port_topology_id(port_id);
-
 		afe_send_cal(port_id);
+		afe_send_hw_delay(port_id, rate);
 	}
-	afe_send_hw_delay(port_id, rate);
 
 	/* Start SW MAD module */
 	mad_type = afe_port_get_mad_type(port_id);
@@ -2131,6 +2135,9 @@ int afe_port_start(u16 port_id, union afe_port_config *afe_config,
 	case AFE_PORT_ID_TERTIARY_MI2S_TX:
 	case AFE_PORT_ID_QUATERNARY_MI2S_RX:
 	case AFE_PORT_ID_QUATERNARY_MI2S_TX:
+	case AFE_PORT_ID_QUINARY_MI2S_RX:
+	case AFE_PORT_ID_QUINARY_MI2S_TX:
+	case AFE_PORT_ID_SENARY_MI2S_TX:
 		cfg_type = AFE_PARAM_ID_I2S_CONFIG;
 		break;
 	case HDMI_RX:
@@ -2290,6 +2297,12 @@ int afe_get_port_index(u16 port_id)
 		 return IDX_AFE_PORT_ID_TERTIARY_MI2S_TX;
 	case AFE_PORT_ID_SECONDARY_MI2S_RX_SD1:
 		return IDX_AFE_PORT_ID_SECONDARY_MI2S_RX_SD1;
+	case AFE_PORT_ID_QUINARY_MI2S_RX:
+		return IDX_AFE_PORT_ID_QUINARY_MI2S_RX;
+	case AFE_PORT_ID_QUINARY_MI2S_TX:
+		return IDX_AFE_PORT_ID_QUINARY_MI2S_TX;
+	case AFE_PORT_ID_SENARY_MI2S_TX:
+		 return IDX_AFE_PORT_ID_SENARY_MI2S_TX;
 
 	default:
 		pr_err("%s: port 0x%x\n", __func__, port_id);
@@ -2372,6 +2385,9 @@ int afe_open(u16 port_id,
 	case AFE_PORT_ID_QUATERNARY_MI2S_TX:
 	case MI2S_RX:
 	case MI2S_TX:
+	case AFE_PORT_ID_QUINARY_MI2S_RX:
+	case AFE_PORT_ID_QUINARY_MI2S_TX:
+	case AFE_PORT_ID_SENARY_MI2S_TX:
 		cfg_type = AFE_PARAM_ID_I2S_CONFIG;
 		break;
 	case HDMI_RX:
@@ -3779,9 +3795,13 @@ int afe_validate_port(u16 port_id)
 	case SLIMBUS_6_TX:
 	case AFE_PORT_ID_PRIMARY_MI2S_RX:
 	case AFE_PORT_ID_PRIMARY_MI2S_TX:
+	case AFE_PORT_ID_SECONDARY_MI2S_RX:
 	case AFE_PORT_ID_QUATERNARY_MI2S_RX:
 	case AFE_PORT_ID_QUATERNARY_MI2S_TX:
 	case AFE_PORT_ID_TERTIARY_MI2S_TX:
+	case AFE_PORT_ID_QUINARY_MI2S_RX:
+	case AFE_PORT_ID_QUINARY_MI2S_TX:
+	case AFE_PORT_ID_SENARY_MI2S_TX:
 	{
 		ret = 0;
 		break;
@@ -4129,10 +4149,9 @@ fail_cmd:
 	return ret;
 }
 
-int afe_set_lpass_clock_v2(u16 port_id, struct afe_clk_set *cfg)
+int afe_set_lpass_clk_cfg(int index, struct afe_clk_set *cfg)
 {
 	struct afe_lpass_clk_config_command_v2 clk_cfg;
-	int index = 0;
 	int ret = 0;
 
 	if (!cfg) {
@@ -4140,11 +4159,9 @@ int afe_set_lpass_clock_v2(u16 port_id, struct afe_clk_set *cfg)
 		ret = -EINVAL;
 		return ret;
 	}
-	index = q6audio_get_port_index(port_id);
-	ret = q6audio_is_digital_pcm_interface(port_id);
-	if (ret < 0) {
-		pr_err("%s: q6audio_is_digital_pcm_interface fail %d\n",
-			__func__, ret);
+
+	if (index < 0 || index >= AFE_MAX_PORTS) {
+		pr_err("%s: index[%d] invalid!\n", __func__, index);
 		return -EINVAL;
 	}
 
@@ -4185,8 +4202,8 @@ int afe_set_lpass_clock_v2(u16 port_id, struct afe_clk_set *cfg)
 	atomic_set(&this_afe.status, 0);
 	ret = apr_send_pkt(this_afe.apr, (uint32_t *) &clk_cfg);
 	if (ret < 0) {
-		pr_err("%s: AFE enable for port 0x%x ret %d\n",
-		       __func__, port_id, ret);
+		pr_err("%s: AFE clk cfg failed with ret %d\n",
+		       __func__, ret);
 		ret = -EINVAL;
 		goto fail_cmd;
 	}
@@ -4198,6 +4215,9 @@ int afe_set_lpass_clock_v2(u16 port_id, struct afe_clk_set *cfg)
 		pr_err("%s: wait_event timeout\n", __func__);
 		ret = -EINVAL;
 		goto fail_cmd;
+	} else {
+		/* set ret to 0 as no timeout happened */
+		ret = 0;
 	}
 	if (atomic_read(&this_afe.status) != 0) {
 		pr_err("%s: config cmd failed\n", __func__);
@@ -4207,6 +4227,27 @@ int afe_set_lpass_clock_v2(u16 port_id, struct afe_clk_set *cfg)
 
 fail_cmd:
 	mutex_unlock(&this_afe.afe_cmd_lock);
+	return ret;
+}
+
+int afe_set_lpass_clock_v2(u16 port_id, struct afe_clk_set *cfg)
+{
+	int index = 0;
+	int ret = 0;
+
+	index = q6audio_get_port_index(port_id);
+	ret = q6audio_is_digital_pcm_interface(port_id);
+	if (ret < 0) {
+		pr_err("%s: q6audio_is_digital_pcm_interface fail %d\n",
+			__func__, ret);
+		return -EINVAL;
+	}
+
+	ret = afe_set_lpass_clk_cfg(index, cfg);
+	if (ret)
+		pr_err("%s: afe_set_lpass_clk_cfg_v2 failed %d\n",
+			__func__, ret);
+
 	return ret;
 }
 

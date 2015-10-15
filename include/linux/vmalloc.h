@@ -18,6 +18,8 @@ struct vm_area_struct;		/* vma defining user mapping in mm_types.h */
 #define VM_UNINITIALIZED	0x00000020	/* vm_struct is not fully initialized */
 #define VM_NO_GUARD		0x00000040      /* don't add guard page */
 #define VM_KASAN		0x00000080      /* has allocated kasan shadow memory */
+#define VM_LOWMEM		0x00000100	/* Tracking of direct mapped lowmem */
+
 /* bits [20..32] reserved for arch specific ioremap internals */
 
 /*
@@ -158,6 +160,13 @@ extern long vwrite(char *buf, char *addr, unsigned long count);
 extern struct list_head vmap_area_list;
 extern __init void vm_area_add_early(struct vm_struct *vm);
 extern __init void vm_area_register_early(struct vm_struct *vm, size_t align);
+extern __init int vm_area_check_early(struct vm_struct *vm);
+#ifdef CONFIG_ENABLE_VMALLOC_SAVING
+extern void mark_vmalloc_reserved_area(void *addr, unsigned long size);
+#else
+static inline void mark_vmalloc_reserved_area(void *addr, unsigned long size)
+{ };
+#endif
 
 #ifdef CONFIG_SMP
 # ifdef CONFIG_MMU
@@ -188,7 +197,12 @@ struct vmalloc_info {
 };
 
 #ifdef CONFIG_MMU
+#ifdef CONFIG_ENABLE_VMALLOC_SAVING
+extern unsigned long total_vmalloc_size;
+#define VMALLOC_TOTAL total_vmalloc_size
+#else
 #define VMALLOC_TOTAL (VMALLOC_END - VMALLOC_START)
+#endif
 extern void get_vmalloc_info(struct vmalloc_info *vmi);
 #else
 

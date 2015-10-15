@@ -130,7 +130,8 @@ static u32 dither_depth_map[DITHER_DEPTH_MAP_INDEX] = {
 #define PA_MEM_COL_VAL_REGION_MASK 0xFFFFFF
 #define PA_SIX_ZONE_INDEX_UPDATE BIT(26)
 #define PA_SIX_ZONE_VALUE_UPDATE BIT(25)
-#define PA_SIX_ZONE_CURVE_MASK 0xFFF
+#define PA_SIX_ZONE_CURVE_P0_MASK 0xFFF
+#define PA_SIX_ZONE_CURVE_P1_MASK 0xFFF0FFF
 #define PA_SIX_ZONE_ADJ_P0_MASK 0xFFFF
 #define PA_HOLD_MASK 0x3
 #define PA_HOLD_SAT_SHIFT 0
@@ -1205,47 +1206,48 @@ static void pp_pa_set_six_zone(char __iomem *base_addr,
 	char __iomem *addr = base_addr + PA_SIX_ZONE_LUT_OFF;
 	uint32_t sat_hold = 0, val_hold = 0, mem_col_hold = 0;
 	/* Update six zone memory color registers */
-	if (flags & MDP_PP_PA_SIX_ZONE_ENABLE) {
-		if (!pa_data->six_zone_len || !pa_data->six_zone_curve_p0 ||
-		    !pa_data->six_zone_curve_p1) {
-			pr_err("Invalid six zone data: len %d curve_p0 %p curve_p1 %p\n",
-			       pa_data->six_zone_len,
-			       pa_data->six_zone_curve_p0,
-			       pa_data->six_zone_curve_p1);
-			return;
-		}
+	if (!(flags & MDP_PP_PA_SIX_ZONE_ENABLE))
+		return;
 
-		writel_relaxed((pa_data->six_zone_curve_p1[0] &
-				PA_SIX_ZONE_CURVE_MASK), addr + 4);
-		/* Index Update to trigger auto-incrementing LUT accesses */
-		data = PA_SIX_ZONE_INDEX_UPDATE;
-		writel_relaxed((pa_data->six_zone_curve_p0[0] &
-				PA_SIX_ZONE_CURVE_MASK) | data, addr);
-
-		/* Remove Index Update */
-		for (i = 1; i < MDP_SIX_ZONE_LUT_SIZE; i++) {
-			writel_relaxed((pa_data->six_zone_curve_p1[i] &
-					PA_SIX_ZONE_CURVE_MASK), addr + 4);
-			writel_relaxed((pa_data->six_zone_curve_p0[i] &
-					PA_SIX_ZONE_CURVE_MASK), addr);
-		}
-		addr = base_addr + PA_SIX_ZONE_REGION_OFF;
-		writel_relaxed(pa_data->six_zone_thresh, addr);
-
-		addr = base_addr + PA_SIX_ZONE_ADJ_OFF;
-		writel_relaxed((pa_data->six_zone_adj_p0 &
-				PA_SIX_ZONE_ADJ_P0_MASK), addr);
-		addr += 4;
-		writel_relaxed(pa_data->six_zone_adj_p1, addr);
-
-		sat_hold = (pa_data->six_zone_sat_hold & PA_HOLD_MASK) <<
-			    PA_HOLD_SAT_SHIFT;
-		val_hold = (pa_data->six_zone_val_hold & PA_HOLD_MASK) <<
-			    PA_HOLD_VAL_SHIFT;
-		mem_col_hold = (sat_hold | val_hold) << PA_HOLD_SIX_ZONE_SHIFT;
-		*pa_hold |= mem_col_hold;
-		*pa_hold_mask |= PA_HOLD_SIX_ZONE_MASK;
+	if (!pa_data->six_zone_len || !pa_data->six_zone_curve_p0 ||
+	    !pa_data->six_zone_curve_p1) {
+		pr_err("Invalid six zone data: len %d curve_p0 %p curve_p1 %p\n",
+		       pa_data->six_zone_len,
+		       pa_data->six_zone_curve_p0,
+		       pa_data->six_zone_curve_p1);
+		return;
 	}
+
+	writel_relaxed((pa_data->six_zone_curve_p1[0] &
+			PA_SIX_ZONE_CURVE_P1_MASK), addr + 4);
+	/* Index Update to trigger auto-incrementing LUT accesses */
+	data = PA_SIX_ZONE_INDEX_UPDATE;
+	writel_relaxed((pa_data->six_zone_curve_p0[0] &
+			PA_SIX_ZONE_CURVE_P0_MASK) | data, addr);
+
+	/* Remove Index Update */
+	for (i = 1; i < MDP_SIX_ZONE_LUT_SIZE; i++) {
+		writel_relaxed((pa_data->six_zone_curve_p1[i] &
+				PA_SIX_ZONE_CURVE_P1_MASK), addr + 4);
+		writel_relaxed((pa_data->six_zone_curve_p0[i] &
+				PA_SIX_ZONE_CURVE_P0_MASK), addr);
+	}
+	addr = base_addr + PA_SIX_ZONE_REGION_OFF;
+	writel_relaxed(pa_data->six_zone_thresh, addr);
+
+	addr = base_addr + PA_SIX_ZONE_ADJ_OFF;
+	writel_relaxed((pa_data->six_zone_adj_p0 &
+			PA_SIX_ZONE_ADJ_P0_MASK), addr);
+	addr += 4;
+	writel_relaxed(pa_data->six_zone_adj_p1, addr);
+
+	sat_hold = (pa_data->six_zone_sat_hold & PA_HOLD_MASK) <<
+		    PA_HOLD_SAT_SHIFT;
+	val_hold = (pa_data->six_zone_val_hold & PA_HOLD_MASK) <<
+		    PA_HOLD_VAL_SHIFT;
+	mem_col_hold = (sat_hold | val_hold) << PA_HOLD_SIX_ZONE_SHIFT;
+	*pa_hold |= mem_col_hold;
+	*pa_hold_mask |= PA_HOLD_SIX_ZONE_MASK;
 }
 
 static void pp_pa_set_sts(struct pp_sts_type *pp_sts,
@@ -1552,9 +1554,9 @@ static int pp_pa_get_six_zone(char __iomem *base_addr,
 
 	for (i = 0; i < MDP_SIX_ZONE_LUT_SIZE; i++) {
 		six_zone_p1[i] = readl_relaxed(addr + 4) &
-				 PA_SIX_ZONE_CURVE_MASK;
+				 PA_SIX_ZONE_CURVE_P1_MASK;
 		six_zone_p0[i] = readl_relaxed(addr) &
-				 PA_SIX_ZONE_CURVE_MASK;
+				 PA_SIX_ZONE_CURVE_P0_MASK;
 	}
 
 	addr = base_addr + PA_SIX_ZONE_REGION_OFF;
@@ -1900,7 +1902,7 @@ static int pp_pgc_set_config(char __iomem *base_addr,
 		u32 block_type)
 {
 	char __iomem *c0 = NULL, *c1 = NULL, *c2 = NULL;
-	u32 val = 0, i = 0;
+	u32 val = 0, i = 0, *sts = NULL;
 	struct mdp_pgc_lut_data *pgc_data = NULL;
 	struct mdp_pgc_lut_data_v1_7  *pgc_data_v17 = NULL;
 
@@ -1909,31 +1911,37 @@ static int pp_pgc_set_config(char __iomem *base_addr,
 		      base_addr, cfg_data, pp_sts);
 		return -EINVAL;
 	}
+	if (block_type != DSPP && block_type != LM) {
+		pr_err("invalid block type %d\n", block_type);
+		return -EINVAL;
+	}
+	sts = (block_type == DSPP) ? &pp_sts->pgc_sts : &pp_sts->argc_sts;
 	pgc_data = (struct mdp_pgc_lut_data *) cfg_data;
-	pgc_data_v17 = (struct mdp_pgc_lut_data_v1_7 *)
-			pgc_data->cfg_payload;
-	if (pgc_data->version != mdp_pgc_v1_7 || !pgc_data_v17) {
-		pr_err("invalid pgc version %d payload %p\n",
-			pgc_data->version, pgc_data_v17);
+	if (pgc_data->version != mdp_pgc_v1_7) {
+		pr_err("invalid pgc version %d\n",
+			pgc_data->version);
 		return -EINVAL;
 	}
 	if (!(pgc_data->flags & ~(MDP_PP_OPS_READ))) {
-		pr_info("only read ops is set %d", pgc_data->flags);
+		pr_debug("only read ops is set %d", pgc_data->flags);
 		return 0;
 	}
-	if (!(pgc_data->flags & MDP_PP_OPS_WRITE)) {
-		pr_info("only read ops is set %d", pgc_data->flags);
+	if (pgc_data->flags & MDP_PP_OPS_DISABLE) {
+		pr_debug("disable GC\n");
 		goto set_ops;
 	}
+
+	pgc_data_v17 = (struct mdp_pgc_lut_data_v1_7 *) pgc_data->cfg_payload;
+	if (!pgc_data_v17) {
+		pr_err("invalid payload for GC %p\n", pgc_data_v17);
+		return -EINVAL;
+	}
+
 	if (pgc_data_v17->len != PGC_LUT_ENTRIES || !pgc_data_v17->c0_data ||
 	    !pgc_data_v17->c1_data || !pgc_data_v17->c2_data) {
 		pr_err("Invalid params entries %d c0_data %p c1_data %p c2_data %p\n",
 			pgc_data_v17->len, pgc_data_v17->c0_data,
 			pgc_data_v17->c1_data, pgc_data_v17->c2_data);
-		return -EINVAL;
-	}
-	if (block_type != DSPP && block_type != LM) {
-		pr_err("invalid block type %d\n", block_type);
 		return -EINVAL;
 	}
 	c0 = base_addr + PGC_C0_LUT_INDEX;
@@ -1961,14 +1969,15 @@ static int pp_pgc_set_config(char __iomem *base_addr,
 		val = PGC_SWAP;
 		writel_relaxed(val, base_addr + PGC_LUT_SWAP);
 	}
+
 set_ops:
 	if (pgc_data->flags & MDP_PP_OPS_DISABLE) {
-		pp_sts->pgc_sts &= ~PP_STS_ENABLE;
+		*sts &= ~PP_STS_ENABLE;
 		writel_relaxed(0, base_addr + PGC_OPMODE_OFF);
 	} else if (pgc_data->flags & MDP_PP_OPS_ENABLE) {
 		val = PGC_ENABLE;
 		writel_relaxed(val, base_addr + PGC_OPMODE_OFF);
-		pp_sts->pgc_sts |= PP_STS_ENABLE;
+		*sts |= PP_STS_ENABLE;
 	}
 	return 0;
 }

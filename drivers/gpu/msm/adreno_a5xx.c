@@ -17,7 +17,6 @@
 
 #include "adreno.h"
 #include "a5xx_reg.h"
-#include "adreno_a3xx.h"
 #include "adreno_a5xx.h"
 #include "adreno_cp_parser.h"
 #include "adreno_trace.h"
@@ -41,6 +40,8 @@ static const struct adreno_vbif_data a530_vbif[] = {
 static const struct adreno_vbif_platform a5xx_vbif_platforms[] = {
 	{ adreno_is_a530, a530_vbif },
 	{ adreno_is_a510, a530_vbif },
+	{ adreno_is_a505, a530_vbif },
+	{ adreno_is_a506, a530_vbif },
 };
 
 #define PREEMPT_RECORD(_field) \
@@ -103,9 +104,72 @@ static int _read_fw2_block_header(uint32_t *header, uint32_t id,
 
 #define AGC_POWER_CONFIG_PRODUCTION_ID	1
 
-#define GFX_DEFAULT_LEAKAGE 0x004E001A
 #define LM_DEFAULT_LIMIT    6000
 
+#define A530_DEFAULT_LEAKAGE 0x004E001A
+
+#define A530_QFPROM_RAW_PTE_ROW0_MSB 0x134
+#define A530_QFPROM_RAW_PTE_ROW2_MSB 0x144
+#define A530_QFPROM_CORR_PTE_ROW0_LSB 0x4130
+
+static void a530_efuse_leakage(struct adreno_device *adreno_dev)
+{
+	struct kgsl_device *device = &adreno_dev->dev;
+	unsigned int row0, row2;
+	unsigned int multiplier, gfx_active, leakage_pwr_on, coeff;
+
+	adreno_efuse_read_u32(adreno_dev,
+		A530_QFPROM_RAW_PTE_ROW0_MSB, &row0);
+
+	adreno_efuse_read_u32(adreno_dev,
+		A530_QFPROM_RAW_PTE_ROW2_MSB, &row2);
+
+	multiplier = (row0 >> 1) & 0x3;
+	gfx_active = (row2 >> 2) & 0xFF;
+
+	if (of_property_read_u32(device->pdev->dev.of_node,
+		"qcom,base-leakage-coefficient", &coeff))
+		return;
+
+	leakage_pwr_on = gfx_active * (1 << multiplier);
+
+	adreno_dev->lm_leakage = (leakage_pwr_on << 16) |
+		((leakage_pwr_on * coeff) / 100);
+}
+
+static void a530_efuse_speed_bin(struct adreno_device *adreno_dev)
+{
+	unsigned int val;
+
+	adreno_efuse_read_u32(adreno_dev,
+		A530_QFPROM_CORR_PTE_ROW0_LSB, &val);
+
+	adreno_dev->speed_bin =
+		(val & 0xE0000000) >> 29;
+}
+
+static const struct {
+	int (*check)(struct adreno_device *adreno_dev);
+	void (*func)(struct adreno_device *adreno_dev);
+} a5xx_efuse_funcs[] = {
+	{ adreno_is_a530, a530_efuse_leakage },
+	{ adreno_is_a530v3, a530_efuse_speed_bin },
+};
+
+static void a5xx_check_features(struct adreno_device *adreno_dev)
+{
+	unsigned int i;
+
+	if (adreno_efuse_map(adreno_dev))
+		return;
+
+	for (i = 0; i < ARRAY_SIZE(a5xx_efuse_funcs); i++) {
+		if (a5xx_efuse_funcs[i].check(adreno_dev))
+			a5xx_efuse_funcs[i].func(adreno_dev);
+	}
+
+	adreno_efuse_unmap(adreno_dev);
+}
 
 /*
  * a5xx_preemption_start() - Setup state to start preemption
@@ -123,9 +187,9 @@ static void a5xx_preemption_start(struct adreno_device *adreno_dev,
 	kgsl_sharedmem_writel(device, &rb->preemption_desc,
 		PREEMPT_RECORD(wptr), rb->wptr);
 	kgsl_regwrite(device, A5XX_CP_CONTEXT_SWITCH_RESTORE_ADDR_LO,
-		_lo_32(rb->preemption_desc.gpuaddr));
+		lower_32_bits(rb->preemption_desc.gpuaddr));
 	kgsl_regwrite(device, A5XX_CP_CONTEXT_SWITCH_RESTORE_ADDR_HI,
-		_hi_32(rb->preemption_desc.gpuaddr));
+		upper_32_bits(rb->preemption_desc.gpuaddr));
 	kgsl_sharedmem_readq(&rb->pagetable_desc, &ttbr0,
 		offsetof(struct adreno_ringbuffer_pagetable_info, ttbr0));
 	kgsl_sharedmem_readl(&rb->pagetable_desc, &contextidr,
@@ -218,7 +282,7 @@ static int a5xx_preemption_init(struct adreno_device *adreno_dev)
 
 	/* Allocate mem for storing preemption smmu record */
 	return kgsl_allocate_global(device, &iommu->smmu_info, PAGE_SIZE,
-		KGSL_MEMDESC_PRIVILEGED, 0);
+		KGSL_MEMFLAGS_GPUREADONLY, KGSL_MEMDESC_PRIVILEGED);
 }
 
 /*
@@ -287,9 +351,9 @@ static int a5xx_preemption_pre_ibsubmit(
 	 * a5xx_cp_preemption_record pointed by CONTEXT_SWITCH_SAVE_ADDR
 	 */
 	*cmds++ = cp_type4_packet(A5XX_CP_CONTEXT_SWITCH_SAVE_ADDR_LO, 1);
-	*cmds++ = _lo_32(gpuaddr);
+	*cmds++ = lower_32_bits(gpuaddr);
 	*cmds++ = cp_type4_packet(A5XX_CP_CONTEXT_SWITCH_SAVE_ADDR_HI, 1);
-	*cmds++ = _hi_32(gpuaddr);
+	*cmds++ = upper_32_bits(gpuaddr);
 
 	/* Turn CP protection ON */
 	*cmds++ = cp_type7_packet(CP_SET_PROTECTED_MODE, 1);
@@ -343,18 +407,20 @@ static int a5xx_preemption_post_ibsubmit(
 	return cmds - cmds_orig;
 }
 
-/*
- * a5xx_gpudev_init() - Initialize gpudev specific fields
- * @adreno_dev: Pointer to adreno device
- */
-static void a5xx_gpudev_init(struct adreno_device *adreno_dev)
+static void a5xx_platform_setup(struct adreno_device *adreno_dev)
 {
 	uint64_t addr;
-	struct adreno_gpudev *gpudev;
+	struct adreno_gpudev *gpudev = ADRENO_GPU_DEVICE(adreno_dev);
 
-	gpudev = ADRENO_GPU_DEVICE(adreno_dev);
+	if (adreno_is_a505_or_a506(adreno_dev)) {
+		gpudev->snapshot_data->sect_sizes->cp_meq = 32;
+		gpudev->snapshot_data->sect_sizes->cp_merciu = 1024;
+		gpudev->snapshot_data->sect_sizes->roq = 256;
 
-	if (adreno_is_a510(adreno_dev)) {
+		/* A505 & A506 having 3 XIN ports in VBIF */
+		gpudev->vbif_xin_halt_ctrl0_mask =
+				A510_VBIF_XIN_HALT_CTRL0_MASK;
+	} else if (adreno_is_a510(adreno_dev)) {
 		gpudev->snapshot_data->sect_sizes->cp_meq = 32;
 		gpudev->snapshot_data->sect_sizes->cp_merciu = 32;
 		gpudev->snapshot_data->sect_sizes->roq = 256;
@@ -371,6 +437,13 @@ static void a5xx_gpudev_init(struct adreno_device *adreno_dev)
 	addr = ALIGN(ADRENO_UCHE_GMEM_BASE + adreno_dev->gmem_size, SZ_64K);
 	adreno_dev->sp_local_gpuaddr = addr;
 	adreno_dev->sp_pvt_gpuaddr = addr + SZ_64K;
+
+	/* Setup defaults that might get changed by the fuse bits */
+	adreno_dev->lm_leakage = A530_DEFAULT_LEAKAGE;
+	adreno_dev->speed_bin = 0;
+
+	/* Check efuse bits for various capabilties */
+	a5xx_check_features(adreno_dev);
 }
 
 /**
@@ -587,12 +660,24 @@ static void a5xx_enable_pc(struct adreno_device *adreno_dev)
 	trace_adreno_sp_tp((unsigned long) __builtin_return_address(0));
 };
 
+/*
+ * The maximum payload of a type4 packet is the max size minus one for the
+ * opcode
+ */
+#define TYPE4_MAX_PAYLOAD (PM4_TYPE4_PKT_SIZE_MAX - 1)
+
 static int _gpmu_create_load_cmds(struct adreno_device *adreno_dev,
 	uint32_t *ucode, uint32_t size)
 {
 	uint32_t *start, *cmds;
 	uint32_t offset = 0;
-	uint32_t cmds_size = size + size / PM4_TYPE4_PKT_SIZE_MAX + 5;
+	uint32_t cmds_size = size;
+
+	/* Add a dword for each PM4 packet */
+	cmds_size += (size / TYPE4_MAX_PAYLOAD) + 1;
+
+	/* Add 4 dwords for the protected mode */
+	cmds_size += 4;
 
 	if (adreno_dev->gpmu_cmds != NULL)
 		return 0;
@@ -615,8 +700,8 @@ static int _gpmu_create_load_cmds(struct adreno_device *adreno_dev,
 	while (size > 0) {
 		int tmp_size = size;
 
-		if (size >= PM4_TYPE4_PKT_SIZE_MAX - 1)
-			tmp_size = PM4_TYPE4_PKT_SIZE_MAX - 1;
+		if (size >= TYPE4_MAX_PAYLOAD)
+			tmp_size = TYPE4_MAX_PAYLOAD;
 
 		*cmds++ = cp_type4_packet(
 				A5XX_GPMU_INST_RAM_BASE + offset,
@@ -633,7 +718,7 @@ static int _gpmu_create_load_cmds(struct adreno_device *adreno_dev,
 	*cmds++ = cp_type7_packet(CP_SET_PROTECTED_MODE, 1);
 	*cmds++ = 1;
 
-	adreno_dev->gpmu_cmds_size = cmds - start;
+	adreno_dev->gpmu_cmds_size = (size_t) (cmds - start);
 
 	return 0;
 }
@@ -954,16 +1039,67 @@ static int a5xx_gpmu_start(struct adreno_device *adreno_dev)
 	if (reg != 0xBABEFACE) {
 		KGSL_CORE_ERR("GPMU firmware initialization timed out\n");
 		ret = -ETIMEDOUT;
-	}
-	else
+	} else {
 		set_bit(ADRENO_DEVICE_GPMU_INITIALIZED, &adreno_dev->priv);
-
+		/*
+		 *  We are in AWARE state and IRQ line from GPU to host is
+		 *  disabled.
+		 *  Read pending GPMU interrupts and clear GPMU_RBBM_INTR_INFO.
+		 */
+		kgsl_regread(device, A5XX_GPMU_RBBM_INTR_INFO, &reg);
+		/*
+		 * Clear RBBM interrupt mask if any of GPMU interrupts
+		 * are pending.
+		 */
+		if (reg)
+			kgsl_regwrite(device,
+				A5XX_RBBM_INT_CLEAR_CMD,
+				1 << A5XX_INT_GPMU_FIRMWARE);
+	}
 	return ret;
 }
 
 struct kgsl_hwcg_reg {
 	unsigned int off;
 	unsigned int val;
+};
+
+static const struct kgsl_hwcg_reg a50x_hwcg_regs[] = {
+	{A5XX_RBBM_CLOCK_CNTL_SP0, 0x02222222},
+	{A5XX_RBBM_CLOCK_CNTL2_SP0, 0x02222220},
+	{A5XX_RBBM_CLOCK_HYST_SP0, 0x0000F3CF},
+	{A5XX_RBBM_CLOCK_DELAY_SP0, 0x00000080},
+	{A5XX_RBBM_CLOCK_CNTL_TP0, 0x22222222},
+	{A5XX_RBBM_CLOCK_CNTL2_TP0, 0x22222222},
+	{A5XX_RBBM_CLOCK_CNTL3_TP0, 0x00002222},
+	{A5XX_RBBM_CLOCK_HYST_TP0, 0x77777777},
+	{A5XX_RBBM_CLOCK_HYST2_TP0, 0x77777777},
+	{A5XX_RBBM_CLOCK_HYST3_TP0, 0x00007777},
+	{A5XX_RBBM_CLOCK_DELAY_TP0, 0x11111111},
+	{A5XX_RBBM_CLOCK_DELAY2_TP0, 0x11111111},
+	{A5XX_RBBM_CLOCK_DELAY3_TP0, 0x00001111},
+	{A5XX_RBBM_CLOCK_CNTL_UCHE, 0x22222222},
+	{A5XX_RBBM_CLOCK_HYST_UCHE, 0x00444444},
+	{A5XX_RBBM_CLOCK_DELAY_UCHE, 0x00000002},
+	{A5XX_RBBM_CLOCK_CNTL_RB0, 0x22222222},
+	{A5XX_RBBM_CLOCK_CNTL2_RB0, 0x00222222},
+	{A5XX_RBBM_CLOCK_CNTL_CCU0, 0x00022220},
+	{A5XX_RBBM_CLOCK_CNTL_RAC, 0x05522222},
+	{A5XX_RBBM_CLOCK_CNTL2_RAC, 0x00555555},
+	{A5XX_RBBM_CLOCK_HYST_RB_CCU0, 0x04040404},
+	{A5XX_RBBM_CLOCK_HYST_RAC, 0x07444044},
+	{A5XX_RBBM_CLOCK_DELAY_RB_CCU_L1_0, 0x00000002},
+	{A5XX_RBBM_CLOCK_DELAY_RAC, 0x00010011},
+	{A5XX_RBBM_CLOCK_CNTL_TSE_RAS_RBBM, 0x04222222},
+	{A5XX_RBBM_CLOCK_MODE_GPC, 0x02222222},
+	{A5XX_RBBM_CLOCK_MODE_VFD, 0x00002222},
+	{A5XX_RBBM_CLOCK_HYST_TSE_RAS_RBBM, 0x00000000},
+	{A5XX_RBBM_CLOCK_HYST_GPC, 0x04104004},
+	{A5XX_RBBM_CLOCK_HYST_VFD, 0x00000000},
+	{A5XX_RBBM_CLOCK_DELAY_HLSQ, 0x00000000},
+	{A5XX_RBBM_CLOCK_DELAY_TSE_RAS_RBBM, 0x00004000},
+	{A5XX_RBBM_CLOCK_DELAY_GPC, 0x00000200},
+	{A5XX_RBBM_CLOCK_DELAY_VFD, 0x00002222}
 };
 
 static const struct kgsl_hwcg_reg a510_hwcg_regs[] = {
@@ -1128,6 +1264,8 @@ static const struct {
 	{ adreno_is_a530v3, a530_hwcg_regs, ARRAY_SIZE(a530_hwcg_regs) },
 	{ adreno_is_a530v2, a530_hwcg_regs, ARRAY_SIZE(a530_hwcg_regs) },
 	{ adreno_is_a510, a510_hwcg_regs, ARRAY_SIZE(a510_hwcg_regs) },
+	{ adreno_is_a505, a50x_hwcg_regs, ARRAY_SIZE(a50x_hwcg_regs) },
+	{ adreno_is_a506, a50x_hwcg_regs, ARRAY_SIZE(a50x_hwcg_regs) },
 };
 
 static void a5xx_hwcg_init(struct adreno_device *adreno_dev)
@@ -1232,6 +1370,9 @@ static void _load_regfile(struct adreno_device *adreno_dev)
 	uint32_t block_size = 0, block_total = 0, fw_size;
 	uint32_t *block;
 	int ret = -EINVAL;
+
+	if (!adreno_dev->gpucore->regfw_name)
+		return;
 
 	ret = request_firmware(&fw, adreno_dev->gpucore->regfw_name,
 			device->dev);
@@ -1345,42 +1486,6 @@ static void _write_voltage_table(struct adreno_device *adreno_dev,
 	*length = levels * 2 + 2;
 }
 
-static uint32_t gfx_base_leakage(struct adreno_device *adreno_dev)
-{
-	struct kgsl_device *device = &adreno_dev->dev;
-	void __iomem *base;
-	uint32_t gfx_active, multiplier, leakage_pwr_on, coeff, leakagemem[2];
-
-	if (adreno_dev->lm_leakage)
-		return adreno_dev->lm_leakage;
-
-	adreno_dev->lm_leakage = GFX_DEFAULT_LEAKAGE;
-
-	if (of_property_read_u32_array(device->pdev->dev.of_node,
-		"qcom,gpu-efuse-leakage", leakagemem, 2))
-		return adreno_dev->lm_leakage;
-
-	if (!leakagemem[0] || !leakagemem[1])
-		return adreno_dev->lm_leakage;
-
-	base = ioremap(leakagemem[0], leakagemem[1]);
-	if (!base)
-		return adreno_dev->lm_leakage;
-
-	multiplier = (uint32_t) ((readq(base) >> 33) & 0x3);
-	gfx_active = (uint32_t) ((readq(base + 16) >> 34) & 0xff);
-	iounmap(base);
-
-	if (of_property_read_u32(device->pdev->dev.of_node,
-		"qcom,base-leakage-coefficient", &coeff) || !coeff)
-		return adreno_dev->lm_leakage;
-
-	leakage_pwr_on = gfx_active * (1 << multiplier);
-	adreno_dev->lm_leakage = (leakage_pwr_on << 16) |
-		(leakage_pwr_on * coeff) / 100;
-	return adreno_dev->lm_leakage;
-}
-
 static uint32_t lm_limit(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = &adreno_dev->dev;
@@ -1430,7 +1535,7 @@ static void a5xx_lm_init(struct adreno_device *adreno_dev)
 			(0x80000000 | device->pwrctrl.active_pwrlevel));
 	/* use the leakage to set this value at runtime */
 	kgsl_regwrite(device, A5XX_GPMU_BASE_LEAKAGE,
-		gfx_base_leakage(adreno_dev));
+		adreno_dev->lm_leakage);
 
 	/* Enable the power threshold and set it to 6000m */
 	kgsl_regwrite(device, A5XX_GPMU_GPMU_PWR_THRESHOLD,
@@ -1480,6 +1585,20 @@ static void a5xx_lm_enable(struct adreno_device *adreno_dev)
 	kgsl_regwrite(device, A5XX_GPMU_CLOCK_THROTTLE_CTRL, val);
 }
 
+static int gpmu_set_level(struct kgsl_device *device, unsigned int val)
+{
+	unsigned int reg;
+	int retry = 20;
+
+	kgsl_regwrite(device, A5XX_GPMU_GPMU_VOLTAGE, val);
+
+	do {
+		kgsl_regread(device, A5XX_GPMU_GPMU_VOLTAGE, &reg);
+	} while ((reg & 0x80000000) && retry--);
+
+	return (reg & 0x80000000) ? -ETIMEDOUT : 0;
+}
+
 /*
  * a5xx_pwrlevel_change_settings() - Program the hardware during power level
  * transitions
@@ -1514,16 +1633,16 @@ static void a5xx_pwrlevel_change_settings(struct adreno_device *adreno_dev,
 	else if (post == 1)
 		pre = 0;
 
-	if (pre)
-		kgsl_regwrite(device, A5XX_GPMU_GPMU_VOLTAGE,
-			(0x80000010 | postlevel));
-
-	if (pre && post)
-		udelay(3);
+	if (pre) {
+		if (gpmu_set_level(device, (0x80000010 | postlevel)))
+			KGSL_CORE_ERR(
+				"GPMU pre powerlevel did not stabilize\n");
+	}
 
 	if (post) {
-		kgsl_regwrite(device, A5XX_GPMU_GPMU_VOLTAGE,
-			(0x80000000 | postlevel));
+		if (gpmu_set_level(device, (0x80000000 | postlevel)))
+			KGSL_CORE_ERR(
+				"GPMU post powerlevel did not stabilize\n");
 		pre = 0;
 	}
 }
@@ -1706,7 +1825,12 @@ static void a5xx_start(struct adreno_device *adreno_dev)
 	 * Below CP registers are 0x0 by default, program init
 	 * values based on a5xx flavor.
 	 */
-	if (adreno_is_a510(adreno_dev)) {
+	if (adreno_is_a505_or_a506(adreno_dev)) {
+		kgsl_regwrite(device, A5XX_CP_MEQ_THRESHOLDS, 0x20);
+		kgsl_regwrite(device, A5XX_CP_MERCIU_SIZE, 0x400);
+		kgsl_regwrite(device, A5XX_CP_ROQ_THRESHOLDS_2, 0x40000030);
+		kgsl_regwrite(device, A5XX_CP_ROQ_THRESHOLDS_1, 0x20100D0A);
+	} else if (adreno_is_a510(adreno_dev)) {
 		kgsl_regwrite(device, A5XX_CP_MEQ_THRESHOLDS, 0x20);
 		kgsl_regwrite(device, A5XX_CP_MERCIU_SIZE, 0x20);
 		kgsl_regwrite(device, A5XX_CP_ROQ_THRESHOLDS_2, 0x40000030);
@@ -1720,9 +1844,12 @@ static void a5xx_start(struct adreno_device *adreno_dev)
 
 	/*
 	 * vtxFifo and primFifo thresholds default values
-	 * are different for A510.
+	 * are different.
 	 */
-	if (adreno_is_a510(adreno_dev))
+	if (adreno_is_a505_or_a506(adreno_dev))
+		kgsl_regwrite(device, A5XX_PC_DBG_ECO_CNTL,
+						(0x100 << 11 | 0x100 << 22));
+	else if (adreno_is_a510(adreno_dev))
 		kgsl_regwrite(device, A5XX_PC_DBG_ECO_CNTL,
 						(0x200 << 11 | 0x200 << 22));
 	else
@@ -1843,9 +1970,9 @@ static int _preemption_init(
 	 * a5xx_cp_preemption_record pointed by CONTEXT_SWITCH_SAVE_ADDR
 	 */
 	*cmds++ = cp_type4_packet(A5XX_CP_CONTEXT_SWITCH_SAVE_ADDR_LO, 1);
-	*cmds++ = _lo_32(gpuaddr);
+	*cmds++ = lower_32_bits(gpuaddr);
 	*cmds++ = cp_type4_packet(A5XX_CP_CONTEXT_SWITCH_SAVE_ADDR_HI, 1);
-	*cmds++ = _hi_32(gpuaddr);
+	*cmds++ = upper_32_bits(gpuaddr);
 
 	/* Turn CP protection ON */
 	*cmds++ = cp_type7_packet(CP_SET_PROTECTED_MODE, 1);
@@ -1895,10 +2022,10 @@ static void a5xx_post_start(struct adreno_device *adreno_dev)
 	if (adreno_is_preemption_enabled(adreno_dev))
 		cmds += _preemption_init(adreno_dev, rb, cmds, NULL);
 
+	rb->wptr = rb->wptr - (42 - (cmds - start));
+
 	if (cmds == start)
 		return;
-
-	rb->wptr = rb->wptr - (42 - (cmds - start));
 
 	adreno_ringbuffer_submit(rb, NULL);
 
@@ -2077,15 +2204,15 @@ static int a5xx_microcode_load(struct adreno_device *adreno_dev,
 
 	gpuaddr = adreno_dev->pm4.gpuaddr;
 	kgsl_regwrite(device, A5XX_CP_PM4_INSTR_BASE_LO,
-				(uint)gpuaddr);
+				lower_32_bits(gpuaddr));
 	kgsl_regwrite(device, A5XX_CP_PM4_INSTR_BASE_HI,
-				((uint64_t)(gpuaddr) >> 32));
+				upper_32_bits(gpuaddr));
 
 	gpuaddr = adreno_dev->pfp.gpuaddr;
 	kgsl_regwrite(device, A5XX_CP_PFP_INSTR_BASE_LO,
-				(uint)gpuaddr);
+				lower_32_bits(gpuaddr));
 	kgsl_regwrite(device, A5XX_CP_PFP_INSTR_BASE_HI,
-				((uint64_t)(gpuaddr) >> 32));
+				upper_32_bits(gpuaddr));
 
 	/*
 	 * Resume call to write the zap shader base address into the
@@ -2564,6 +2691,7 @@ static unsigned int a5xx_register_offsets[ADRENO_REG_REGISTER_MAX] = {
 	ADRENO_REG_DEFINE(ADRENO_REG_CP_RB_BASE_HI, A5XX_CP_RB_BASE_HI),
 	ADRENO_REG_DEFINE(ADRENO_REG_CP_RB_RPTR, A5XX_CP_RB_RPTR),
 	ADRENO_REG_DEFINE(ADRENO_REG_CP_RB_WPTR, A5XX_CP_RB_WPTR),
+	ADRENO_REG_DEFINE(ADRENO_REG_CP_CNTL, A5XX_CP_CNTL),
 	ADRENO_REG_DEFINE(ADRENO_REG_CP_ME_CNTL, A5XX_CP_ME_CNTL),
 	ADRENO_REG_DEFINE(ADRENO_REG_CP_RB_CNTL, A5XX_CP_RB_CNTL),
 	ADRENO_REG_DEFINE(ADRENO_REG_CP_IB1_BASE, A5XX_CP_IB1_BASE),
@@ -2767,12 +2895,12 @@ static void a5xx_gpmu_int_callback(struct adreno_device *adreno_dev, int bit)
 			/* Stop GPMU */
 			kgsl_regwrite(device, A5XX_GPMU_CM3_SYSRESET, 1);
 
-			queue_work(device->work_queue, &adreno_dev->gpmu_work);
+			kgsl_schedule_work(&adreno_dev->gpmu_work);
 
 			KGSL_DRV_CRIT_RATELIMIT(device,
 						"GPMU: Watchdog bite\n");
 		}
-	} else
+	} else if (!(reg & BIT(1)))
 		KGSL_DRV_CRIT_RATELIMIT(device,
 					"GPMU: Unknown interrupt 0x%08X\n",
 					reg);
@@ -2790,10 +2918,12 @@ static void a5xx_gpmu_int_callback(struct adreno_device *adreno_dev, int bit)
 	 (1 << A5XX_INT_CP_IB1) |			\
 	 (1 << A5XX_INT_CP_IB2) |			\
 	 (1 << A5XX_INT_CP_RB) |			\
+	 (1 << A5XX_INT_CP_CACHE_FLUSH_TS) |		\
 	 (1 << A5XX_INT_RBBM_ATB_BUS_OVERFLOW) |	\
 	 (1 << A5XX_INT_UCHE_OOB_ACCESS) |		\
 	 (1 << A5XX_INT_UCHE_TRAP_INTR) |		\
 	 (1 << A5XX_INT_CP_SW) |			\
+	 (1 << A5XX_INT_GPMU_FIRMWARE) |                \
 	 (1 << A5XX_INT_GPMU_VOLTAGE_DROOP))
 
 
@@ -2826,7 +2956,7 @@ static struct adreno_irq_funcs a5xx_irq_funcs[] = {
 	ADRENO_IRQ_CALLBACK(NULL), /* 17 - CP_RB_DONE_TS */
 	ADRENO_IRQ_CALLBACK(NULL), /* 18 - CP_WT_DONE_TS */
 	ADRENO_IRQ_CALLBACK(NULL), /* 19 - UNKNOWN_1 */
-	ADRENO_IRQ_CALLBACK(NULL), /* 20 - CP_CACHE_FLUSH_TS */
+	ADRENO_IRQ_CALLBACK(adreno_cp_callback), /* 20 - CP_CACHE_FLUSH_TS */
 	/* 21 - UNUSED_2 */
 	ADRENO_IRQ_CALLBACK(NULL),
 	ADRENO_IRQ_CALLBACK(a5xx_err_callback), /* 22 - RBBM_ATB_BUS_OVERFLOW */
@@ -2850,7 +2980,7 @@ static struct adreno_irq a5xx_irq = {
 
 /*
  * Default size for CP queues for A5xx targets. You must
- * overwrite these value in gpudev_init function for
+ * overwrite these value in platform_setup function for
  * A5xx derivatives if size differs.
  */
 static struct adreno_snapshot_sizes a5xx_snap_sizes = {
@@ -3386,7 +3516,7 @@ struct adreno_gpudev adreno_a5xx_gpudev = {
 	.snapshot_data = &a5xx_snapshot_data,
 	.irq_trace = trace_kgsl_a5xx_irq_status,
 	.num_prio_levels = ADRENO_PRIORITY_MAX_RB_LEVELS,
-	.gpudev_init = a5xx_gpudev_init,
+	.platform_setup = a5xx_platform_setup,
 	.rb_init = a5xx_rb_init,
 	.hw_init = a5xx_hw_init,
 	.switch_to_unsecure_mode = a5xx_switch_to_unsecure_mode,

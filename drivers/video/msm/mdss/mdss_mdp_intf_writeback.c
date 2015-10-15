@@ -789,6 +789,7 @@ static int mdss_mdp_writeback_display(struct mdss_mdp_ctl *ctl, void *arg)
 	flush_bits |= BIT(16); /* WB */
 	mdp_wb_write(ctx, MDSS_MDP_REG_WB_DST_ADDR_SW_STATUS, ctl->is_secure);
 	mdss_mdp_ctl_write(ctl, MDSS_MDP_REG_CTL_FLUSH, flush_bits);
+	MDSS_XLOG(ctl->intf_num, flush_bits);
 
 	reinit_completion(&ctx->wb_comp);
 	mdss_mdp_irq_enable(ctx->intr_type, ctx->intf_num);
@@ -819,7 +820,7 @@ int mdss_mdp_writeback_start(struct mdss_mdp_ctl *ctl)
 	struct mdss_mdp_writeback_ctx *ctx;
 	struct mdss_mdp_writeback *wb;
 	u32 mem_sel;
-	u32 mixer_type = 0;
+	u32 mixer_type = MDSS_MDP_MIXER_TYPE_UNUSED;
 
 	pr_debug("start ctl=%d\n", ctl->num);
 
@@ -841,19 +842,19 @@ int mdss_mdp_writeback_start(struct mdss_mdp_ctl *ctl)
 		pr_err("invalid writeback mode %d\n", mem_sel);
 		return -EINVAL;
 	}
+
 	if (ctl->mixer_left)
 		mixer_type = ctl->mixer_left->type;
-	else
-		mixer_type = MDSS_MDP_MIXER_TYPE_UNUSED;
 
 	if (mdss_mdp_is_cdm_supported(ctl->mdata, ctl->intf_type,
-				      ctl->mixer_left->type)) {
+				mixer_type)) {
 		ctl->cdm = mdss_mdp_cdm_init(ctl, MDP_CDM_CDWN_OUTPUT_WB);
-		if (!ctl->cdm) {
+		if (IS_ERR_OR_NULL(ctl->cdm)) {
 			pr_err("%s failed to init cdm\n", __func__);
 			return -EBUSY;
 		}
 	} else {
+		ctl->cdm = NULL;
 		pr_debug("%s: cdm not supported\n", __func__);
 	}
 	ctl->priv_data = ctx;

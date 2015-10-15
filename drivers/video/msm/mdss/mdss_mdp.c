@@ -134,6 +134,12 @@ static struct msm_bus_scale_pdata mdp_reg_bus_scale_table = {
 	.active_only = true,
 };
 
+u32 invalid_mdp107_wb_output_fmts[] = {
+	MDP_XRGB_8888,
+	MDP_RGBX_8888,
+	MDP_BGRX_8888,
+};
+
 static void mdss_mdp_footswitch_ctrl(struct mdss_data_type *mdata, int on);
 static int mdss_mdp_parse_dt(struct platform_device *pdev);
 static int mdss_mdp_parse_dt_pipe(struct platform_device *pdev);
@@ -365,19 +371,26 @@ static int mdss_mdp_bus_scale_set_quota(u64 ab_quota_rt, u64 ab_quota_nrt,
 	return rc;
 }
 
-struct reg_bus_client *mdss_reg_bus_vote_client_create()
+struct reg_bus_client *mdss_reg_bus_vote_client_create(char *client_name)
 {
 	struct reg_bus_client *client;
 	static u32 id;
+
+	if (client_name == NULL) {
+		pr_err("client name is null\n");
+		return ERR_PTR(-EINVAL);
+	}
 
 	client = kzalloc(sizeof(struct reg_bus_client), GFP_KERNEL);
 	if (!client)
 		return ERR_PTR(-ENOMEM);
 
 	mutex_lock(&mdss_res->reg_bus_lock);
+	strlcpy(client->name, client_name, MAX_CLIENT_NAME_LEN);
 	client->usecase_ndx = VOTE_INDEX_DISABLE;
 	client->id = id;
-	pr_debug("bus vote client created:%p id :%d\n", client, id);
+	pr_debug("bus vote client %s created:%p id :%d\n", client_name,
+		client, id);
 	id++;
 	list_add(&client->list, &mdss_res->reg_bus_clist);
 	mutex_unlock(&mdss_res->reg_bus_lock);
@@ -390,8 +403,8 @@ void mdss_reg_bus_vote_client_destroy(struct reg_bus_client *client)
 	if (!client) {
 		pr_err("reg bus vote: invalid client handle\n");
 	} else {
-		pr_debug("bus vote client destroyed:%p id:%u\n",
-			client, client->id);
+		pr_debug("bus vote client %s destroyed:%p id:%u\n",
+			client->name, client, client->id);
 		mutex_lock(&mdss_res->reg_bus_lock);
 		list_del_init(&client->list);
 		mutex_unlock(&mdss_res->reg_bus_lock);
@@ -424,9 +437,9 @@ int mdss_update_reg_bus_vote(struct reg_bus_client *bus_client, u32 usecase_ndx)
 		mdss_res->reg_bus_usecase_ndx = max_usecase_ndx;
 	}
 
-	pr_debug("%pS: changed=%d current idx=%d request client id:%u idx:%d\n",
+	pr_debug("%pS: changed=%d current idx=%d request client %s id:%u idx:%d\n",
 		__builtin_return_address(0), changed, max_usecase_ndx,
-		bus_client->id, usecase_ndx);
+		bus_client->name, bus_client->id, usecase_ndx);
 	MDSS_XLOG(changed, max_usecase_ndx, bus_client->id, usecase_ndx);
 	if (changed)
 		ret = msm_bus_scale_client_update_request(mdss_res->reg_bus_hdl,
@@ -879,6 +892,8 @@ void mdss_bus_bandwidth_ctrl(int enable)
 		mdata->bus_ref_cnt, changed, enable);
 
 	if (changed) {
+		MDSS_XLOG(mdata->bus_ref_cnt, enable);
+
 		if (!enable) {
 			if (!mdata->handoff_pending) {
 				msm_bus_scale_client_update_request(
@@ -1083,7 +1098,7 @@ static int mdss_mdp_irq_clk_setup(struct mdss_data_type *mdata)
 		mdata->vdd_cx = NULL;
 	}
 
-	mdata->reg_bus_clt = mdss_reg_bus_vote_client_create();
+	mdata->reg_bus_clt = mdss_reg_bus_vote_client_create("mdp\0");
 	if (IS_ERR_OR_NULL(mdata->reg_bus_clt)) {
 		pr_err("bus client register failed\n");
 		return PTR_ERR(mdata->reg_bus_clt);
@@ -1183,6 +1198,9 @@ static void mdss_mdp_hw_rev_caps_init(struct mdss_data_type *mdata)
 	case MDSS_MDP_HW_REV_107:
 		mdss_set_quirk(mdata, MDSS_QUIRK_ROTCDP);
 	case MDSS_MDP_HW_REV_107_1:
+		mdss_mdp_format_flag_removal(invalid_mdp107_wb_output_fmts,
+			ARRAY_SIZE(invalid_mdp107_wb_output_fmts),
+			VALID_MDP_WB_INTF_FORMAT);
 	case MDSS_MDP_HW_REV_107_2:
 		mdata->max_target_zorder = 7; /* excluding base layer */
 		mdata->max_cursor_size = 128;
@@ -1191,6 +1209,7 @@ static void mdss_mdp_hw_rev_caps_init(struct mdss_data_type *mdata)
 		mdata->apply_post_scale_bytes = false;
 		mdata->hflip_buffer_reused = false;
 		mdata->min_prefill_lines = 21;
+		mdata->has_ubwc = true;
 		set_bit(MDSS_QOS_PER_PIPE_IB, mdata->mdss_qos_map);
 		set_bit(MDSS_QOS_OVERHEAD_FACTOR, mdata->mdss_qos_map);
 		set_bit(MDSS_QOS_CDP, mdata->mdss_qos_map);
@@ -1200,6 +1219,8 @@ static void mdss_mdp_hw_rev_caps_init(struct mdss_data_type *mdata)
 		set_bit(MDSS_CAPS_YUV_CONFIG, mdata->mdss_caps_map);
 		set_bit(MDSS_CAPS_SCM_RESTORE_NOT_REQUIRED,
 			mdata->mdss_caps_map);
+		set_bit(MDSS_CAPS_3D_MUX_UNDERRUN_RECOVERY_SUPPORTED,
+			mdata->mdss_caps_map);
 		mdss_mdp_init_default_prefill_factors(mdata);
 		break;
 	case MDSS_MDP_HW_REV_105:
@@ -1208,6 +1229,8 @@ static void mdss_mdp_hw_rev_caps_init(struct mdss_data_type *mdata)
 		mdata->max_target_zorder = 7; /* excluding base layer */
 		mdata->max_cursor_size = 128;
 		set_bit(MDSS_QOS_OTLIM, mdata->mdss_qos_map);
+		set_bit(MDSS_CAPS_3D_MUX_UNDERRUN_RECOVERY_SUPPORTED,
+			mdata->mdss_caps_map);
 		break;
 	case MDSS_MDP_HW_REV_110:
 		mdss_set_quirk(mdata, MDSS_QUIRK_BWCPANIC);
@@ -1562,6 +1585,8 @@ static ssize_t mdss_mdp_show_capabilities(struct device *dev,
 	SPRINT("features=");
 	if (mdata->has_bwc)
 		SPRINT(" bwc");
+	if (mdata->has_ubwc)
+		SPRINT(" ubwc");
 	if (mdata->has_decimation)
 		SPRINT(" decimation");
 	if (mdata->highest_bank_bit && !mdss_mdp_is_ubwc_supported(mdata))
@@ -3505,7 +3530,8 @@ int mdss_mdp_wait_for_xin_halt(u32 xin_id, bool is_vbif_nrt)
 	if (rc == -ETIMEDOUT) {
 		pr_err("VBIF client %d not halting. TIMEDOUT.\n",
 			xin_id);
-		MDSS_XLOG_TOUT_HANDLER("mdp", "vbif", "vbif_nrt", "panic");
+		MDSS_XLOG_TOUT_HANDLER("mdp", "vbif", "vbif_nrt",
+			"dbg_bus", "vbif_dbg_bus", "panic");
 	} else {
 		pr_debug("VBIF client %d is halted\n", xin_id);
 	}
@@ -3786,6 +3812,9 @@ static void mdss_mdp_footswitch_ctrl(struct mdss_data_type *mdata, int on)
 
 	if (!mdata->fs)
 		return;
+
+	MDSS_XLOG(on, mdata->fs_ena, mdata->idle_pc, mdata->en_svs_high,
+		atomic_read(&mdata->active_intf_cnt));
 
 	if (on) {
 		if (!mdata->fs_ena) {

@@ -15,7 +15,6 @@
 #include <linux/compiler.h>
 #include <linux/types.h>
 #include <linux/io.h>
-#include <linux/pm_qos.h>
 #include <linux/ratelimit.h>
 #include <linux/mmc/host.h>
 
@@ -27,6 +26,7 @@ struct sdhci_next {
 enum sdhci_power_policy {
 	SDHCI_PERFORMANCE_MODE,
 	SDHCI_POWER_SAVE_MODE,
+	SDHCI_POWER_POLICY_NUM /* Always keep this one last */
 };
 
 struct sdhci_host {
@@ -167,7 +167,6 @@ struct sdhci_host {
  * calculated based on the base clock.
  */
 #define SDHCI_QUIRK2_DIVIDE_TOUT_BY_4			(1<<16)
-
 /*
  * Some SDHC controllers are unable to handle data-end bit error in
  * 1-bit mode of SDIO.
@@ -184,6 +183,10 @@ struct sdhci_host {
 #define SDHCI_QUIRK_NONSTANDARD_CLOCK			(1<<19)
 /* Capability register bit-63 indicates HS400 support */
 #define SDHCI_QUIRK2_CAPS_BIT63_FOR_HS400		(1<<20)
+/* Use reset workaround in case sdhci reset timeouts */
+#define SDHCI_QUIRK2_USE_RESET_WORKAROUND		(1<<21)
+/* Some controllers doesn't have have any LED control */
+#define SDHCI_QUIRK2_BROKEN_LED_CONTROL			(1<<22)
 
 	int irq;		/* Device IRQ */
 	void __iomem *ioaddr;	/* Mapped address */
@@ -278,12 +281,7 @@ struct sdhci_host {
 	unsigned int		tuning_count;	/* Timer count for re-tuning */
 	unsigned int		tuning_mode;	/* Re-tuning mode supported by host */
 #define SDHCI_TUNING_MODE_1	0
-	unsigned int		cpu_dma_latency_us;
-	struct pm_qos_request	pm_qos_req_dma;
 	struct timer_list	tuning_timer;	/* Timer for tuning */
-
-	unsigned int pm_qos_timeout_us;         /* timeout for PM QoS request */
-	struct device_attribute pm_qos_tout;
 
 	struct sdhci_next next_data;
 	ktime_t data_start_time;
@@ -295,6 +293,9 @@ struct sdhci_host {
 	u32 auto_cmd_err_sts;
 	struct ratelimit_state dbg_dump_rs;
 	struct cmdq_host *cq_host;
+	int reset_wa_applied; /* reset workaround status */
+	ktime_t reset_wa_t; /* time when the reset workaround is applied */
+	int reset_wa_cnt; /* total number of times workaround is used */
 
 	unsigned long private[0] ____cacheline_aligned;
 };

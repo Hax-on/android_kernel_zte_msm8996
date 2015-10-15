@@ -165,6 +165,7 @@ void msm_dcvs_init_load(struct msm_vidc_inst *inst)
 	struct hal_buffer_requirements *output_buf_req;
 	struct dcvs_stats *dcvs;
 	const unsigned int load_uhd = NUM_MBS_PER_SEC(2160, 3840, 30),
+		load_dci = NUM_MBS_PER_SEC(2160, 4096, 24),
 		load_1080p = NUM_MBS_PER_SEC(1088, 1920, 60);
 
 	dprintk(VIDC_DBG, "Init DCVS Load\n");
@@ -186,9 +187,12 @@ void msm_dcvs_init_load(struct msm_vidc_inst *inst)
 		} else if (dcvs->load > load_1080p) {
 			dcvs->load_low = DCVS_DEC_SVS_LOAD;
 			dcvs->load_high = DCVS_DEC_NOMINAL_LOAD;
+		} else {
+			dcvs->load_low = DCVS_DEC_SVS2_LOAD;
+			dcvs->load_high = DCVS_DEC_SVS_LOAD;
 		}
 	} else { /* encoder */
-		if (dcvs->load >= load_uhd) {
+		if (dcvs->load >= min(load_uhd, load_dci)) {
 			dcvs->load_low = DCVS_ENC_NOMINAL_LOAD;
 			dcvs->load_high = DCVS_ENC_TURBO_LOAD;
 		}
@@ -285,11 +289,11 @@ void msm_dcvs_monitor_buffer(struct msm_vidc_inst *inst)
 		dcvs->threshold_disp_buf_high = new_ftb;
 		if (dcvs->threshold_disp_buf_high <=
 			dcvs->threshold_disp_buf_low +
-			DCVS_DEC_EXTRA_OUTPUT_BUFFERS) {
+			DCVS_BUFFER_SAFEGUARD) {
 			dcvs->threshold_disp_buf_high =
 				dcvs->threshold_disp_buf_low +
-				DCVS_DEC_EXTRA_OUTPUT_BUFFERS
-				+ (DCVS_DEC_EXTRA_OUTPUT_BUFFERS == 0);
+				DCVS_BUFFER_SAFEGUARD
+				+ (DCVS_BUFFER_SAFEGUARD == 0);
 		}
 
 		dcvs->threshold_disp_buf_high =
@@ -527,10 +531,12 @@ static bool msm_dcvs_check_supported(struct msm_vidc_inst *inst)
 			(inst->fmts[OUTPUT_PORT]->fourcc ==
 				V4L2_PIX_FMT_VP8) ||
 			(inst->fmts[OUTPUT_PORT]->fourcc ==
+				V4L2_PIX_FMT_VP9) ||
+			(inst->fmts[OUTPUT_PORT]->fourcc ==
 				V4L2_PIX_FMT_H264_NO_SC);
 		if (!is_codec_supported ||
 			!IS_VALID_DCVS_SESSION(num_mbs_per_frame,
-					DCVS_MIN_SUPPORTED_MBPERFRAME))
+					DCVS_DEC_MIN_SUPPORTED_MBPERFRAME))
 			return false;
 
 		if (!output_buf_req) {
@@ -542,8 +548,7 @@ static bool msm_dcvs_check_supported(struct msm_vidc_inst *inst)
 	} else if (instance_count == 1 &&
 			inst->session_type == MSM_VIDC_ENCODER &&
 			!msm_comm_turbo_session(inst)) {
-		if (!msm_dcvs_enc_check(inst) ||
-			!inst->dcvs.is_additional_buff_added)
+		if (!msm_dcvs_enc_check(inst))
 			return false;
 	} else {
 		/*
@@ -591,10 +596,8 @@ int msm_dcvs_get_extra_buff_count(struct msm_vidc_inst *inst)
 	}
 
 	if (inst->session_type == MSM_VIDC_ENCODER) {
-		if (msm_dcvs_enc_check(inst)) {
-			if (!inst->dcvs.is_additional_buff_added)
-				extra_buffer = DCVS_ENC_EXTRA_OUTPUT_BUFFERS;
-		}
+		if (msm_dcvs_enc_check(inst))
+			extra_buffer = DCVS_ENC_EXTRA_OUTPUT_BUFFERS;
 	} else if (inst->session_type == MSM_VIDC_DECODER) {
 		if (msm_dcvs_check_supported(inst))
 			extra_buffer = DCVS_DEC_EXTRA_OUTPUT_BUFFERS;
@@ -602,22 +605,6 @@ int msm_dcvs_get_extra_buff_count(struct msm_vidc_inst *inst)
 	return extra_buffer;
 }
 
-void msm_dcvs_set_buff_req_handled(struct msm_vidc_inst *inst)
-{
-	if (!inst) {
-		dprintk(VIDC_ERR, "%s Invalid args\n", __func__);
-		return;
-	}
-
-	if (inst->session_type == MSM_VIDC_ENCODER) {
-		if (msm_dcvs_enc_check(inst)) {
-			if (!inst->dcvs.is_additional_buff_added)
-				inst->dcvs.is_additional_buff_added = true;
-				dprintk(VIDC_PROF,
-					"ENC_DCVS: additional o/p buffer added");
-		}
-	}
-}
 
 void msm_dcvs_enc_set_power_save_mode(struct msm_vidc_inst *inst,
 					bool is_power_save_mode)

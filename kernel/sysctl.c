@@ -368,6 +368,22 @@ static struct ctl_table kern_table[] = {
 		.mode           = 0644,
 		.proc_handler   = sched_window_update_handler,
 	},
+#ifdef CONFIG_SCHED_QHMP
+	{
+		.procname	= "sched_small_task",
+		.data		= &sysctl_sched_small_task_pct,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= sched_hmp_proc_update_handler,
+	},
+	{
+		.procname	= "sched_min_runtime",
+		.data		= &sysctl_sched_min_runtime,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler   = sched_hmp_proc_update_handler,
+	},
+#endif
 	{
 		.procname	= "sched_spill_load",
 		.data		= &sysctl_sched_spill_load_pct,
@@ -418,6 +434,7 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= sched_hmp_proc_update_handler,
 	},
+#ifndef CONFIG_SCHED_QHMP
 	{
 		.procname	= "sched_lowspill_freq",
 		.data		= &sysctl_sched_lowspill_freq,
@@ -433,6 +450,14 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= proc_dointvec,
 	},
 	{
+		.procname       = "sched_new_task_windows",
+		.data           = &sysctl_sched_new_task_windows,
+		.maxlen         = sizeof(unsigned int),
+		.mode           = 0644,
+		.proc_handler   = sched_window_update_handler,
+	},
+#endif
+	{
 		.procname	= "sched_boost",
 		.data		= &sysctl_sched_boost,
 		.maxlen		= sizeof(unsigned int),
@@ -442,6 +467,15 @@ static struct ctl_table kern_table[] = {
 	{
 		.procname	= "sched_enable_power_aware",
 		.data		= &sysctl_sched_enable_power_aware,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
+	{
+		.procname	= "power_aware_timer_migration",
+		.data		= &sysctl_power_aware_timer_migration,
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,

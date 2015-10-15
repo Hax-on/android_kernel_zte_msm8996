@@ -9,6 +9,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+
 &soc {
 	qcom,spm@9A10000 {
 		compatible = "qcom,spm-v2";
@@ -45,19 +48,31 @@
 				label = "system-wfi";
 				qcom,psci-mode = <0>;
 				qcom,latency-us = <100>;
-				qcom,ss-power = <1050>;
-				qcom,energy-overhead = <23000>;
+				qcom,ss-power = <725>;
+				qcom,energy-overhead = <85000>;
 				qcom,time-overhead = <120>;
 			};
-			qcom,pm-cluster-level@1{
+			qcom,pm-cluster-level@1{ /* E3-M2 */
+				reg = <1>;
+				label = "system-ret";
+				qcom,spm-cbf-mode = "fpc";
+				qcom,spm-l3-mode = "fpc";
+				qcom,psci-mode = <0x23>;
+				qcom,latency-us = <350>;
+				qcom,ss-power = <530>;
+				qcom,energy-overhead = <160000>;
+				qcom,time-overhead = <550>;
+				qcom,min-child-idx = <1>;
+			};
+			qcom,pm-cluster-level@2{ /* E4-M3 */
 				reg = <1>;
 				label = "system-fpc";
 				qcom,spm-cbf-mode = "fpc";
 				qcom,spm-l3-mode = "fpc";
 				qcom,psci-mode = <0x34>;
 				qcom,latency-us = <11000>;
-				qcom,ss-power = <72>;
-				qcom,energy-overhead = <90000>;
+				qcom,ss-power = <120>;
+				qcom,energy-overhead = <280000>;
 				qcom,time-overhead = <3200>;
 				qcom,min-child-idx = <2>;
 				qcom,notify-rpm;
@@ -80,8 +95,8 @@
 					label = "pwr-l2-wfi";
 					qcom,psci-mode = <1>;
 					qcom,latency-us = <40>;
-					qcom,ss-power = <800>;
-					qcom,energy-overhead = <22000>;
+					qcom,ss-power = <740>;
+					qcom,energy-overhead = <65000>;
 					qcom,time-overhead = <85>;
 				};
 
@@ -89,10 +104,10 @@
 					reg = <1>;
 					label = "pwr-l2-gdhs";
 					qcom,psci-mode = <3>;
-					qcom,latency-us = <600>;
-					qcom,ss-power = <350>;
-					qcom,energy-overhead = <30000>;
-					qcom,time-overhead = <1250>;
+					qcom,latency-us = <90>;
+					qcom,ss-power = <660>;
+					qcom,energy-overhead = <135000>;
+					qcom,time-overhead = <180>;
 					qcom,min-child-idx = <1>;
 				};
 
@@ -101,9 +116,9 @@
 					label = "pwr-l2-fpc";
 					qcom,psci-mode = <4>;
 					qcom,latency-us = <700>;
-					qcom,ss-power = <180>;
-					qcom,energy-overhead = <65000>;
-					qcom,time-overhead = <1900>;
+					qcom,ss-power = <450>;
+					qcom,energy-overhead = <210000>;
+					qcom,time-overhead = <11500>;
 					qcom,min-child-idx = <1>;
 					qcom,is-reset;
 				};
@@ -119,8 +134,8 @@
 						qcom,psci-cpu-mode = <1>;
 						qcom,spm-cpu-mode = "wfi";
 						qcom,latency-us = <20>;
-						qcom,ss-power = <500>;
-						qcom,energy-overhead = <15000>;
+						qcom,ss-power = <750>;
+						qcom,energy-overhead = <32000>;
 						qcom,time-overhead = <60>;
 					};
 
@@ -128,10 +143,10 @@
 						reg = <1>;
 						qcom,spm-cpu-mode = "fpc";
 						qcom,psci-cpu-mode = <4>;
-						qcom,latency-us = <300>;
-						qcom,ss-power = <180>;
-						qcom,energy-overhead = <23000>;
-						qcom,time-overhead = <550>;
+						qcom,latency-us = <80>;
+						qcom,ss-power = <700>;
+						qcom,energy-overhead = <126480>;
+						qcom,time-overhead = <160>;
 					};
 				};
 			};
@@ -152,8 +167,8 @@
 					label = "perf-l2-wfi";
 					qcom,psci-mode = <1>;
 					qcom,latency-us = <40>;
-					qcom,ss-power = <1000>;
-					qcom,energy-overhead = <24000>;
+					qcom,ss-power = <740>;
+					qcom,energy-overhead = <70000>;
 					qcom,time-overhead = <80>;
 				};
 
@@ -161,10 +176,10 @@
 					reg = <1>;
 					label = "perf-l2-gdhs";
 					qcom,psci-mode = <3>;
-					qcom,latency-us = <700>;
-					qcom,ss-power = <500>;
-					qcom,energy-overhead = <33000>;
-					qcom,time-overhead = <1350>;
+					qcom,latency-us = <80>;
+					qcom,ss-power = <660>;
+					qcom,energy-overhead = <142000>;
+					qcom,time-overhead = <180>;
 					qcom,min-child-idx = <1>;
 				};
 
@@ -173,9 +188,9 @@
 					label = "perf-l2-fpc";
 					qcom,psci-mode = <4>;
 					qcom,latency-us = <800>;
-					qcom,ss-power = <250>;
-					qcom,energy-overhead = <80000>;
-					qcom,time-overhead = <2300>;
+					qcom,ss-power = <450>;
+					qcom,energy-overhead = <240000>;
+					qcom,time-overhead = <11500>;
 					qcom,min-child-idx = <1>;
 					qcom,is-reset;
 				};
@@ -191,8 +206,8 @@
 						qcom,psci-cpu-mode = <1>;
 						qcom,spm-cpu-mode = "wfi";
 						qcom,latency-us = <25>;
-						qcom,ss-power = <715>;
-						qcom,energy-overhead = <17700>;
+						qcom,ss-power = <750>;
+						qcom,energy-overhead = <37000>;
 						qcom,time-overhead = <50>;
 					};
 
@@ -200,10 +215,10 @@
 						reg = <1>;
 						qcom,spm-cpu-mode = "fpc";
 						qcom,psci-cpu-mode = <4>;
-						qcom,latency-us = <250>;
-						qcom,ss-power = <220>;
-						qcom,energy-overhead = <28000>;
-						qcom,time-overhead = <500>;
+						qcom,latency-us = <80>;
+						qcom,ss-power = <700>;
+						qcom,energy-overhead = <136480>;
+						qcom,time-overhead = <160>;
 					};
 				};
 			};
@@ -215,7 +230,7 @@
 		reg = <0x681B8 0x1000>, /* MSM_RPM_MPM_BASE 4K */
 		    <0x9820010 0x4>;   /* MSM_APCS_GCC_BASE 4K */
 		reg-names = "vmpm", "ipc";
-		interrupts = <0 171 1>;
+		interrupts = <GIC_SPI 171 IRQ_TYPE_EDGE_RISING>;
 		clocks = <&clock_gcc clk_cxo_lpm_clk>;
 		clock-names = "xo";
 		qcom,num-mpm-irqs = <96>;
@@ -228,6 +243,7 @@
 			<87 358>,   /* ee0_krait_hlos_spmi_periph_irq */
 			<0xff 16>,  /* APCj_qgicdrCpu0HwFaultIrptReq */
 			<0xff 27>,  /* APCj_qgicdrCpu0QTmrVirtIrptReq */
+			<0xff 32>,  /* APCj_qgicdrL2PerfMonIrptReq */
 			<0xff 33>,  /* APCC_qgicL2PerfMonIrptReq */
 			<0xff 34>,  /* APCC_qgicL2ErrorIrptReq */
 			<0xff 35>,  /* WDT_barkInt */
@@ -237,7 +253,6 @@
 			<0xff 49>,  /* L3UX_qgicL3ErrorIrptReq */
 			<0xff 54>,  /* M4M_sysErrorInterrupt */
 			<0xff 55>,  /* M4M_sysDlmInterrupt */
-			<0xff 56>,  /* modem_watchdog */
 			<0xff 57>,  /* mss_to_apps_irq(0) */
 			<0xff 58>,  /* mss_to_apps_irq(1) */
 			<0xff 59>,  /* mss_to_apps_irq(2) */
@@ -270,7 +285,9 @@
 			<0xff 112>, /* csiphy_2_irq */
 			<0xff 115>, /* mdss_irq */
 			<0xff 126>, /* bam_irq[0] */
+			<0xff 127>, /* blsp1_qup_irq(0) */
 			<0xff 133>, /* blsp2_qup_irq(0) */
+			<0xff 134>, /* blsp2_qup_irq(1) */
 			<0xff 138>, /* blsp2_qup_irq(5) */
 			<0xff 140>, /* blsp1_uart_irq(1) */
 			<0xff 146>, /* blsp2_uart_irq(1) */
@@ -327,6 +344,7 @@
 			<0xff 286>, /* pcie20_0_int_pls_link_down */
 			<0xff 290>, /* ufs_ice_nonsec_level_irq */
 			<0xff 293>, /* pcie20_2_int_pls_link_down */
+			<0xff 295>, /* camss_cpp_mmu_cirpt[0] */
 			<0xff 296>, /* camss_cpp_mmu_pmirpt */
 			<0xff 297>, /* ufs_intrq */
 			<0xff 302>, /* qdss_etrbytecnt_irq */
@@ -348,12 +366,15 @@
 			<0xff 352>, /* mdss_mmu_cirpt[0] */
 			<0xff 353>, /* mdss_mmu_cirpt[1] */
 			<0xff 361>, /* ogpu_mmu_cirpt[0] */
+			<0xff 362>, /* ogpu_mmu_cirpt[1] */
 			<0xff 365>, /* ipa_irq[0] */
 			<0xff 366>, /* ogpu_mmu_pmirpt */
 			<0xff 367>, /* venus0_mmu_cirpt[0] */
 			<0xff 368>, /* venus0_mmu_cirpt[1] */
 			<0xff 369>, /* venus0_mmu_cirpt[2] */
 			<0xff 370>, /* venus0_mmu_cirpt[3] */
+			<0xff 375>, /* camss_vfe_mmu_cirpt[0] */
+			<0xff 376>, /* camss_vfe_mmu_cirpt[1] */
 			<0xff 380>, /* mdss_dma_mmu_cirpt[0] */
 			<0xff 381>, /* mdss_dma_mmu_cirpt[1] */
 			<0xff 385>, /* mdss_dma_mmu_pmirpt */
@@ -381,6 +402,7 @@
 			<0xff 464>, /* ipa_bam_irq[0] */
 			<0xff 465>, /* ipa_bam_irq[2] */
 			<0xff 477>, /* tsens0_tsens_critical_int */
+			<0xff 480>, /* q6_wdog_expired_irq */
 			<0xff 481>, /* mss_ipc_out_irq(4) */
 			<0xff 483>, /* mss_ipc_out_irq(6) */
 			<0xff 484>, /* mss_ipc_out_irq(7) */
@@ -389,52 +411,70 @@
 			<0xff 493>; /* sdc1_ice_nonsec_level_irq */
 
 		qcom,gpio-parent = <&tlmm>;
-		qcom,gpio-map = <3  101>,
-			<4  1 >,
-			<5  5 >,
-			<6  9 >,
-			<7  18>,
+		qcom,gpio-map = <3  1>,
+			<4  5>,
+			<5  9>,
+			<6  11>,
+			<7  66>,
 			<8  22>,
-			<9  26>,
-			<10  29>,
+			<9  24>,
+			<10  26>,
 			<11  34>,
 			<12  36>,
 			<13  37>, /* PCIe0 */
-			<14  41>,
-			<15  42>,
-			<16  46>,
-			<17  50>,
-			<18  52>,
+			<14  38>,
+			<15  40>,
+			<16  42>,
+			<17  46>,
+			<18  50>,
 			<19  53>,
 			<20  54>,
-			<21  55>,
+			<21  56>,
 			<22  57>,
-			<23  40>,
-			<24  61>,
-			<25  64>,
-			<26  65>,
-			<27  66>,
-			<28  67>,
-			<29  72>,
-			<30  73>,
-			<31  74>,
-			<32  75>,
-			<33  76>,
-			<34  77>,
-			<35  82>,
-			<36  86>,
-			<37  90>,
-			<38  95>,
-			<39  96>,
-			<40  100>,
-			<41  71>,
-			<42  108>,
-			<43  111>,
-			<44  115>,
-			<45  127>,
+			<23  58>,
+			<24  59>,
+			<25  60>,
+			<26  61>,
+			<27  62>,
+			<28  63>,
+			<29  64>,
+			<30  71>,
+			<31  73>,
+			<32  77>,
+			<33  78>,
+			<34  79>,
+			<35  80>,
+			<36  82>,
+			<37  86>,
+			<38  91>,
+			<39  92>,
+			<40  95>,
+			<41  97>,
+			<42  101>,
+			<43  104>,
+			<44  106>,
+			<45  108>,
+			<46  112>,
+			<47  113>,
+			<48  110>,
+			<50  127>,
+			<51  115>,
 			<54  116>, /* PCIe2 */
+			<55  117>,
+			<56  118>,
+			<57  119>,
+			<58  120>,
+			<59  121>,
+			<60  122>,
+			<61  123>,
+			<62  124>,
 			<63  125>,
-			<67  132>; /* PCIe1 */
+			<64  126>,
+			<65  129>,
+			<66  131>,
+			<67  132>, /* PCIe1 */
+			<68  133>,
+			<69  145>;
 	};
 
 	qcom,rpm-stats@200000 {

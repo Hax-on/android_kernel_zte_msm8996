@@ -614,7 +614,7 @@ static int camera_v4l2_open(struct file *filep)
 		if (rc < 0) {
 			pr_err("%s : creation of command_ack queue failed Line %d rc %d\n",
 					__func__, __LINE__, rc);
-			goto session_fail;
+			goto stream_fail;
 		}
 	}
 	idx |= (1 << find_first_zero_bit((const unsigned long *)&opn_idx,
@@ -628,6 +628,7 @@ command_ack_q_fail:
 	msm_destroy_session(pvdev->vdev->num);
 session_fail:
 	pm_relax(&pvdev->vdev->dev);
+stream_fail:
 	camera_v4l2_vb2_q_release(filep);
 vb2_q_fail:
 	camera_v4l2_fh_release(filep);
@@ -669,14 +670,11 @@ static int camera_v4l2_close(struct file *filep)
 
 		camera_pack_event(filep, MSM_CAMERA_SET_PARM,
 			MSM_CAMERA_PRIV_DEL_STREAM, -1, &event);
-
-		/* Donot wait, imaging server may have crashed */
 		msm_post_event(&event, MSM_POST_EVT_TIMEOUT);
 
 		camera_pack_event(filep, MSM_CAMERA_DEL_SESSION, 0, -1, &event);
+		msm_post_event(&event, MSM_POST_EVT_TIMEOUT);
 
-		/* Donot wait, imaging server may have crashed */
-		msm_post_event(&event, -1);
 		msm_delete_command_ack_q(pvdev->vdev->num, 0);
 
 		/* This should take care of both normal close
@@ -687,9 +685,8 @@ static int camera_v4l2_close(struct file *filep)
 	} else {
 		camera_pack_event(filep, MSM_CAMERA_SET_PARM,
 			MSM_CAMERA_PRIV_DEL_STREAM, -1, &event);
-
-		/* Donot wait, imaging server may have crashed */
 		msm_post_event(&event, MSM_POST_EVT_TIMEOUT);
+
 		msm_delete_command_ack_q(pvdev->vdev->num,
 			sp->stream_id);
 

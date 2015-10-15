@@ -83,8 +83,11 @@
 #define clk_aggre1_noc_a_clk		0xc12e4220
 #define clk_aggre2_noc_clk		0xaa681404
 #define clk_aggre2_noc_a_clk		0xcab67089
+#define clk_mmssnoc_axi_rpm_clk		0x4d7f8cdc
+#define clk_mmssnoc_axi_rpm_a_clk	0xfbea899b
 #define clk_mmssnoc_axi_clk		0xdb4b31e6
 #define clk_mmssnoc_axi_a_clk		0xd4970614
+#define clk_mmssnoc_gds_clk		0x06a22afa
 
 #define clk_gpll0			0x1ebe3bc4
 #define clk_gpll0_ao			0xa1368304
@@ -253,7 +256,6 @@
 #define clk_gcc_usb_phy_cfg_ahb2phy_clk	0xd1231a0e
 #define clk_gcc_aggre0_cnoc_ahb_clk	0x53a35559
 #define clk_gcc_aggre0_snoc_axi_clk	0x3c446400
-#define clk_gcc_aggre0_noc_at_clk	0xf753290f
 #define clk_gcc_aggre0_noc_qosgen_extref_clk	0x8c4356ba
 #define clk_hlos1_vote_lpass_core_smmu_clk	0x3aaa1743
 #define clk_hlos1_vote_lpass_adsp_smmu_clk	0xc76f702f
@@ -527,4 +529,5 @@
 /* Audio External Clocks */
 #define clk_audio_ap_clk 0x312ac429
 #define clk_audio_pmi_clk 0xb7ba2274
+#define clk_audio_ap_clk2 0xf0fbaf5b
 #endif

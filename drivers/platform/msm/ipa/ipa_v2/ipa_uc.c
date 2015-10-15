@@ -140,7 +140,7 @@ union IpaHwResetPipeCmdData_t {
 /**
  * union IpaHwmonitorHolbCmdData_t - Structure holding the parameters
  * for IPA_CPU_2_HW_CMD_UPDATE_HOLB_MONITORING command.
- * @monitorPipe : Indication whether to monitor the pipe. 0 – Do not Monitor Pipe, 1 – Monitor Pipe
+ * @monitorPipe : Indication whether to monitor the pipe. 0 Â– Do not Monitor Pipe, 1 Â– Monitor Pipe
  * @pipeNum : Pipe to be monitored/not monitored
  * @reserved_02_03 : Reserved
  *
@@ -346,6 +346,7 @@ static void ipa_uc_event_handler(enum ipa_irq_type interrupt,
 			IPAERR("IPA has encountered a ZIP engine error\n");
 			ipa_ctx->uc_ctx.uc_zip_error = true;
 		}
+		BUG();
 	} else if (ipa_ctx->uc_ctx.uc_sram_mmio->eventOp ==
 		IPA_HW_2_CPU_EVENT_LOG_INFO) {
 			IPADBG("uC evt log info ofst=0x%x\n",
@@ -442,6 +443,11 @@ static void ipa_uc_response_hdlr(enum ipa_irq_type interrupt,
 			IPA_HW_2_CPU_RESPONSE_INIT_COMPLETED) {
 		ipa_ctx->uc_ctx.uc_loaded = true;
 		IPAERR("IPA uC loaded\n");
+		/*
+		 * The proxy vote is held until uC is loaded to ensure that
+		 * IPA_HW_2_CPU_RESPONSE_INIT_COMPLETED is received.
+		 */
+		ipa2_proxy_clk_unvote();
 		for (i = 0; i < IPA_HW_NUM_FEATURES; i++) {
 			if (uc_hdlrs[i].ipa_uc_loaded_hdlr)
 				uc_hdlrs[i].ipa_uc_loaded_hdlr();
@@ -506,7 +512,7 @@ int ipa_uc_interface_init(void)
 		goto remap_fail;
 	}
 
-	result = ipa_add_interrupt_handler(IPA_UC_IRQ_0,
+	result = ipa2_add_interrupt_handler(IPA_UC_IRQ_0,
 		ipa_uc_event_handler, true,
 		ipa_ctx);
 	if (result) {
@@ -515,7 +521,7 @@ int ipa_uc_interface_init(void)
 		goto irq_fail0;
 	}
 
-	result = ipa_add_interrupt_handler(IPA_UC_IRQ_1,
+	result = ipa2_add_interrupt_handler(IPA_UC_IRQ_1,
 		ipa_uc_response_hdlr, true,
 		ipa_ctx);
 	if (result) {
@@ -530,7 +536,7 @@ int ipa_uc_interface_init(void)
 	return 0;
 
 irq_fail1:
-	ipa_remove_interrupt_handler(IPA_UC_IRQ_0);
+	ipa2_remove_interrupt_handler(IPA_UC_IRQ_0);
 irq_fail0:
 	iounmap(ipa_ctx->uc_ctx.uc_sram_mmio);
 remap_fail:
@@ -684,7 +690,7 @@ int ipa_uc_reset_pipe(enum ipa_client_type ipa_client)
 	int ep_idx;
 	int ret;
 
-	ep_idx = ipa_get_ep_mapping(ipa_client);
+	ep_idx = ipa2_get_ep_mapping(ipa_client);
 	if (ep_idx == -1) {
 		IPAERR("Invalid IPA client\n");
 		return 0;
@@ -743,7 +749,7 @@ int ipa_uc_monitor_holb(enum ipa_client_type ipa_client, bool enable)
 		return 0;
 	}
 
-	ep_idx = ipa_get_ep_mapping(ipa_client);
+	ep_idx = ipa2_get_ep_mapping(ipa_client);
 	if (ep_idx == -1) {
 		IPAERR("Invalid IPA client\n");
 		return 0;

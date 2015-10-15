@@ -47,7 +47,8 @@
 	TZ_SYSCALL_CREATE_PARAM_ID_0
 
 #define ICE_REV(x, y) (((x) & ICE_CORE_##y##_REV_MASK) >> ICE_CORE_##y##_REV)
-#define QCOM_ICE_DEV	"ice"
+#define QCOM_UFS_ICE_DEV	"iceufs"
+#define QCOM_SDCC_ICE_DEV	"icesdcc"
 #define QCOM_ICE_TYPE_NAME_LEN 8
 #define QCOM_ICE_MAX_BIST_CHECK_COUNT 100
 
@@ -719,34 +720,30 @@ static int register_ice_device(struct ice_device *ice_dev)
 	unsigned baseminor = 0;
 	unsigned count = 1;
 	struct device *class_dev;
-	char tmp_dev_name[16];
-	memset(tmp_dev_name, 0, 16);
-
-	strlcpy(tmp_dev_name, QCOM_ICE_DEV, 8);
-	strlcat(tmp_dev_name, ice_dev->ice_instance_type, 8);
-
-	pr_debug("%s: instance type = %s device name = %s\n", __func__,
-				ice_dev->ice_instance_type, tmp_dev_name);
+	int is_sdcc_ice = !strcmp(ice_dev->ice_instance_type, "sdcc");
 
 	rc = alloc_chrdev_region(&ice_dev->device_no, baseminor, count,
-							tmp_dev_name);
+			is_sdcc_ice ? QCOM_SDCC_ICE_DEV : QCOM_UFS_ICE_DEV);
 	if (rc < 0) {
-		pr_err("alloc_chrdev_region failed %d for %s\n",
-						rc, tmp_dev_name);
+		pr_err("alloc_chrdev_region failed %d for %s\n", rc,
+			is_sdcc_ice ? QCOM_SDCC_ICE_DEV : QCOM_UFS_ICE_DEV);
 		return rc;
 	}
-	ice_dev->driver_class = class_create(THIS_MODULE, tmp_dev_name);
+	ice_dev->driver_class = class_create(THIS_MODULE,
+			is_sdcc_ice ? QCOM_SDCC_ICE_DEV : QCOM_UFS_ICE_DEV);
 	if (IS_ERR(ice_dev->driver_class)) {
 		rc = -ENOMEM;
-		pr_err("class_create failed %d for %s\n", rc, tmp_dev_name);
+		pr_err("class_create failed %d for %s\n", rc,
+			is_sdcc_ice ? QCOM_SDCC_ICE_DEV : QCOM_UFS_ICE_DEV);
 		goto exit_unreg_chrdev_region;
 	}
 	class_dev = device_create(ice_dev->driver_class, NULL,
-					ice_dev->device_no, NULL, tmp_dev_name);
+					ice_dev->device_no, NULL,
+			is_sdcc_ice ? QCOM_SDCC_ICE_DEV : QCOM_UFS_ICE_DEV);
 
 	if (!class_dev) {
-		pr_err("class_device_create failed %d for %s\n",
-							rc, tmp_dev_name);
+		pr_err("class_device_create failed %d for %s\n", rc,
+			is_sdcc_ice ? QCOM_SDCC_ICE_DEV : QCOM_UFS_ICE_DEV);
 		rc = -ENOMEM;
 		goto exit_destroy_class;
 	}
@@ -756,7 +753,8 @@ static int register_ice_device(struct ice_device *ice_dev)
 
 	rc = cdev_add(&ice_dev->cdev, MKDEV(MAJOR(ice_dev->device_no), 0), 1);
 	if (rc < 0) {
-		pr_err("cdev_add failed %d for %s\n", rc, tmp_dev_name);
+		pr_err("cdev_add failed %d for %s\n", rc,
+			is_sdcc_ice ? QCOM_SDCC_ICE_DEV : QCOM_UFS_ICE_DEV);
 		goto exit_destroy_device;
 	}
 	return  0;
@@ -1223,6 +1221,72 @@ static int  qcom_ice_resume(struct platform_device *pdev)
 }
 EXPORT_SYMBOL(qcom_ice_resume);
 
+static void qcom_ice_debug(struct platform_device *pdev)
+{
+	struct ice_device *ice_dev;
+
+	if (!pdev)
+		pr_err("%s: Invalid params passed\n", __func__);
+
+	ice_dev = platform_get_drvdata(pdev);
+
+	if (!ice_dev)
+		pr_err("%s: No ICE device available\n", __func__);
+
+	if (!ice_dev->is_ice_enabled)
+		pr_err("%s: ICE device is not enabled\n", __func__);
+
+	pr_info("%s: =========== REGISTER DUMP (%p)===========\n",
+			ice_dev->ice_instance_type, ice_dev);
+
+	pr_info("%s: ICE Control: 0x%08x | ICE Reset: 0x%08x\n",
+		ice_dev->ice_instance_type,
+		qcom_ice_readl(ice_dev, QCOM_ICE_REGS_CONTROL),
+		qcom_ice_readl(ice_dev, QCOM_ICE_REGS_RESET));
+
+	pr_info("%s: ICE Version: 0x%08x | ICE FUSE:  0x%08x\n",
+		ice_dev->ice_instance_type,
+		qcom_ice_readl(ice_dev, QCOM_ICE_REGS_VERSION),
+		qcom_ice_readl(ice_dev, QCOM_ICE_REGS_FUSE_SETTING));
+
+	pr_info("%s: ICE Param1: 0x%08x | ICE Param2:  0x%08x\n",
+		ice_dev->ice_instance_type,
+		qcom_ice_readl(ice_dev, QCOM_ICE_REGS_PARAMETERS_1),
+		qcom_ice_readl(ice_dev, QCOM_ICE_REGS_PARAMETERS_2));
+
+	pr_info("%s: ICE Param3: 0x%08x | ICE Param4:  0x%08x\n",
+		ice_dev->ice_instance_type,
+		qcom_ice_readl(ice_dev, QCOM_ICE_REGS_PARAMETERS_3),
+		qcom_ice_readl(ice_dev, QCOM_ICE_REGS_PARAMETERS_4));
+
+	pr_info("%s: ICE Param5: 0x%08x | ICE IRQ STTS:  0x%08x\n",
+		ice_dev->ice_instance_type,
+		qcom_ice_readl(ice_dev, QCOM_ICE_REGS_PARAMETERS_5),
+		qcom_ice_readl(ice_dev, QCOM_ICE_REGS_NON_SEC_IRQ_STTS));
+
+	pr_info("%s: ICE IRQ MASK: 0x%08x | ICE IRQ CLR:  0x%08x\n",
+		ice_dev->ice_instance_type,
+		qcom_ice_readl(ice_dev, QCOM_ICE_REGS_NON_SEC_IRQ_MASK),
+		qcom_ice_readl(ice_dev, QCOM_ICE_REGS_NON_SEC_IRQ_CLR));
+
+	if ((ICE_REV(ice_dev->ice_hw_version, MAJOR) > 2) ||
+		((ICE_REV(ice_dev->ice_hw_version, MAJOR) == 2) &&
+		 (ICE_REV(ice_dev->ice_hw_version, MINOR) >= 1))) {
+		pr_info("%s: ICE BIST Sts: 0x%08x | ICE Bypass Sts:  0x%08x\n",
+			ice_dev->ice_instance_type,
+			qcom_ice_readl(ice_dev, QCOM_ICE_REGS_BIST_STATUS),
+			qcom_ice_readl(ice_dev, QCOM_ICE_REGS_BYPASS_STATUS));
+	}
+
+	pr_info("%s: ICE ADV CTRL: 0x%08x | ICE ENDIAN SWAP:  0x%08x\n",
+		ice_dev->ice_instance_type,
+		qcom_ice_readl(ice_dev, QCOM_ICE_REGS_ADVANCED_CONTROL),
+		qcom_ice_readl(ice_dev, QCOM_ICE_REGS_ENDIAN_SWAP));
+
+}
+EXPORT_SYMBOL(qcom_ice_debug);
+
+
 static int qcom_ice_reset(struct  platform_device *pdev)
 {
 	struct ice_device *ice_dev;
@@ -1359,6 +1423,7 @@ const struct qcom_ice_variant_ops qcom_ice_ops = {
 	.suspend          = qcom_ice_suspend,
 	.config           = qcom_ice_config,
 	.status           = qcom_ice_status,
+	.debug            = qcom_ice_debug,
 };
 
 /* Following struct is required to match device with driver from dts file */
@@ -1425,56 +1490,105 @@ out:
 	return ice_dev;
 }
 
-int qcom_ice_setup_ice_hw(const char *storage_type, int enable)
+
+static int enable_ice_setup(struct ice_device *ice_dev)
 {
 	int ret = -1, vote;
-	struct ice_device *ice_dev = NULL;
 
-	ice_dev = get_ice_device_from_storage_type(storage_type);
-	if (!ice_dev)
-		goto out;
+	/* Setup Regulator */
+	if (ice_dev->is_regulator_available) {
+		if (qcom_ice_get_vreg(ice_dev)) {
+			pr_err("%s: Could not get regulator\n", __func__);
+			goto out;
+		}
+		ret = regulator_enable(ice_dev->reg);
+		if (ret) {
+			pr_err("%s:%p: Could not enable regulator\n",
+					__func__, ice_dev);
+			goto out;
+		}
+	}
 
 	/* Setup Clocks */
-	if (qcom_ice_enable_clocks(ice_dev, enable)) {
-		pr_err("%s:%p:%s Could not enable clocks\n", __func__, ice_dev,
-				ice_dev->ice_instance_type);
-		goto out;
+	if (qcom_ice_enable_clocks(ice_dev, true)) {
+		pr_err("%s:%p:%s Could not enable clocks\n", __func__,
+				ice_dev, ice_dev->ice_instance_type);
+		goto out_reg;
 	}
 
 	/* Setup Bus Vote */
-	vote = qcom_ice_get_bus_vote(ice_dev, enable ? "MAX" : "MIN");
+	vote = qcom_ice_get_bus_vote(ice_dev, "MAX");
 	if (vote < 0)
 		goto out_clocks;
+
 	ret = qcom_ice_set_bus_vote(ice_dev, vote);
 	if (ret) {
 		pr_err("%s:%p: failed %d\n", __func__, ice_dev, ret);
 		goto out_clocks;
 	}
 
-	/* Setup Regulator */
+	return ret;
+
+out_clocks:
+	qcom_ice_enable_clocks(ice_dev, false);
+out_reg:
+	regulator_disable(ice_dev->reg);
+out:
+	return ret;
+}
+
+static int disable_ice_setup(struct ice_device *ice_dev)
+{
+	int ret = -1, vote;
+
+	/* Setup Bus Vote */
+	vote = qcom_ice_get_bus_vote(ice_dev, "MIN");
+	if (vote < 0) {
+		pr_err("%s:%p: Unable to get bus vote\n", __func__, ice_dev);
+		goto out_disable_clocks;
+	}
+
+	ret = qcom_ice_set_bus_vote(ice_dev, vote);
+	if (ret)
+		pr_err("%s:%p: failed %d\n", __func__, ice_dev, ret);
+
+out_disable_clocks:
+
+	/* Setup Clocks */
+	if (qcom_ice_enable_clocks(ice_dev, false))
+		pr_err("%s:%p:%s Could not disable clocks\n", __func__,
+				ice_dev, ice_dev->ice_instance_type);
+
+/* Setup Regulator */
 	if (ice_dev->is_regulator_available) {
 		if (qcom_ice_get_vreg(ice_dev)) {
 			pr_err("%s: Could not get regulator\n", __func__);
-			goto out_bw_vote;
+			goto out;
 		}
-		ret = (enable) ? regulator_enable(ice_dev->reg)
-				: regulator_disable(ice_dev->reg);
+		ret = regulator_disable(ice_dev->reg);
 		if (ret) {
-			pr_err("%s:%p: Could not enable/disable regulator\n",
+			pr_err("%s:%p: Could not disable regulator\n",
 					__func__, ice_dev);
-			goto out_bw_vote;
+			goto out;
 		}
 	}
-	return ret;
-
-out_bw_vote:
-	if (vote)
-		qcom_ice_set_bus_vote(ice_dev, !vote);
-out_clocks:
-	if (enable)
-		qcom_ice_enable_clocks(ice_dev, !enable);
 out:
 	return ret;
+}
+
+int qcom_ice_setup_ice_hw(const char *storage_type, int enable)
+{
+	int ret = -1;
+	struct ice_device *ice_dev = NULL;
+
+	ice_dev = get_ice_device_from_storage_type(storage_type);
+	if (!ice_dev)
+		return ret;
+
+	if (enable)
+		return enable_ice_setup(ice_dev);
+	else
+		return disable_ice_setup(ice_dev);
 }
 
 struct qcom_ice_variant_ops *qcom_ice_get_variant_ops(struct device_node *node)

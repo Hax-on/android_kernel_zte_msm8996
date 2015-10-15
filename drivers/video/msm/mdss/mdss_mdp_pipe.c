@@ -1282,7 +1282,7 @@ static void mdss_mdp_pipe_check_stage(struct mdss_mdp_pipe *pipe,
 		pr_err("pipe%d mixer:%d pipe->mixer_stage=%d src_split:%d right blend:%d\n",
 			pipe->num, mixer->num, pipe->mixer_stage,
 			pipe->src_split_req, pipe->is_right_blend);
-		MDSS_XLOG_TOUT_HANDLER("mdp", "panic");
+		MDSS_XLOG_TOUT_HANDLER("mdp", "dbg_bus", "panic");
 	}
 }
 
@@ -1336,17 +1336,15 @@ static void mdss_mdp_pipe_free(struct kref *kref)
 static bool mdss_mdp_check_pipe_in_use(struct mdss_mdp_pipe *pipe)
 {
 	int i;
-	u32 mixercfg, stage_off_mask = BIT(0) | BIT(1) | BIT(2);
+	u32 mixercfg, mixercfg_extn, stage_off_mask, stage_off_extn_mask;
+	u32 stage = BIT(0) | BIT(1) | BIT(2);
 	bool in_use = false;
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
 	struct mdss_mdp_ctl *ctl;
 	struct mdss_mdp_mixer *mixer;
 
-	if (pipe->num == MDSS_MDP_SSPP_VIG3 ||
-	    pipe->num == MDSS_MDP_SSPP_RGB3)
-		stage_off_mask = stage_off_mask << ((3 * pipe->num) + 2);
-	else
-		stage_off_mask = stage_off_mask << (3 * pipe->num);
+	stage_off_mask = mdss_mdp_get_mixer_mask(pipe->num, stage);
+	stage_off_extn_mask = mdss_mdp_get_mixer_extn_mask(pipe->num, stage);
 
 	for (i = 0; i < mdata->nctl; i++) {
 		ctl = mdata->ctl_off + i;
@@ -1357,23 +1355,29 @@ static bool mdss_mdp_check_pipe_in_use(struct mdss_mdp_pipe *pipe)
 		if (mixer && mixer->rotator_mode)
 			continue;
 
-		mixercfg = mdss_mdp_get_mixercfg(mixer);
-		if (mixercfg & stage_off_mask) {
-			pr_err("IN USE: mixer=%d pipe=%d mcfg:0x%x mask:0x%x\n",
+		mixercfg = mdss_mdp_get_mixercfg(mixer, false);
+		mixercfg_extn = mdss_mdp_get_mixercfg(mixer, true);
+		if ((mixercfg & stage_off_mask) ||
+			(mixercfg_extn & stage_off_extn_mask)) {
+			pr_err("IN USE: mixer=%d pipe=%d mcfg:0x%x mask:0x%x mcfg_extn:0x%x mask_ext:0x%x\n",
 				mixer->num, pipe->num,
-				mixercfg, stage_off_mask);
+				mixercfg, stage_off_mask,
+				mixercfg_extn, stage_off_extn_mask);
 			MDSS_XLOG_TOUT_HANDLER("mdp", "vbif", "vbif_nrt",
-				"panic");
+				"dbg_bus", "vbif_dbg_bus", "panic");
 		}
 
 		mixer = ctl->mixer_right;
-		mixercfg = mdss_mdp_get_mixercfg(mixer);
-		if (mixercfg & stage_off_mask) {
-			pr_err("IN USE: mixer=%d pipe=%d mcfg:0x%x mask:0x%x\n",
+		mixercfg = mdss_mdp_get_mixercfg(mixer, false);
+		mixercfg_extn = mdss_mdp_get_mixercfg(mixer, true);
+		if ((mixercfg & stage_off_mask) ||
+			(mixercfg_extn & stage_off_extn_mask)) {
+			pr_err("IN USE: mixer=%d pipe=%d mcfg:0x%x mask:0x%x mcfg_extn:0x%x mask_ext:0x%x\n",
 				mixer->num, pipe->num,
-				mixercfg, stage_off_mask);
+				mixercfg, stage_off_mask,
+				mixercfg_extn, stage_off_extn_mask);
 			MDSS_XLOG_TOUT_HANDLER("mdp", "vbif", "vbif_nrt",
-				"panic");
+				"dbg_bus", "vbif_dbg_bus", "panic");
 		}
 	}
 
@@ -2012,11 +2016,6 @@ static int mdss_mdp_src_addr_setup(struct mdss_mdp_pipe *pipe,
 	mdss_mdp_pipe_write(pipe, MDSS_MDP_REG_SSPP_SRC2_ADDR, data.p[2].addr);
 	mdss_mdp_pipe_write(pipe, MDSS_MDP_REG_SSPP_SRC3_ADDR, data.p[3].addr);
 
-	/* Flush Sel register only exists in mpq */
-	if ((mdata->mdp_rev == MDSS_MDP_HW_REV_200) &&
-		(pipe->flags & MDP_VPU_PIPE))
-		mdss_mdp_pipe_write(pipe, MDSS_MDP_REG_VIG_FLUSH_SEL, 0);
-
 	return 0;
 }
 
@@ -2359,19 +2358,14 @@ void mdss_mdp_pipe_calc_pixel_extn(struct mdss_mdp_pipe *pipe)
 		 * phase step x,y for 0 plane should be calculated before
 		 * this
 		 */
-		if (pipe->src_fmt->is_yuv) {
-			if (i == 1 || i == 2) {
-				pipe->scale.phase_step_x[i] =
-					pipe->scale.phase_step_x[0] / 2;
-				pipe->scale.phase_step_y[i] =
-					pipe->scale.phase_step_y[0] / 2;
-			} else {
-				pipe->scale.phase_step_x[i] =
-					pipe->scale.phase_step_x[0];
-				pipe->scale.phase_step_y[i] =
-					pipe->scale.phase_step_y[0];
-			}
-		} else {
+		if (pipe->src_fmt->is_yuv && (i == 1 || i == 2)) {
+			pipe->scale.phase_step_x[i] =
+				pipe->scale.phase_step_x[0]
+					>> pipe->chroma_sample_h;
+			pipe->scale.phase_step_y[i] =
+				pipe->scale.phase_step_y[0]
+					>> pipe->chroma_sample_v;
+		} else if (i > 0) {
 			pipe->scale.phase_step_x[i] =
 				pipe->scale.phase_step_x[0];
 			pipe->scale.phase_step_y[i] =

@@ -66,8 +66,11 @@ DEFINE_CLK_RPM_SMD(bimc_clk, bimc_a_clk, RPM_MEM_CLK_TYPE, BIMC_CLK_ID, NULL);
 DEFINE_CLK_RPM_SMD(cnoc_clk, cnoc_a_clk, RPM_BUS_CLK_TYPE, CNOC_CLK_ID, NULL);
 DEFINE_CLK_RPM_SMD(snoc_clk, snoc_a_clk, RPM_BUS_CLK_TYPE, SNOC_CLK_ID, NULL);
 
-DEFINE_CLK_RPM_SMD(mmssnoc_axi_clk, mmssnoc_axi_a_clk, RPM_MMAXI_CLK_TYPE,
-				MMXI_CLK_ID, NULL);
+DEFINE_CLK_RPM_SMD(mmssnoc_axi_rpm_clk, mmssnoc_axi_rpm_a_clk,
+				RPM_MMAXI_CLK_TYPE, MMXI_CLK_ID, NULL);
+DEFINE_CLK_VOTER(mmssnoc_axi_clk, &mmssnoc_axi_rpm_clk.c, 0);
+DEFINE_CLK_VOTER(mmssnoc_axi_a_clk, &mmssnoc_axi_rpm_a_clk.c, 0);
+DEFINE_CLK_VOTER(mmssnoc_gds_clk, &mmssnoc_axi_rpm_clk.c, 40000000);
 
 DEFINE_CLK_RPM_SMD_BRANCH(aggre1_noc_clk, aggre1_noc_a_clk,
 				RPM_AGGR_CLK_TYPE, AGGR1_NOC_ID, 1000);
@@ -1636,18 +1639,6 @@ static struct branch_clk gcc_smmu_aggre0_axi_clk = {
 		.dbg_name = "gcc_smmu_aggre0_axi_clk",
 		.ops = &clk_ops_branch,
 		CLK_INIT(gcc_smmu_aggre0_axi_clk.c),
-	},
-};
-
-static struct branch_clk gcc_aggre0_noc_at_clk = {
-	.cbcr_reg = GCC_AGGRE0_NOC_AT_CBCR,
-	.has_sibling = 1,
-	.base = &virt_base,
-	.c = {
-		.dbg_name = "gcc_aggre0_noc_at_clk",
-		.always_on = true,
-		.ops = &clk_ops_branch,
-		CLK_INIT(gcc_aggre0_noc_at_clk.c),
 	},
 };
 
@@ -3293,13 +3284,13 @@ static struct mux_clk gcc_debug_mux = {
 		{ &gcc_ufs_tx_symbol_clk_core_clk.c, 0x0109 },
 		{ &gcc_aggre0_snoc_axi_clk.c, 0x0116 },
 		{ &gcc_aggre0_cnoc_ahb_clk.c, 0x0117 },
-		{ &gcc_aggre0_noc_at_clk.c, 0x0118 },
 		{ &gcc_smmu_aggre0_axi_clk.c, 0x0119 },
 		{ &gcc_smmu_aggre0_ahb_clk.c, 0x011a },
 		{ &gcc_aggre0_noc_qosgen_extref_clk.c, 0x011b },
 		{ &gcc_aggre2_ufs_axi_clk.c, 0x0126 },
 		{ &gcc_aggre2_usb3_axi_clk.c, 0x0127 },
 		{ &gcc_dcc_ahb_clk.c, 0x012b },
+		{ &ipa_clk.c, 0x12f },
 	),
 	.c = {
 		.dbg_name = "gcc_debug_mux",
@@ -3342,8 +3333,11 @@ static struct clk_lookup msm_clocks_rpm_8996[] = {
 	CLK_LIST(aggre1_noc_a_clk),
 	CLK_LIST(aggre2_noc_clk),
 	CLK_LIST(aggre2_noc_a_clk),
+	CLK_LIST(mmssnoc_axi_rpm_clk),
+	CLK_LIST(mmssnoc_axi_rpm_a_clk),
 	CLK_LIST(mmssnoc_axi_clk),
 	CLK_LIST(mmssnoc_axi_a_clk),
+	CLK_LIST(mmssnoc_gds_clk),
 	CLK_LIST(bb_clk1),
 	CLK_LIST(bb_clk1_ao),
 	CLK_LIST(bb_clk1_pin),
@@ -3469,7 +3463,6 @@ static struct clk_lookup msm_clocks_gcc_8996[] = {
 	CLK_LIST(gcc_aggre0_snoc_axi_clk),
 	CLK_LIST(gcc_smmu_aggre0_ahb_clk),
 	CLK_LIST(gcc_smmu_aggre0_axi_clk),
-	CLK_LIST(gcc_aggre0_noc_at_clk),
 	CLK_LIST(gcc_aggre0_noc_qosgen_extref_clk),
 	CLK_LIST(gcc_aggre2_usb3_axi_clk),
 	CLK_LIST(gcc_aggre2_ufs_axi_clk),

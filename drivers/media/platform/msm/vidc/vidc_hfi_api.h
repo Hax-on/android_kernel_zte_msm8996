@@ -62,6 +62,7 @@
 #define HAL_MAX_MATRIX_COEFFS 9
 #define HAL_MAX_BIAS_COEFFS 3
 #define HAL_MAX_LIMIT_COEFFS 6
+#define VENUS_VERSION_LENGTH 128
 
 enum vidc_status {
 	VIDC_ERR_NONE = 0x0,
@@ -223,6 +224,7 @@ enum hal_property {
 	HAL_PARAM_VENC_VQZIP_SEI,
 	HAL_PROPERTY_PARAM_VENC_ASPECT_RATIO,
 	HAL_CONFIG_VDEC_ENTROPY,
+	HAL_PARAM_VENC_BITRATE_TYPE,
 };
 
 enum hal_domain {
@@ -532,6 +534,7 @@ enum hal_statistics_mode_type {
 	HAL_STATISTICS_MODE_DEFAULT	= 0x00000001,
 	HAL_STATISTICS_MODE_1		= 0x00000002,
 	HAL_STATISTICS_MODE_2		= 0x00000004,
+	HAL_STATISTICS_MODE_3		= 0x00000008,
 };
 
 enum hal_ssr_trigger_type {
@@ -1028,6 +1031,14 @@ struct vidc_seq_hdr {
 	u32 seq_hdr_len;
 };
 
+struct hal_fw_info {
+	char version[VENUS_VERSION_LENGTH];
+	phys_addr_t base_addr;
+	int register_base;
+	int register_size;
+	int irq;
+};
+
 enum hal_flush {
 	HAL_FLUSH_INPUT,
 	HAL_FLUSH_OUTPUT,
@@ -1323,14 +1334,6 @@ enum msm_vidc_hfi_type {
 	VIDC_HFI_VENUS,
 };
 
-enum fw_info {
-	FW_BASE_ADDRESS,
-	FW_REGISTER_BASE,
-	FW_REGISTER_SIZE,
-	FW_IRQ,
-	FW_INFO_MAX,
-};
-
 enum msm_vidc_thermal_level {
 	VIDC_THERMAL_NORMAL = 0,
 	VIDC_THERMAL_LOW,
@@ -1380,6 +1383,9 @@ struct vidc_bus_vote_data {
 	int num_formats; /* 1 = DPB-OPB unified; 2 = split */
 	int height, width, fps;
 	enum msm_vidc_power_mode power_mode;
+	struct imem_ab_table *imem_ab_tbl;
+	u32 imem_ab_tbl_size;
+	unsigned long core_freq;
 };
 
 struct hal_index_extradata_input_crop_payload {
@@ -1442,12 +1448,11 @@ struct hfi_device {
 						unsigned long instant_bitrate);
 	int (*vote_bus)(void *dev, struct vidc_bus_vote_data *data,
 			int num_data);
-	int (*unvote_bus)(void *dev);
-	int (*get_fw_info)(void *dev, enum fw_info info);
+	int (*get_fw_info)(void *dev, struct hal_fw_info *fw_info);
 	int (*session_clean)(void *sess);
 	int (*get_core_capabilities)(void *dev);
 	int (*suspend)(void *dev);
-	unsigned long (*get_core_clock_rate)(void *dev);
+	unsigned long (*get_core_clock_rate)(void *dev, bool actual_rate);
 	enum hal_default_properties (*get_default_properties)(void *dev);
 };
 

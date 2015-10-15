@@ -77,6 +77,8 @@
 #define UBWC_MASK 0x20
 #define CDS_MASK 0x40
 #define MMU_PF_MASK 0x80
+#define POP_FRONT 1
+#define POP_BACK 0
 
 #define CPP_DT_READ_U32_ERR(_dev, _key, _str, _ret, _out) { \
 		_key = _str; \
@@ -164,15 +166,17 @@ static struct msm_bus_scale_pdata msm_cpp_bus_scale_data = {
 	.name = "msm_camera_cpp",
 };
 
-#define msm_dequeue(queue, member) ({	   \
+#define msm_dequeue(queue, member, pop_dir) ({	   \
 	unsigned long flags;		  \
 	struct msm_device_queue *__q = (queue);	 \
 	struct msm_queue_cmd *qcmd = 0;	   \
 	spin_lock_irqsave(&__q->lock, flags);	 \
 	if (!list_empty(&__q->list)) {		\
 		__q->len--;		 \
-		qcmd = list_first_entry(&__q->list,   \
-		struct msm_queue_cmd, member);  \
+		qcmd = pop_dir ? list_first_entry(&__q->list,   \
+			struct msm_queue_cmd, member) :    \
+			list_last_entry(&__q->list,   \
+			struct msm_queue_cmd, member);    \
 		list_del_init(&qcmd->member);	 \
 	}			 \
 	spin_unlock_irqrestore(&__q->lock, flags);  \
@@ -326,7 +330,7 @@ static int msm_cpp_enable_debugfs(struct cpp_device *cpp_dev);
 
 static void msm_cpp_write(u32 data, void __iomem *cpp_base)
 {
-	writel_relaxed((data), cpp_base + MSM_CPP_MICRO_FIFO_RX_DATA);
+	msm_camera_io_w((data), cpp_base + MSM_CPP_MICRO_FIFO_RX_DATA);
 }
 
 static void msm_cpp_clear_timer(struct cpp_device *cpp_dev)
@@ -726,7 +730,8 @@ static irqreturn_t msm_cpp_irq(int irq_num, void *data)
 		spin_lock_irqsave(&cpp_dev->tasklet_lock, flags);
 		queue_cmd = &cpp_dev->tasklet_queue_cmd[cpp_dev->taskletq_idx];
 		if (queue_cmd->cmd_used) {
-			pr_err("%s: cpp tasklet queue overflow\n", __func__);
+			pr_err("%s:%d] cpp tasklet queue overflow tx %d rc %x",
+				__func__, __LINE__, tx_level, irq_status);
 			list_del(&queue_cmd->list);
 		} else {
 			atomic_add(1, &cpp_dev->irq_cnt);
@@ -1230,15 +1235,21 @@ static void cpp_release_hardware(struct cpp_device *cpp_dev)
 	iounmap(cpp_dev->camss_cpp_base);
 	msm_cam_clk_enable(&cpp_dev->pdev->dev, cpp_clk_info,
 		cpp_dev->cpp_clk, cpp_dev->num_clk, 0);
-	regulator_disable(cpp_dev->fs_cpp);
-	regulator_put(cpp_dev->fs_cpp);
-	cpp_dev->fs_cpp = NULL;
-	regulator_disable(cpp_dev->fs_camss);
-	regulator_put(cpp_dev->fs_camss);
-	cpp_dev->fs_camss = NULL;
-	regulator_disable(cpp_dev->fs_mmagic_camss);
-	regulator_put(cpp_dev->fs_mmagic_camss);
-	cpp_dev->fs_mmagic_camss = NULL;
+	if (cpp_dev->fs_cpp) {
+		regulator_disable(cpp_dev->fs_cpp);
+		regulator_put(cpp_dev->fs_cpp);
+		cpp_dev->fs_cpp = NULL;
+	}
+	if (cpp_dev->fs_camss) {
+		regulator_disable(cpp_dev->fs_camss);
+		regulator_put(cpp_dev->fs_camss);
+		cpp_dev->fs_camss = NULL;
+	}
+	if (cpp_dev->fs_mmagic_camss) {
+		regulator_disable(cpp_dev->fs_mmagic_camss);
+		regulator_put(cpp_dev->fs_mmagic_camss);
+		cpp_dev->fs_mmagic_camss = NULL;
+	}
 	if (cpp_dev->stream_cnt > 0) {
 		pr_warn("stream count active\n");
 		rc = msm_cpp_update_bandwidth_setting(cpp_dev, 0, 0);
@@ -1551,7 +1562,7 @@ static int msm_cpp_notify_frame_done(struct cpp_device *cpp_dev,
 	struct msm_buf_mngr_info buff_mgr_info;
 	int rc = 0;
 
-	frame_qcmd = msm_dequeue(queue, list_frame);
+	frame_qcmd = msm_dequeue(queue, list_frame, POP_FRONT);
 	if (frame_qcmd) {
 		processed_frame = frame_qcmd->command;
 		do_gettimeofday(&(processed_frame->out_time));
@@ -1708,6 +1719,17 @@ static void msm_cpp_flush_queue_and_release_buffer(struct cpp_device *cpp_dev,
 	cpp_dev->timeout_trial_cnt = 0;
 }
 
+static void msm_cpp_set_micro_irq_mask(struct cpp_device *cpp_dev,
+	uint8_t enable, uint32_t irq_mask)
+{
+	msm_camera_io_w_mb(irq_mask, cpp_dev->base +
+		MSM_CPP_MICRO_IRQGEN_MASK);
+	msm_camera_io_w_mb(0xFFFF, cpp_dev->base +
+		MSM_CPP_MICRO_IRQGEN_CLR);
+	if (enable)
+		enable_irq(cpp_dev->irq->start);
+}
+
 static void msm_cpp_do_timeout_work(struct work_struct *work)
 {
 	uint32_t j = 0, i = 0, i1 = 0, i2 = 0;
@@ -1720,7 +1742,7 @@ static void msm_cpp_do_timeout_work(struct work_struct *work)
 		jiffies);
 	mutex_lock(&cpp_dev->mutex);
 
-	if (!work || cpp_timer.data.cpp_dev->state != CPP_STATE_ACTIVE) {
+	if (!work || (cpp_timer.data.cpp_dev->state != CPP_STATE_ACTIVE)) {
 		pr_err("Invalid work:%p or state:%d\n", work,
 			cpp_timer.data.cpp_dev->state);
 		/* Do not flush queue here as it is not a fatal error */
@@ -1746,27 +1768,25 @@ static void msm_cpp_do_timeout_work(struct work_struct *work)
 		cpp_dev->state = CPP_STATE_OFF;
 		/* clean buf queue here */
 		msm_cpp_flush_queue_and_release_buffer(cpp_dev, queue_len);
+		msm_cpp_set_micro_irq_mask(cpp_dev, 1, 0x0);
 		goto end;
 	} else {
 		pr_debug("Firmware loading done\n");
 	}
-	enable_irq(cpp_timer.data.cpp_dev->irq->start);
-	msm_camera_io_w_mb(0x8, cpp_timer.data.cpp_dev->base +
-		MSM_CPP_MICRO_IRQGEN_MASK);
-	msm_camera_io_w_mb(0xFFFF,
-		cpp_timer.data.cpp_dev->base +
-		MSM_CPP_MICRO_IRQGEN_CLR);
 
 	if (!atomic_read(&cpp_timer.used)) {
 		pr_warn("Delayed trigger, IRQ serviced\n");
 		/* Do not flush queue here as it is not a fatal error */
+		msm_cpp_set_micro_irq_mask(cpp_dev, 1, 0x8);
 		goto end;
 	}
 
 	if (cpp_dev->timeout_trial_cnt >=
 		cpp_dev->max_timeout_trial_cnt) {
 		pr_warn("Max trial reached\n");
+		cpp_dev->state = CPP_STATE_OFF;
 		msm_cpp_flush_queue_and_release_buffer(cpp_dev, queue_len);
+		msm_cpp_set_micro_irq_mask(cpp_dev, 1, 0x0);
 		goto end;
 	}
 
@@ -1775,6 +1795,8 @@ static void msm_cpp_do_timeout_work(struct work_struct *work)
 		CPP_CMD_TIMEOUT_MS, jiffies);
 	mod_timer(&cpp_timer.cpp_timer,
 		jiffies + msecs_to_jiffies(CPP_CMD_TIMEOUT_MS));
+
+	msm_cpp_set_micro_irq_mask(cpp_dev, 1, 0x8);
 
 	for (i = 0; i < MAX_CPP_PROCESSING_FRAME; i++)
 		processed_frame[i] = cpp_timer.data.processed_frame[i];
@@ -1792,6 +1814,9 @@ static void msm_cpp_do_timeout_work(struct work_struct *work)
 				if (rc) {
 					pr_err("%s:%d] poll failed %d rc %d",
 						__func__, __LINE__, j, rc);
+					cpp_dev->state = CPP_STATE_OFF;
+					msm_cpp_set_micro_irq_mask(cpp_dev,
+						0, 0x0);
 					goto end;
 				}
 			}
@@ -1802,9 +1827,10 @@ static void msm_cpp_do_timeout_work(struct work_struct *work)
 			pr_err("%s: Rescheduling plane info failed %d\n",
 				__func__, rc);
 			/* flush the queue */
+			cpp_dev->state = CPP_STATE_OFF;
 			msm_cpp_flush_queue_and_release_buffer(cpp_dev,
 				queue_len);
-			cpp_dev->state = CPP_STATE_OFF;
+			msm_cpp_set_micro_irq_mask(cpp_dev, 0, 0x0);
 			goto end;
 		}
 		/* send stripes */
@@ -1830,9 +1856,10 @@ static void msm_cpp_do_timeout_work(struct work_struct *work)
 			pr_err("%s:%d] Rescheduling stripe info failed %d\n",
 				__func__, __LINE__, rc);
 			/* flush the queue */
+			cpp_dev->state = CPP_STATE_OFF;
 			msm_cpp_flush_queue_and_release_buffer(cpp_dev,
 				queue_len);
-			cpp_dev->state = CPP_STATE_OFF;
+			msm_cpp_set_micro_irq_mask(cpp_dev, 0, 0x0);
 			goto end;
 		}
 		/* send trailer */
@@ -1844,8 +1871,7 @@ static void msm_cpp_do_timeout_work(struct work_struct *work)
 
 end:
 	mutex_unlock(&cpp_dev->mutex);
-
-	pr_debug("exit\n");
+	pr_debug("%s:%d] exit\n", __func__, __LINE__);
 	return;
 }
 
@@ -1865,6 +1891,7 @@ static int msm_cpp_send_frame_to_hardware(struct cpp_device *cpp_dev,
 	int32_t rc = -EAGAIN;
 	int ret;
 	struct msm_cpp_frame_info_t *process_frame;
+	struct msm_queue_cmd *qcmd = NULL;
 	uint32_t queue_len = 0;
 
 	if (cpp_dev->processing_q.len < MAX_CPP_PROCESSING_FRAME) {
@@ -1902,7 +1929,7 @@ static int msm_cpp_send_frame_to_hardware(struct cpp_device *cpp_dev,
 		if (rc) {
 			pr_err("%s: Rescheduling plane info failed %d\n",
 				__func__, rc);
-			goto end;
+			goto dequeue_frame;
 		}
 		/* send stripes */
 		i1 = cpp_dev->payload_params.stripe_base +
@@ -1923,17 +1950,35 @@ static int msm_cpp_send_frame_to_hardware(struct cpp_device *cpp_dev,
 		if (rc) {
 			pr_err("%s: Rescheduling stripe info failed %d\n",
 				__func__, rc);
-			goto end;
+			goto dequeue_frame;
 		}
 		/* send trailer */
 		msm_cpp_write(MSM_CPP_MSG_ID_TRAILER, cpp_dev->base);
 
 		do_gettimeofday(&(process_frame->in_time));
 		rc = 0;
+	} else {
+		pr_err("process queue full. drop frame\n");
+		goto end;
+	}
+
+dequeue_frame:
+	if (rc < 0) {
+		qcmd = msm_dequeue(&cpp_dev->processing_q, list_frame,
+			POP_BACK);
+		if (!qcmd)
+			pr_warn("%s:%d: no queue cmd\n", __func__, __LINE__);
+		spin_lock_irqsave(&cpp_timer.data.processed_frame_lock,
+			flags);
+		queue_len = cpp_dev->processing_q.len;
+		spin_unlock_irqrestore(
+			&cpp_timer.data.processed_frame_lock, flags);
+		if (queue_len == 0) {
+			atomic_set(&cpp_timer.used, 0);
+			del_timer(&cpp_timer.cpp_timer);
+		}
 	}
 end:
-	if (rc < 0)
-		pr_err("process queue full. drop frame\n");
 	return rc;
 }
 
@@ -2411,8 +2456,6 @@ static int msm_cpp_cfg_frame(struct cpp_device *cpp_dev,
 	if (new_frame->duplicate_output) {
 		CPP_DBG("duplication enabled, dup_id=0x%x",
 			new_frame->duplicate_identity);
-		memset(&new_frame->duplicate_buffer_info, 0,
-			sizeof(struct msm_cpp_buffer_info_t));
 		memset(&dup_buff_mgr_info, 0, sizeof(struct msm_buf_mngr_info));
 		dup_buff_mgr_info.session_id =
 			((new_frame->duplicate_identity >> 16) & 0xFFFF);
@@ -2549,6 +2592,8 @@ static int msm_cpp_cfg(struct cpp_device *cpp_dev,
 				k_frame_info.output_buffer_info[i] =
 					frame->output_buffer_info[i];
 			}
+			k_frame_info.duplicate_buffer_info =
+				frame->duplicate_buffer_info;
 		}
 	}
 
@@ -2577,7 +2622,7 @@ void msm_cpp_clean_queue(struct cpp_device *cpp_dev)
 	while (cpp_dev->processing_q.len) {
 		pr_debug("queue len:%d\n", cpp_dev->processing_q.len);
 		queue = &cpp_dev->processing_q;
-		frame_qcmd = msm_dequeue(queue, list_frame);
+		frame_qcmd = msm_dequeue(queue, list_frame, POP_FRONT);
 		if (frame_qcmd) {
 			processed_frame = frame_qcmd->command;
 			kfree(frame_qcmd);
@@ -2824,9 +2869,11 @@ long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
 	case VIDIOC_MSM_CPP_APPEND_STREAM_BUFF_INFO:
 	case VIDIOC_MSM_CPP_ENQUEUE_STREAM_BUFF_INFO: {
 		uint32_t j;
-		struct msm_cpp_stream_buff_info_t *u_stream_buff_info;
+		struct msm_cpp_stream_buff_info_t *u_stream_buff_info = NULL;
 		struct msm_cpp_stream_buff_info_t k_stream_buff_info;
-		struct msm_cpp_buff_queue_info_t *buff_queue_info;
+		struct msm_cpp_buff_queue_info_t *buff_queue_info = NULL;
+
+		memset(&k_stream_buff_info, 0, sizeof(k_stream_buff_info));
 		CPP_DBG("VIDIOC_MSM_CPP_ENQUEUE_STREAM_BUFF_INFO\n");
 		if (sizeof(struct msm_cpp_stream_buff_info_t) !=
 			ioctl_ptr->len) {
@@ -2849,13 +2896,6 @@ long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
 			mutex_unlock(&cpp_dev->mutex);
 			return -EINVAL;
 		}
-		if (u_stream_buff_info->num_buffs == 0) {
-			pr_err("%s:%d: Invalid number of buffers\n", __func__,
-				__LINE__);
-			kfree(u_stream_buff_info);
-			mutex_unlock(&cpp_dev->mutex);
-			return -EINVAL;
-		}
 		k_stream_buff_info.num_buffs = u_stream_buff_info->num_buffs;
 		k_stream_buff_info.identity = u_stream_buff_info->identity;
 
@@ -2867,27 +2907,31 @@ long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
 			return -EINVAL;
 		}
 
-		k_stream_buff_info.buffer_info =
-			kzalloc(k_stream_buff_info.num_buffs *
-			sizeof(struct msm_cpp_buffer_info_t), GFP_KERNEL);
-		if (ZERO_OR_NULL_PTR(k_stream_buff_info.buffer_info)) {
-			pr_err("%s:%d: malloc error\n", __func__, __LINE__);
-			kfree(u_stream_buff_info);
-			mutex_unlock(&cpp_dev->mutex);
-			return -EINVAL;
-		}
+		if (u_stream_buff_info->num_buffs != 0) {
+			k_stream_buff_info.buffer_info =
+				kzalloc(k_stream_buff_info.num_buffs *
+				sizeof(struct msm_cpp_buffer_info_t),
+				GFP_KERNEL);
+			if (ZERO_OR_NULL_PTR(k_stream_buff_info.buffer_info)) {
+				pr_err("%s:%d: malloc error\n",
+					__func__, __LINE__);
+				kfree(u_stream_buff_info);
+				mutex_unlock(&cpp_dev->mutex);
+				return -EINVAL;
+			}
 
-		rc = (copy_from_user(k_stream_buff_info.buffer_info,
+			rc = (copy_from_user(k_stream_buff_info.buffer_info,
 				(void __user *)u_stream_buff_info->buffer_info,
 				k_stream_buff_info.num_buffs *
 				sizeof(struct msm_cpp_buffer_info_t)) ?
 				-EFAULT : 0);
-		if (rc) {
-			ERR_COPY_FROM_USER();
-			kfree(k_stream_buff_info.buffer_info);
-			kfree(u_stream_buff_info);
-			mutex_unlock(&cpp_dev->mutex);
-			return -EINVAL;
+			if (rc) {
+				ERR_COPY_FROM_USER();
+				kfree(k_stream_buff_info.buffer_info);
+				kfree(u_stream_buff_info);
+				mutex_unlock(&cpp_dev->mutex);
+				return -EINVAL;
+			}
 		}
 
 		buff_queue_info = msm_cpp_get_buff_queue_entry(cpp_dev,
@@ -2998,7 +3042,7 @@ STREAM_BUFF_END:
 		struct msm_queue_cmd *event_qcmd;
 		struct msm_cpp_frame_info_t *process_frame;
 		CPP_DBG("VIDIOC_MSM_CPP_GET_EVENTPAYLOAD\n");
-		event_qcmd = msm_dequeue(queue, list_eventdata);
+		event_qcmd = msm_dequeue(queue, list_eventdata, POP_FRONT);
 		if (!event_qcmd) {
 			pr_err("no queue cmd available");
 			mutex_unlock(&cpp_dev->mutex);
@@ -3511,6 +3555,7 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 	struct msm_cpp_stream_buff_info_t k_cpp_buff_info;
 	struct msm_cpp_frame_info32_t k32_frame_info;
 	struct msm_cpp_frame_info_t k64_frame_info;
+	uint32_t identity_k = 0;
 	void __user *up = (void __user *)arg;
 
 	if (sd == NULL) {
@@ -3570,6 +3615,8 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 					cpp_frame->output_buffer_info[0];
 				k32_frame_info.output_buffer_info[1] =
 					cpp_frame->output_buffer_info[1];
+				k32_frame_info.duplicate_buffer_info =
+					cpp_frame->duplicate_buffer_info;
 			}
 		} else {
 			pr_err("%s: Error getting frame\n", __func__);
@@ -3676,9 +3723,15 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 			cmd = VIDIOC_MSM_CPP_APPEND_STREAM_BUFF_INFO;
 		break;
 	}
-	case VIDIOC_MSM_CPP_DEQUEUE_STREAM_BUFF_INFO32:
+	case VIDIOC_MSM_CPP_DEQUEUE_STREAM_BUFF_INFO32: {
+		uint32_t *identity_u = (uint32_t *)kp_ioctl.ioctl_ptr;
+
+		get_user(identity_k, identity_u);
+		kp_ioctl.ioctl_ptr = (void *)&identity_k;
+		kp_ioctl.len = sizeof(uint32_t);
 		cmd = VIDIOC_MSM_CPP_DEQUEUE_STREAM_BUFF_INFO;
 		break;
+	}
 	case VIDIOC_MSM_CPP_GET_EVENTPAYLOAD32:
 	{
 		struct msm_device_queue *queue = &cpp_dev->eventData_q;
@@ -3688,7 +3741,7 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 
 		CPP_DBG("VIDIOC_MSM_CPP_GET_EVENTPAYLOAD\n");
 		mutex_lock(&cpp_dev->mutex);
-		event_qcmd = msm_dequeue(queue, list_eventdata);
+		event_qcmd = msm_dequeue(queue, list_eventdata, POP_FRONT);
 		if (!event_qcmd) {
 			pr_err("no queue cmd available");
 			mutex_unlock(&cpp_dev->mutex);

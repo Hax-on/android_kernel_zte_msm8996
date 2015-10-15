@@ -25,19 +25,19 @@
 static struct debug_bus dbg_bus_8996[] = {
 
 	/* Unpack 0 sspp 0*/
-	{ 0x188, 50, 6 },
-	{ 0x188, 60, 6 },
-	{ 0x188, 54, 6 },
-	{ 0x188, 64, 6 },
-	{ 0x188, 70, 6 },
-	{ 0x188, 85, 6 },
+	{ 0x188, 50, 2 },
+	{ 0x188, 60, 2 },
+	{ 0x188, 54, 2 },
+	{ 0x188, 64, 2 },
+	{ 0x188, 70, 2 },
+	{ 0x188, 85, 2 },
 	/* Upack 0 sspp 1*/
-	{ 0x298, 50, 6 },
-	{ 0x298, 60, 6 },
-	{ 0x298, 54, 6 },
-	{ 0x298, 64, 6 },
-	{ 0x298, 70, 6 },
-	{ 0x298, 85, 6 },
+	{ 0x298, 50, 2 },
+	{ 0x298, 60, 2 },
+	{ 0x298, 54, 2 },
+	{ 0x298, 64, 2 },
+	{ 0x298, 70, 2 },
+	{ 0x298, 85, 2 },
 	/* scheduler */
 	{ 0x348, 130, 0 },
 	{ 0x348, 130, 1 },
@@ -45,6 +45,26 @@ static struct debug_bus dbg_bus_8996[] = {
 	{ 0x348, 130, 3 },
 	{ 0x348, 130, 4 },
 	{ 0x348, 130, 5 },
+
+	/* qseed */
+	{0x188, 6, 0},
+	{0x188, 6, 1},
+	{0x188, 26, 0},
+	{0x188, 26, 1},
+	{0x298, 6, 0},
+	{0x298, 6, 1},
+	{0x298, 26, 0},
+	{0x298, 26, 1},
+
+	/* scale */
+	{0x188, 16, 0},
+	{0x188, 16, 1},
+	{0x188, 36, 0},
+	{0x188, 36, 1},
+	{0x298, 16, 0},
+	{0x298, 16, 1},
+	{0x298, 36, 0},
+	{0x298, 36, 1},
 
 	/* fetch sspp0 */
 
@@ -600,119 +620,58 @@ static struct debug_bus dbg_bus_8996[] = {
 	{ 0x298, 84, 5 },
 	{ 0x298, 84, 6 },
 	{ 0x298, 84, 7 },
-};
 
-static struct debug_bus dbg_bus_8994[] = {
-	/* VIG QSEED */
-	{ 0x298, 4, 0},
-	{ 0x298, 4, 1},
-	{ 0x298, 24, 0},
-	{ 0x298, 24, 1},
-	{ 0x298, 42, 0},
-	{ 0x298, 42, 1},
-	{ 0x298, 88, 0},
-	{ 0x298, 88, 1},
-	/* RGB SCALE */
-	{ 0x298, 12, 0},
-	{ 0x298, 12, 1},
-	{ 0x298, 34, 0},
-	{ 0x298, 34, 1},
-	{ 0x298, 52, 0},
-	{ 0x298, 52, 1},
-	{ 0x298, 96, 0},
-	{ 0x298, 96, 1},
-	/* VIG CSC */
-	{ 0x298, 5, 0},
-	{ 0x298, 5, 1},
-	{ 0x298, 25, 0},
-	{ 0x298, 25, 1},
-	{ 0x298, 43, 0},
-	{ 0x298, 43, 1},
-	{ 0x298, 89, 0},
-	{ 0x298, 89, 1},
-	/* VIG SPA */
-	{ 0x298, 6, 0},
-	{ 0x298, 26, 0},
-	{ 0x298, 44, 0},
-	{ 0x298, 90, 0},
-	/* DSPP_PA */
-	{ 0x348, 13, 0},
-	{ 0x348, 19, 0},
-	{ 0x348, 25, 0},
-	{ 0x348, 3, 0},
-	/* VIG ISC */
-	{ 0x298, 7, 0},
-	{ 0x298, 7, 1},
-	{ 0x298, 7, 3},
-	{ 0x298, 27, 0},
-	{ 0x298, 27, 1},
-	{ 0x298, 27, 3},
-	{ 0x298, 45, 0},
-	{ 0x298, 45, 1},
-	{ 0x298, 45, 3},
-	{ 0x298, 91, 0},
-	{ 0x298, 91, 1},
-	{ 0x298, 91, 3},
-	/* RGB IGC */
-	{ 0x298, 13, 0},
-	{ 0x298, 13, 1},
-	{ 0x298, 13, 3},
-	{ 0x298, 35, 0},
-	{ 0x298, 35, 1},
-	{ 0x298, 35, 3},
-	{ 0x298, 53, 0},
-	{ 0x298, 53, 1},
-	{ 0x298, 53, 3},
-	{ 0x298, 97, 0},
-	{ 0x298, 97, 1},
-	{ 0x298, 97, 3},
-	/* DMA IGC */
-	{ 0x298, 58, 0},
-	{ 0x298, 58, 1},
-	{ 0x298, 58, 3},
-	{ 0x298, 65, 0},
-	{ 0x298, 65, 1},
-	{ 0x298, 65, 3},
-	/* DSPP IGC */
-	{ 0x348, 14, 0},
-	{ 0x348, 14, 1},
-	{ 0x348, 14, 3},
-	{ 0x348, 20, 0},
-	{ 0x348, 20, 1},
-	{ 0x348, 20, 3},
-	{ 0x348, 26, 0},
-	{ 0x348, 26, 1},
-	{ 0x348, 26, 3},
-	{ 0x348, 4, 0},
-	{ 0x348, 4, 1},
-	{ 0x348, 4, 3},
-	/* DSPP DITHER */
-	{ 0x348, 18, 1},
-	{ 0x348, 24, 1},
-	{ 0x348, 30, 1},
-	{ 0x348, 8, 1},
-	/*PPB 0*/
-	{ 0x348, 31, 0},
-	{ 0x348, 33, 0},
-	{ 0x348, 35, 0},
-	{ 0x348, 42, 0},
-	/*PPB 1*/
-	{ 0x348, 32, 0},
-	{ 0x348, 34, 0},
-	{ 0x348, 36, 0},
-	{ 0x348, 43, 0},
+	/* dspp */
+	{ 0x348, 13, 0 },
+	{ 0x348, 19, 0 },
+	{ 0x348, 14, 0 },
+	{ 0x348, 14, 1 },
+	{ 0x348, 14, 3 },
+	{ 0x348, 20, 0 },
+	{ 0x348, 20, 1 },
+	{ 0x348, 20, 3 },
+
+	/* dither */
+	{ 0x348, 18, 1 },
+	{ 0x348, 24, 1 },
+
+	/* ppb_0 */
+	{ 0x348, 31, 0 },
+	{ 0x348, 33, 0 },
+	{ 0x348, 35, 0 },
+	{ 0x348, 42, 0 },
+
+	/* ppb_1 */
+	{ 0x348, 32, 0 },
+	{ 0x348, 34, 0 },
+	{ 0x348, 36, 0 },
+	{ 0x348, 43, 0 },
+
+	/* lm_lut */
+	{ 0x348, 109, 0 },
+	{ 0x348, 105, 0 },
+	{ 0x348, 103, 0 },
+	{ 0x348, 101, 0 },
+	{ 0x348,  99, 0 },
+
+	/* tear-check */
+	{ 0x418, 63, 0 },
+	{ 0x418, 64, 0 },
+	{ 0x418, 65, 0 },
+	{ 0x418, 73, 0 },
+	{ 0x418, 74, 0 },
 };
 
 static struct vbif_debug_bus vbif_dbg_bus_8996[] = {
-	{0x214, 0x21c, 16, 2, 16}, /* arb clients */
-	{0x214, 0x21c, 0, 14, 4}, /* xin blocks - axi side */
-	{0x21c, 0x214, 0, 14, 5}, /* xin blocks - clock side */
+	{0x214, 0x21c, 16, 2, 0x10}, /* arb clients */
+	{0x214, 0x21c, 0, 14, 0x13}, /* xin blocks - axi side */
+	{0x21c, 0x214, 0, 14, 0xc}, /* xin blocks - clock side */
 };
 
 static struct vbif_debug_bus nrt_vbif_dbg_bus_8996[] = {
-	{0x214, 0x21c, 16, 1, 16}, /* arb clients */
-	{0x214, 0x21c, 0, 12, 4}, /* xin blocks - axi side */
-	{0x21c, 0x214, 0, 12, 5}, /* xin blocks - clock side */
+	{0x214, 0x21c, 16, 1, 0x10}, /* arb clients */
+	{0x214, 0x21c, 0, 12, 0x13}, /* xin blocks - axi side */
+	{0x21c, 0x214, 0, 12, 0xc}, /* xin blocks - clock side */
 };
 
 void mdss_mdp_hw_rev_debug_caps_init(struct mdss_data_type *mdata)
@@ -721,11 +680,6 @@ void mdss_mdp_hw_rev_debug_caps_init(struct mdss_data_type *mdata)
 	mdata->dbg_bus_size = 0;
 
 	switch (mdata->mdp_rev) {
-	case MDSS_MDP_HW_REV_105:
-	case MDSS_MDP_HW_REV_109:
-		mdata->dbg_bus = dbg_bus_8994;
-		mdata->dbg_bus_size = ARRAY_SIZE(dbg_bus_8994);
-		break;
 	case MDSS_MDP_HW_REV_107:
 	case MDSS_MDP_HW_REV_107_1:
 	case MDSS_MDP_HW_REV_107_2:
@@ -1035,6 +989,65 @@ static int mdss_debugfs_buffers_show(struct seq_file *s, void *v)
 }
 DEFINE_MDSS_DEBUGFS_SEQ_FOPS(mdss_debugfs_buffers);
 
+static int __danger_safe_signal_status(struct seq_file *s, bool danger_status)
+{
+	struct mdss_data_type *mdata = (struct mdss_data_type *)s->private;
+	u32 status;
+	int i, j;
+
+	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
+	if (danger_status) {
+		seq_puts(s, "\nDanger signal status:\n");
+		status = readl_relaxed(mdata->mdp_base +
+			MDSS_MDP_DANGER_STATUS);
+	} else {
+		seq_puts(s, "\nSafe signal status:\n");
+		status = readl_relaxed(mdata->mdp_base +
+			MDSS_MDP_SAFE_STATUS);
+	}
+	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
+
+	seq_printf(s, "MDP     :  0x%lx\n",
+		DANGER_SAFE_STATUS(status, MDP_DANGER_SAFE_BIT_OFFSET));
+
+	for (i = 0, j = VIG_DANGER_SAFE_BIT_OFFSET; i < mdata->nvig_pipes;
+			i++, j += 2)
+		seq_printf(s, "VIG%d    :  0x%lx  \t", i,
+			DANGER_SAFE_STATUS(status, j));
+	seq_puts(s, "\n");
+
+	for (i = 0, j = RGB_DANGER_SAFE_BIT_OFFSET; i < mdata->nrgb_pipes;
+			i++, j += 2)
+		seq_printf(s, "RGB%d    :  0x%lx  \t", i,
+			DANGER_SAFE_STATUS(status, j));
+	seq_puts(s, "\n");
+	for (i = 0, j = DMA_DANGER_SAFE_BIT_OFFSET; i < mdata->ndma_pipes;
+			i++, j += 2)
+		seq_printf(s, "DMA%d    :  0x%lx  \t", i,
+			DANGER_SAFE_STATUS(status, j));
+	seq_puts(s, "\n");
+
+	for (i = 0, j = CURSOR_DANGER_SAFE_BIT_OFFSET; i < mdata->ncursor_pipes;
+			i++, j += 2)
+		seq_printf(s, "CURSOR%d :  0x%lx  \t", i,
+			DANGER_SAFE_STATUS(status, j));
+	seq_puts(s, "\n");
+
+	return 0;
+}
+
+static int mdss_debugfs_danger_stats_show(struct seq_file *s, void *v)
+{
+	return __danger_safe_signal_status(s, true);
+}
+DEFINE_MDSS_DEBUGFS_SEQ_FOPS(mdss_debugfs_danger_stats);
+
+static int mdss_debugfs_safe_stats_show(struct seq_file *s, void *v)
+{
+	return __danger_safe_signal_status(s, false);
+}
+DEFINE_MDSS_DEBUGFS_SEQ_FOPS(mdss_debugfs_safe_stats);
+
 static void __stats_ctl_dump(struct mdss_mdp_ctl *ctl, struct seq_file *s)
 {
 	if (!ctl->ref_cnt)
@@ -1106,6 +1119,10 @@ int mdss_mdp_debugfs_init(struct mdss_data_type *mdata)
 			&mdss_debugfs_buffers_fops);
 	debugfs_create_file("stat", 0644, mdd->root, mdata,
 			&mdss_debugfs_stats_fops);
+	debugfs_create_file("danger_stat", 0644, mdd->root, mdata,
+			&mdss_debugfs_danger_stats_fops);
+	debugfs_create_file("safe_stat", 0644, mdd->root, mdata,
+			&mdss_debugfs_safe_stats_fops);
 	debugfs_create_bool("serialize_wait4pp", 0644, mdd->root,
 		(u32 *)&mdata->serialize_wait4pp);
 	debugfs_create_bool("enable_gate", 0644, mdd->root,

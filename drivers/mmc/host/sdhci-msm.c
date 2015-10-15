@@ -118,6 +118,11 @@
 #define CORE_VENDOR_SPEC_ADMA_ERR_ADDR0	0x114
 #define CORE_VENDOR_SPEC_ADMA_ERR_ADDR1	0x118
 
+#define CORE_VENDOR_SPEC_FUNC2 0x110
+#define HC_SW_RST_WAIT_IDLE_DIS	(1 << 20)
+#define HC_SW_RST_REQ (1 << 21)
+#define CORE_ONE_MID_EN     (1 << 25)
+
 #define CORE_VENDOR_SPEC_CAPABILITIES0	0x11C
 #define CORE_8_BIT_SUPPORT		(1 << 18)
 #define CORE_3_3V_SUPPORT		(1 << 24)
@@ -164,10 +169,12 @@
 #define CORE_FLL_CYCLE_CNT	(1 << 18)
 #define CORE_DLL_CLOCK_DISABLE	(1 << 21)
 
-#define CORE_DDR_CONFIG		0x1B8
-#define DDR_CONFIG_POR_VAL	0x80040853
-
-#define MSM_MMC_DEFAULT_CPU_DMA_LATENCY 200 /* usecs */
+#define CORE_DDR_CONFIG			0x1B8
+#define DDR_CONFIG_POR_VAL		0x80040853
+#define DDR_CONFIG_PRG_RCLK_DLY_MASK	0x1FF
+#define DDR_CONFIG_PRG_RCLK_DLY		115
+#define CORE_DDR_CONFIG_2		0x1BC
+#define DDR_CONFIG_2_POR_VAL		0x80040873
 
 /* 512 descriptors */
 #define SDHCI_MSM_MAX_SEGMENTS  (1 << 9)
@@ -761,21 +768,26 @@ static int sdhci_msm_cm_dll_sdc4_calibration(struct sdhci_host *host)
 {
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
 	struct sdhci_msm_host *msm_host = pltfm_host->priv;
-	u32 dll_status;
+	u32 dll_status, ddr_config;
 	int ret = 0;
 
 	pr_debug("%s: Enter %s\n", mmc_hostname(host->mmc), __func__);
 
 	/*
-	 * Currently the CORE_DDR_CONFIG register defaults to desired
-	 * configuration on reset. Currently reprogramming the power on
-	 * reset (POR) value in case it might have been modified by
-	 * bootloaders. In the future, if this changes, then the desired
-	 * values will need to be programmed appropriately.
+	 * Reprogramming the value in case it might have been modified by
+	 * bootloaders.
 	 */
-	writel_relaxed(DDR_CONFIG_POR_VAL, host->ioaddr + CORE_DDR_CONFIG);
+	if (msm_host->rclk_delay_fix) {
+		writel_relaxed(DDR_CONFIG_2_POR_VAL,
+				host->ioaddr + CORE_DDR_CONFIG_2);
+	} else {
+		ddr_config = DDR_CONFIG_POR_VAL &
+				~DDR_CONFIG_PRG_RCLK_DLY_MASK;
+		ddr_config |= DDR_CONFIG_PRG_RCLK_DLY;
+		writel_relaxed(ddr_config, host->ioaddr + CORE_DDR_CONFIG);
+	}
 
-	if (msm_host->enhanced_strobe)
+	if (msm_host->enhanced_strobe && mmc_card_strobe(msm_host->mmc->card))
 		writel_relaxed((readl_relaxed(host->ioaddr + CORE_DDR_200_CFG)
 				| CORE_CMDIN_RCLK_EN),
 				host->ioaddr + CORE_DDR_200_CFG);
@@ -823,8 +835,8 @@ static int sdhci_msm_enhanced_strobe(struct sdhci_host *host)
 
 	pr_debug("%s: Enter %s\n", mmc_hostname(host->mmc), __func__);
 
-	if (!msm_host->enhanced_strobe) {
-		pr_debug("%s: host does not support hs400 enhanced strobe\n",
+	if (!msm_host->enhanced_strobe || !mmc_card_strobe(mmc->card)) {
+		pr_debug("%s: host/card does not support hs400 enhanced strobe\n",
 				mmc_hostname(mmc));
 		return -EINVAL;
 	}
@@ -932,6 +944,7 @@ int sdhci_msm_execute_tuning(struct sdhci_host *host, u32 opcode)
 	u8 drv_type = 0;
 	bool drv_type_changed = false;
 	struct mmc_card *card = host->mmc->card;
+	int sts_retry;
 
 	/*
 	 * Tuning is required for SDR104, HS200 and HS400 cards and
@@ -988,6 +1001,7 @@ retry:
 			.data = &data
 		};
 		struct scatterlist sg;
+		struct mmc_command sts_cmd = {0};
 
 		/* set the phase in delay line hw block */
 		rc = msm_config_cm_dll_phase(host, phase);
@@ -1008,14 +1022,35 @@ retry:
 		memset(data_buf, 0, size);
 		mmc_wait_for_req(mmc, &mrq);
 
-		/*
-		 * wait for 146 MCLK cycles for the card to send out the data
-		 * and thus move to TRANS state. As the MCLK would be minimum
-		 * 200MHz when tuning is performed, we need maximum 0.73us
-		 * delay. To be on safer side 1ms delay is given.
-		 */
-		if (cmd.error)
-			usleep_range(1000, 1200);
+		if (card && (cmd.error || data.error)) {
+			sts_cmd.opcode = MMC_SEND_STATUS;
+			sts_cmd.arg = card->rca << 16;
+			sts_cmd.flags = MMC_RSP_R1 | MMC_CMD_AC;
+			sts_retry = 5;
+			while (sts_retry) {
+				mmc_wait_for_cmd(mmc, &sts_cmd, 0);
+
+				if (sts_cmd.error ||
+				   (R1_CURRENT_STATE(sts_cmd.resp[0])
+				   != R1_STATE_TRAN)) {
+					sts_retry--;
+					/*
+					 * wait for at least 146 MCLK cycles for
+					 * the card to move to TRANS state. As
+					 * the MCLK would be min 200MHz for
+					 * tuning, we need max 0.73us delay. To
+					 * be on safer side 1ms delay is given.
+					 */
+					usleep_range(1000, 1200);
+					pr_debug("%s: phase %d sts cmd err %d resp 0x%x\n",
+						mmc_hostname(mmc), phase,
+						sts_cmd.error, sts_cmd.resp[0]);
+					continue;
+				}
+				break;
+			};
+		}
+
 		if (!cmd.error && !data.error &&
 			!memcmp(data_buf, tuning_block_pattern, size)) {
 			/* tuning is successful at this tuning point */
@@ -1389,29 +1424,168 @@ out:
 	return ret;
 }
 
-#ifdef CONFIG_SMP
-static void sdhci_msm_populate_affinity_type(struct sdhci_msm_pltfm_data *pdata,
-					     struct device_node *np)
+static int sdhci_msm_pm_qos_parse_irq(struct device *dev,
+		struct sdhci_msm_pltfm_data *pdata)
 {
-	const char *cpu_affinity = NULL;
+	struct device_node *np = dev->of_node;
+	const char *str;
+	u32 cpu;
+	int ret = 0;
+	int i;
 
-	pdata->cpu_affinity_type = PM_QOS_REQ_AFFINE_IRQ;
-	if (!of_property_read_string(np, "qcom,cpu-affinity",
-				    &cpu_affinity)) {
-		if (!strcmp(cpu_affinity, "all_cores"))
-			pdata->cpu_affinity_type = PM_QOS_REQ_ALL_CORES;
-		else if (!strcmp(cpu_affinity, "affine_cores"))
-			pdata->cpu_affinity_type = PM_QOS_REQ_AFFINE_CORES;
-		else if (!strcmp(cpu_affinity, "affine_irq"))
-			pdata->cpu_affinity_type = PM_QOS_REQ_AFFINE_IRQ;
+	pdata->pm_qos_data.irq_valid = false;
+	pdata->pm_qos_data.irq_req_type = PM_QOS_REQ_AFFINE_CORES;
+	if (!of_property_read_string(np, "qcom,pm-qos-irq-type", &str) &&
+		!strcmp(str, "affine_irq")) {
+		pdata->pm_qos_data.irq_req_type = PM_QOS_REQ_AFFINE_IRQ;
+	}
+
+	/* must specify cpu for "affine_cores" type */
+	if (pdata->pm_qos_data.irq_req_type == PM_QOS_REQ_AFFINE_CORES) {
+		pdata->pm_qos_data.irq_cpu = -1;
+		ret = of_property_read_u32(np, "qcom,pm-qos-irq-cpu", &cpu);
+		if (ret) {
+			dev_err(dev, "%s: error %d reading irq cpu\n", __func__,
+				ret);
+			goto out;
+		}
+		if (cpu < 0 || cpu >= num_possible_cpus()) {
+			dev_err(dev, "%s: invalid irq cpu %d (NR_CPUS=%d)\n",
+				__func__, cpu, num_possible_cpus());
+			ret = -EINVAL;
+			goto out;
+		}
+		pdata->pm_qos_data.irq_cpu = cpu;
+	}
+
+	if (of_property_count_u32_elems(np, "qcom,pm-qos-irq-latency") !=
+		SDHCI_POWER_POLICY_NUM) {
+		dev_err(dev, "%s: could not read %d values for 'qcom,pm-qos-irq-latency'\n",
+			__func__, SDHCI_POWER_POLICY_NUM);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	for (i = 0; i < SDHCI_POWER_POLICY_NUM; i++)
+		of_property_read_u32_index(np, "qcom,pm-qos-irq-latency", i,
+			&pdata->pm_qos_data.irq_latency.latency[i]);
+
+	pdata->pm_qos_data.irq_valid = true;
+out:
+	return ret;
+}
+
+static int sdhci_msm_pm_qos_parse_cpu_groups(struct device *dev,
+		struct sdhci_msm_pltfm_data *pdata)
+{
+	struct device_node *np = dev->of_node;
+	u32 mask;
+	int nr_groups;
+	int ret;
+	int i;
+
+	/* Read cpu group mapping */
+	nr_groups = of_property_count_u32_elems(np, "qcom,pm-qos-cpu-groups");
+	if (nr_groups <= 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+	pdata->pm_qos_data.cpu_group_map.nr_groups = nr_groups;
+	pdata->pm_qos_data.cpu_group_map.mask =
+		kcalloc(nr_groups, sizeof(cpumask_t), GFP_KERNEL);
+	if (!pdata->pm_qos_data.cpu_group_map.mask) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	for (i = 0; i < nr_groups; i++) {
+		of_property_read_u32_index(np, "qcom,pm-qos-cpu-groups",
+			i, &mask);
+
+		pdata->pm_qos_data.cpu_group_map.mask[i].bits[0] = mask;
+		if (!cpumask_subset(&pdata->pm_qos_data.cpu_group_map.mask[i],
+			cpu_possible_mask)) {
+			dev_err(dev, "%s: invalid mask 0x%x of cpu group #%d\n",
+				__func__, mask, i);
+			ret = -EINVAL;
+			goto free_res;
+		}
+	}
+	return 0;
+
+free_res:
+	kfree(pdata->pm_qos_data.cpu_group_map.mask);
+out:
+	return ret;
+}
+
+static int sdhci_msm_pm_qos_parse_latency(struct device *dev, const char *name,
+		int nr_groups, struct sdhci_msm_pm_qos_latency **latency)
+{
+	struct device_node *np = dev->of_node;
+	struct sdhci_msm_pm_qos_latency *values;
+	int ret;
+	int i;
+	int group;
+	int cfg;
+
+	ret = of_property_count_u32_elems(np, name);
+	if (ret > 0 && ret != SDHCI_POWER_POLICY_NUM * nr_groups) {
+		dev_err(dev, "%s: invalid number of values for property %s: expected=%d actual=%d\n",
+			__func__, name,	SDHCI_POWER_POLICY_NUM * nr_groups,
+			ret);
+		return -EINVAL;
+	} else if (ret < 0) {
+		return ret;
+	}
+
+	values = kcalloc(nr_groups, sizeof(struct sdhci_msm_pm_qos_latency),
+			GFP_KERNEL);
+	if (!values)
+		return -ENOMEM;
+
+	for (i = 0; i < SDHCI_POWER_POLICY_NUM * nr_groups; i++) {
+		group = i / SDHCI_POWER_POLICY_NUM;
+		cfg = i % SDHCI_POWER_POLICY_NUM;
+		of_property_read_u32_index(np, name, i,
+				&(values[group].latency[cfg]));
+	}
+
+	*latency = values;
+	return 0;
+}
+
+static void sdhci_msm_pm_qos_parse(struct device *dev,
+				struct sdhci_msm_pltfm_data *pdata)
+{
+	if (sdhci_msm_pm_qos_parse_irq(dev, pdata))
+		dev_notice(dev, "%s: PM QoS voting for IRQ will be disabled\n",
+			__func__);
+
+	if (!sdhci_msm_pm_qos_parse_cpu_groups(dev, pdata)) {
+		pdata->pm_qos_data.cmdq_valid =
+			!sdhci_msm_pm_qos_parse_latency(dev,
+				"qcom,pm-qos-cmdq-latency-us",
+				pdata->pm_qos_data.cpu_group_map.nr_groups,
+				&pdata->pm_qos_data.cmdq_latency);
+		pdata->pm_qos_data.legacy_valid =
+			!sdhci_msm_pm_qos_parse_latency(dev,
+				"qcom,pm-qos-legacy-latency-us",
+				pdata->pm_qos_data.cpu_group_map.nr_groups,
+				&pdata->pm_qos_data.latency);
+		if (!pdata->pm_qos_data.cmdq_valid &&
+			!pdata->pm_qos_data.legacy_valid) {
+			/* clean-up previously allocated arrays */
+			kfree(pdata->pm_qos_data.latency);
+			kfree(pdata->pm_qos_data.cmdq_latency);
+			dev_err(dev, "%s: invalid PM QoS latency values. Voting for cpu group will be disabled\n",
+				__func__);
+		}
+	} else {
+		dev_notice(dev, "%s: PM QoS voting for cpu group will be disabled\n",
+			__func__);
 	}
 }
-#else
-static void sdhci_msm_populate_affinity_type(struct sdhci_msm_pltfm_data *pdata,
-					     struct device_node *np)
-{
-}
-#endif
 
 /* Parse platform data */
 static
@@ -1421,7 +1595,6 @@ struct sdhci_msm_pltfm_data *sdhci_msm_populate_pdata(struct device *dev,
 	struct sdhci_msm_pltfm_data *pdata = NULL;
 	struct device_node *np = dev->of_node;
 	u32 bus_width = 0;
-	u32 cpu_dma_latency;
 	int len, i;
 	int clk_table_len;
 	u32 *clk_table = NULL;
@@ -1448,12 +1621,6 @@ struct sdhci_msm_pltfm_data *sdhci_msm_populate_pdata(struct device *dev,
 		dev_notice(dev, "invalid bus-width, default to 1-bit mode\n");
 		pdata->mmc_bus_width = 0;
 	}
-
-	if (!of_property_read_u32(np, "qcom,cpu-dma-latency-us",
-				&cpu_dma_latency))
-		pdata->cpu_dma_latency_us = cpu_dma_latency;
-	else
-		pdata->cpu_dma_latency_us = MSM_MMC_DEFAULT_CPU_DMA_LATENCY;
 
 	if (sdhci_msm_dt_get_array(dev, "qcom,devfreq,freq-table",
 			&msm_host->mmc->clk_scaling.freq_table,
@@ -1558,10 +1725,10 @@ struct sdhci_msm_pltfm_data *sdhci_msm_populate_pdata(struct device *dev,
 	pdata->largeaddressbus =
 		of_property_read_bool(np, "qcom,large-address-bus");
 
-	sdhci_msm_populate_affinity_type(pdata, np);
-
 	if (of_property_read_bool(np, "qcom,wakeup-on-idle"))
 		msm_host->mmc->wakeup_on_idle = true;
+
+	sdhci_msm_pm_qos_parse(dev, pdata);
 
 	return pdata;
 out:
@@ -2065,6 +2232,18 @@ static int sdhci_msm_set_vdd_io_vol(struct sdhci_msm_pltfm_data *pdata,
 	return ret;
 }
 
+void sdhci_msm_dump_pwr_ctrl_regs(struct sdhci_host *host)
+{
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+
+	pr_err("%s: PWRCTL_STATUS: 0x%08x | PWRCTL_MASK: 0x%08x | PWRCTL_CTL: 0x%08x\n",
+		mmc_hostname(host->mmc),
+		readl_relaxed(msm_host->core_mem + CORE_PWRCTL_STATUS),
+		readl_relaxed(msm_host->core_mem + CORE_PWRCTL_MASK),
+		readl_relaxed(msm_host->core_mem + CORE_PWRCTL_CTL));
+}
+
 static irqreturn_t sdhci_msm_pwr_irq(int irq, void *data)
 {
 	struct sdhci_host *host = (struct sdhci_host *)data;
@@ -2075,6 +2254,7 @@ static irqreturn_t sdhci_msm_pwr_irq(int irq, void *data)
 	int ret = 0;
 	int pwr_state = 0, io_level = 0;
 	unsigned long flags;
+	int retry = 10;
 
 	irq_status = readb_relaxed(msm_host->core_mem + CORE_PWRCTL_STATUS);
 	pr_debug("%s: Received IRQ(%d), status=0x%x\n",
@@ -2089,6 +2269,29 @@ static irqreturn_t sdhci_msm_pwr_irq(int irq, void *data)
 	 * completed before its next update to registers within hc_mem.
 	 */
 	mb();
+	/*
+	 * There is a rare HW scenario where the first clear pulse could be
+	 * lost when actual reset and clear/read of status register is
+	 * happening at a time. Hence, retry for at least 10 times to make
+	 * sure status register is cleared. Otherwise, this will result in
+	 * a spurious power IRQ resulting in system instability.
+	 */
+	while (irq_status &
+		readb_relaxed(msm_host->core_mem + CORE_PWRCTL_STATUS)) {
+		if (retry == 0) {
+			pr_err("%s: Timedout clearing (0x%x) pwrctl status register\n",
+				mmc_hostname(host->mmc), irq_status);
+			sdhci_msm_dump_pwr_ctrl_regs(host);
+			BUG_ON(1);
+		}
+		writeb_relaxed(irq_status,
+				(msm_host->core_mem + CORE_PWRCTL_CLEAR));
+		retry--;
+		udelay(10);
+	}
+	if (likely(retry < 10))
+		pr_debug("%s: success clearing (0x%x) pwrctl status register, retries left %d\n",
+				mmc_hostname(host->mmc), irq_status, retry);
 
 	/* Handle BUS ON/OFF*/
 	if (irq_status & CORE_PWRCTL_BUS_ON) {
@@ -2301,14 +2504,17 @@ static void sdhci_msm_check_power_status(struct sdhci_host *host, u32 req_type)
 
 static void sdhci_msm_toggle_cdr(struct sdhci_host *host, bool enable)
 {
-	if (enable)
-		writel_relaxed((readl_relaxed(host->ioaddr +
-					      CORE_DLL_CONFIG) | CORE_CDR_EN),
-			       host->ioaddr + CORE_DLL_CONFIG);
-	else
-		writel_relaxed((readl_relaxed(host->ioaddr +
-					      CORE_DLL_CONFIG) & ~CORE_CDR_EN),
-			       host->ioaddr + CORE_DLL_CONFIG);
+	u32 config = readl_relaxed(host->ioaddr + CORE_DLL_CONFIG);
+
+	if (enable) {
+		config |= CORE_CDR_EN;
+		config &= ~CORE_CDR_EXT_EN;
+		writel_relaxed(config, host->ioaddr + CORE_DLL_CONFIG);
+	} else {
+		config &= ~CORE_CDR_EN;
+		config |= CORE_CDR_EXT_EN;
+		writel_relaxed(config, host->ioaddr + CORE_DLL_CONFIG);
+	}
 }
 
 static unsigned int sdhci_msm_max_segs(void)
@@ -2596,8 +2802,10 @@ static void sdhci_msm_set_clock(struct sdhci_host *host, unsigned int clock)
 		 * Select HS400 mode using the HC_SELECT_IN from VENDOR SPEC
 		 * register
 		 */
-		if ((msm_host->tuning_done || msm_host->enhanced_strobe) &&
-			!msm_host->calibration_done) {
+		if ((msm_host->tuning_done ||
+				(mmc_card_strobe(msm_host->mmc->card) &&
+				 msm_host->enhanced_strobe)) &&
+				!msm_host->calibration_done) {
 			/*
 			 * Write 0x6 to HC_SELECT_IN and 1 to HC_SELECT_IN_EN
 			 * field in VENDOR_SPEC_FUNC
@@ -2760,6 +2968,8 @@ void sdhci_msm_dump_vendor_regs(struct sdhci_host *host)
 		readl_relaxed(host->ioaddr + CORE_VENDOR_SPEC),
 		readl_relaxed(host->ioaddr + CORE_VENDOR_SPEC_ADMA_ERR_ADDR0),
 		readl_relaxed(host->ioaddr + CORE_VENDOR_SPEC_ADMA_ERR_ADDR1));
+	pr_info("Vndr func2: 0x%08x\n",
+		readl_relaxed(host->ioaddr + CORE_VENDOR_SPEC_FUNC2));
 
 	/*
 	 * tbsel indicates [2:0] bits and tbsel2 indicates [7:4] bits
@@ -2816,8 +3026,9 @@ static void sdhci_msm_enhanced_strobe_mask(struct sdhci_host *host, bool set)
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
 	struct sdhci_msm_host *msm_host = pltfm_host->priv;
 
-	if (!msm_host->enhanced_strobe) {
-		pr_debug("%s: host does not support hs400 enhanced strobe\n",
+	if (!msm_host->enhanced_strobe ||
+			!mmc_card_strobe(msm_host->mmc->card)) {
+		pr_debug("%s: host/card does not support hs400 enhanced strobe\n",
 				mmc_hostname(host->mmc));
 		return;
 	}
@@ -2888,8 +3099,496 @@ int sdhci_msm_notify_load(struct sdhci_host *host, enum mmc_load state)
 	return 0;
 }
 
+void sdhci_msm_reset_workaround(struct sdhci_host *host, u32 enable)
+{
+	u32 vendor_func2;
+	unsigned long timeout;
+
+	vendor_func2 = readl_relaxed(host->ioaddr + CORE_VENDOR_SPEC_FUNC2);
+
+	if (enable) {
+		writel_relaxed(vendor_func2 | HC_SW_RST_REQ, host->ioaddr +
+				CORE_VENDOR_SPEC_FUNC2);
+		timeout = 10000;
+		while (readl_relaxed(host->ioaddr + CORE_VENDOR_SPEC_FUNC2) &
+				HC_SW_RST_REQ) {
+			if (timeout == 0) {
+				pr_info("%s: Applying wait idle disable workaround\n",
+					mmc_hostname(host->mmc));
+				/*
+				 * Apply the reset workaround to not wait for
+				 * pending data transfers on AXI before
+				 * resetting the controller. This could be
+				 * risky if the transfers were stuck on the
+				 * AXI bus.
+				 */
+				vendor_func2 = readl_relaxed(host->ioaddr +
+						CORE_VENDOR_SPEC_FUNC2);
+				writel_relaxed(vendor_func2 |
+					HC_SW_RST_WAIT_IDLE_DIS,
+					host->ioaddr + CORE_VENDOR_SPEC_FUNC2);
+				host->reset_wa_t = ktime_get();
+				return;
+			}
+			timeout--;
+			udelay(10);
+		}
+		pr_info("%s: waiting for SW_RST_REQ is successful\n",
+				mmc_hostname(host->mmc));
+	} else {
+		writel_relaxed(vendor_func2 & ~HC_SW_RST_WAIT_IDLE_DIS,
+				host->ioaddr + CORE_VENDOR_SPEC_FUNC2);
+	}
+}
+
+static void sdhci_msm_pm_qos_irq_unvote_work(struct work_struct *work)
+{
+	struct sdhci_msm_pm_qos_irq *pm_qos_irq =
+		container_of(work, struct sdhci_msm_pm_qos_irq, unvote_work);
+
+	if (atomic_read(&pm_qos_irq->counter))
+		return;
+
+	pm_qos_irq->latency = PM_QOS_DEFAULT_VALUE;
+	pm_qos_update_request(&pm_qos_irq->req, pm_qos_irq->latency);
+}
+
+void sdhci_msm_pm_qos_irq_vote(struct sdhci_host *host)
+{
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+	struct sdhci_msm_pm_qos_latency *latency =
+		&msm_host->pdata->pm_qos_data.irq_latency;
+	int counter;
+
+	if (!msm_host->pm_qos_irq.enabled)
+		return;
+
+	counter = atomic_inc_return(&msm_host->pm_qos_irq.counter);
+	/* Make sure to update the voting in case power policy has changed */
+	if (msm_host->pm_qos_irq.latency == latency->latency[host->power_policy]
+		&& counter > 1)
+		return;
+
+	cancel_work_sync(&msm_host->pm_qos_irq.unvote_work);
+	msm_host->pm_qos_irq.latency = latency->latency[host->power_policy];
+	pm_qos_update_request(&msm_host->pm_qos_irq.req,
+				msm_host->pm_qos_irq.latency);
+}
+
+void sdhci_msm_pm_qos_irq_unvote(struct sdhci_host *host, bool async)
+{
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+	int counter;
+
+	if (!msm_host->pm_qos_irq.enabled)
+		return;
+
+	counter = atomic_dec_return(&msm_host->pm_qos_irq.counter);
+	if (counter < 0) {
+		pr_err("%s: counter=%d\n", __func__, counter);
+		BUG();
+	}
+	if (counter)
+		return;
+
+	if (async) {
+		schedule_work(&msm_host->pm_qos_irq.unvote_work);
+		return;
+	}
+
+	msm_host->pm_qos_irq.latency = PM_QOS_DEFAULT_VALUE;
+	pm_qos_update_request(&msm_host->pm_qos_irq.req,
+			msm_host->pm_qos_irq.latency);
+}
+
+static ssize_t
+sdhci_msm_pm_qos_irq_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct sdhci_host *host = dev_get_drvdata(dev);
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+	struct sdhci_msm_pm_qos_irq *irq = &msm_host->pm_qos_irq;
+
+	return snprintf(buf, PAGE_SIZE,
+		"IRQ PM QoS: enabled=%d, counter=%d, latency=%d\n",
+		irq->enabled, atomic_read(&irq->counter), irq->latency);
+}
+
+static ssize_t
+sdhci_msm_pm_qos_irq_enable_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct sdhci_host *host = dev_get_drvdata(dev);
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+
+	return snprintf(buf, PAGE_SIZE, "%u\n", msm_host->pm_qos_irq.enabled);
+}
+
+static ssize_t
+sdhci_msm_pm_qos_irq_enable_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct sdhci_host *host = dev_get_drvdata(dev);
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+	uint32_t value;
+	bool enable;
+	int ret;
+
+	ret = kstrtou32(buf, 0, &value);
+	if (ret)
+		goto out;
+	enable = !!value;
+
+	if (enable == msm_host->pm_qos_irq.enabled)
+		goto out;
+
+	msm_host->pm_qos_irq.enabled = enable;
+	if (!enable) {
+		cancel_work_sync(&msm_host->pm_qos_irq.unvote_work);
+		atomic_set(&msm_host->pm_qos_irq.counter, 0);
+		msm_host->pm_qos_irq.latency = PM_QOS_DEFAULT_VALUE;
+		pm_qos_update_request(&msm_host->pm_qos_irq.req,
+				msm_host->pm_qos_irq.latency);
+	}
+
+out:
+	return count;
+}
+
+void sdhci_msm_pm_qos_irq_init(struct sdhci_host *host)
+{
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+	struct sdhci_msm_pm_qos_latency *irq_latency;
+	int ret;
+
+	if (!msm_host->pdata->pm_qos_data.irq_valid)
+		return;
+
+	/* Initialize only once as this gets called per partition */
+	if (msm_host->pm_qos_irq.enabled)
+		return;
+
+	atomic_set(&msm_host->pm_qos_irq.counter, 0);
+	msm_host->pm_qos_irq.req.type =
+			msm_host->pdata->pm_qos_data.irq_req_type;
+	if (msm_host->pm_qos_irq.req.type == PM_QOS_REQ_AFFINE_IRQ)
+		msm_host->pm_qos_irq.req.irq = host->irq;
+	else
+		cpumask_copy(&msm_host->pm_qos_irq.req.cpus_affine,
+			cpumask_of(msm_host->pdata->pm_qos_data.irq_cpu));
+
+	INIT_WORK(&msm_host->pm_qos_irq.unvote_work,
+		sdhci_msm_pm_qos_irq_unvote_work);
+	/* For initialization phase, set the performance latency */
+	irq_latency = &msm_host->pdata->pm_qos_data.irq_latency;
+	msm_host->pm_qos_irq.latency =
+		irq_latency->latency[SDHCI_PERFORMANCE_MODE];
+	pm_qos_add_request(&msm_host->pm_qos_irq.req, PM_QOS_CPU_DMA_LATENCY,
+			msm_host->pm_qos_irq.latency);
+	msm_host->pm_qos_irq.enabled = true;
+
+	/* sysfs */
+	msm_host->pm_qos_irq.enable_attr.show =
+		sdhci_msm_pm_qos_irq_enable_show;
+	msm_host->pm_qos_irq.enable_attr.store =
+		sdhci_msm_pm_qos_irq_enable_store;
+	sysfs_attr_init(&msm_host->pm_qos_irq.enable_attr.attr);
+	msm_host->pm_qos_irq.enable_attr.attr.name = "pm_qos_irq_enable";
+	msm_host->pm_qos_irq.enable_attr.attr.mode = S_IRUGO | S_IWUSR;
+	ret = device_create_file(&msm_host->pdev->dev,
+		&msm_host->pm_qos_irq.enable_attr);
+	if (ret)
+		pr_err("%s: fail to create pm_qos_irq_enable (%d)\n",
+			__func__, ret);
+
+	msm_host->pm_qos_irq.status_attr.show = sdhci_msm_pm_qos_irq_show;
+	msm_host->pm_qos_irq.status_attr.store = NULL;
+	sysfs_attr_init(&msm_host->pm_qos_irq.status_attr.attr);
+	msm_host->pm_qos_irq.status_attr.attr.name = "pm_qos_irq_status";
+	msm_host->pm_qos_irq.status_attr.attr.mode = S_IRUGO;
+	ret = device_create_file(&msm_host->pdev->dev,
+			&msm_host->pm_qos_irq.status_attr);
+	if (ret)
+		pr_err("%s: fail to create pm_qos_irq_status (%d)\n",
+			__func__, ret);
+}
+
+static ssize_t sdhci_msm_pm_qos_group_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct sdhci_host *host = dev_get_drvdata(dev);
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+	struct sdhci_msm_pm_qos_group *group;
+	int i;
+	int nr_groups = msm_host->pdata->pm_qos_data.cpu_group_map.nr_groups;
+	int offset = 0;
+
+	for (i = 0; i < nr_groups; i++) {
+		group = &msm_host->pm_qos[i];
+		offset += snprintf(&buf[offset], PAGE_SIZE,
+			"Group #%d (mask=0x%lx) PM QoS: enabled=%d, counter=%d, latency=%d\n",
+			i, group->req.cpus_affine.bits[0],
+			msm_host->pm_qos_group_enable,
+			atomic_read(&group->counter),
+			group->latency);
+	}
+
+	return offset;
+}
+
+static ssize_t sdhci_msm_pm_qos_group_enable_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct sdhci_host *host = dev_get_drvdata(dev);
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+
+	return snprintf(buf, PAGE_SIZE, "%s\n",
+		msm_host->pm_qos_group_enable ? "enabled" : "disabled");
+}
+
+static ssize_t sdhci_msm_pm_qos_group_enable_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct sdhci_host *host = dev_get_drvdata(dev);
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+	int nr_groups = msm_host->pdata->pm_qos_data.cpu_group_map.nr_groups;
+	uint32_t value;
+	bool enable;
+	int ret;
+	int i;
+
+	ret = kstrtou32(buf, 0, &value);
+	if (ret)
+		goto out;
+	enable = !!value;
+
+	if (enable == msm_host->pm_qos_group_enable)
+		goto out;
+
+	msm_host->pm_qos_group_enable = enable;
+	if (!enable) {
+		for (i = 0; i < nr_groups; i++) {
+			cancel_work_sync(&msm_host->pm_qos[i].unvote_work);
+			atomic_set(&msm_host->pm_qos[i].counter, 0);
+			msm_host->pm_qos[i].latency = PM_QOS_DEFAULT_VALUE;
+			pm_qos_update_request(&msm_host->pm_qos[i].req,
+				msm_host->pm_qos[i].latency);
+		}
+	}
+
+out:
+	return count;
+}
+
+static int sdhci_msm_get_cpu_group(struct sdhci_msm_host *msm_host, int cpu)
+{
+	int i;
+	struct sdhci_msm_cpu_group_map *map =
+			&msm_host->pdata->pm_qos_data.cpu_group_map;
+
+	if (cpu < 0)
+		goto not_found;
+
+	for (i = 0; i < map->nr_groups; i++)
+		if (cpumask_test_cpu(cpu, &map->mask[i]))
+			return i;
+
+not_found:
+	return -EINVAL;
+}
+
+void sdhci_msm_pm_qos_cpu_vote(struct sdhci_host *host,
+		struct sdhci_msm_pm_qos_latency *latency, int cpu)
+{
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+	int group = sdhci_msm_get_cpu_group(msm_host, cpu);
+	struct sdhci_msm_pm_qos_group *pm_qos_group;
+	int counter;
+
+	if (!msm_host->pm_qos_group_enable || group < 0)
+		return;
+
+	pm_qos_group = &msm_host->pm_qos[group];
+	counter = atomic_inc_return(&pm_qos_group->counter);
+
+	/* Make sure to update the voting in case power policy has changed */
+	if (pm_qos_group->latency == latency->latency[host->power_policy]
+		&& counter > 1)
+		return;
+
+	cancel_work_sync(&pm_qos_group->unvote_work);
+
+	pm_qos_group->latency = latency->latency[host->power_policy];
+	pm_qos_update_request(&pm_qos_group->req, pm_qos_group->latency);
+}
+
+static void sdhci_msm_pm_qos_cpu_unvote_work(struct work_struct *work)
+{
+	struct sdhci_msm_pm_qos_group *group =
+		container_of(work, struct sdhci_msm_pm_qos_group, unvote_work);
+
+	if (atomic_read(&group->counter))
+		return;
+
+	group->latency = PM_QOS_DEFAULT_VALUE;
+	pm_qos_update_request(&group->req, group->latency);
+}
+
+bool sdhci_msm_pm_qos_cpu_unvote(struct sdhci_host *host, int cpu, bool async)
+{
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+	int group = sdhci_msm_get_cpu_group(msm_host, cpu);
+
+	if (!msm_host->pm_qos_group_enable || group < 0 ||
+		atomic_dec_return(&msm_host->pm_qos[group].counter))
+		return false;
+
+	if (async) {
+		schedule_work(&msm_host->pm_qos[group].unvote_work);
+		return true;
+	}
+
+	msm_host->pm_qos[group].latency = PM_QOS_DEFAULT_VALUE;
+	pm_qos_update_request(&msm_host->pm_qos[group].req,
+				msm_host->pm_qos[group].latency);
+	return true;
+}
+
+void sdhci_msm_pm_qos_cpu_init(struct sdhci_host *host,
+		struct sdhci_msm_pm_qos_latency *latency)
+{
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+	int nr_groups = msm_host->pdata->pm_qos_data.cpu_group_map.nr_groups;
+	struct sdhci_msm_pm_qos_group *group;
+	int i;
+	int ret;
+
+	if (msm_host->pm_qos_group_enable)
+		return;
+
+	msm_host->pm_qos = kcalloc(nr_groups, sizeof(*msm_host->pm_qos),
+			GFP_KERNEL);
+	if (!msm_host->pm_qos)
+		return;
+
+	for (i = 0; i < nr_groups; i++) {
+		group = &msm_host->pm_qos[i];
+		INIT_WORK(&group->unvote_work,
+			sdhci_msm_pm_qos_cpu_unvote_work);
+		atomic_set(&group->counter, 0);
+		group->req.type = PM_QOS_REQ_AFFINE_CORES;
+		cpumask_copy(&group->req.cpus_affine,
+			&msm_host->pdata->pm_qos_data.cpu_group_map.mask[i]);
+		/* For initialization phase, set the performance mode latency */
+		group->latency = latency[i].latency[SDHCI_PERFORMANCE_MODE];
+		pm_qos_add_request(&group->req, PM_QOS_CPU_DMA_LATENCY,
+			group->latency);
+		pr_info("%s (): voted for group #%d (mask=0x%lx) latency=%d (0x%p)\n",
+			__func__, i,
+			group->req.cpus_affine.bits[0],
+			group->latency,
+			&latency[i].latency[SDHCI_PERFORMANCE_MODE]);
+	}
+	msm_host->pm_qos_prev_cpu = -1;
+	msm_host->pm_qos_group_enable = true;
+
+	/* sysfs */
+	msm_host->pm_qos_group_status_attr.show = sdhci_msm_pm_qos_group_show;
+	msm_host->pm_qos_group_status_attr.store = NULL;
+	sysfs_attr_init(&msm_host->pm_qos_group_status_attr.attr);
+	msm_host->pm_qos_group_status_attr.attr.name =
+			"pm_qos_cpu_groups_status";
+	msm_host->pm_qos_group_status_attr.attr.mode = S_IRUGO;
+	ret = device_create_file(&msm_host->pdev->dev,
+			&msm_host->pm_qos_group_status_attr);
+	if (ret)
+		dev_err(&msm_host->pdev->dev, "%s: fail to create pm_qos_group_status_attr (%d)\n",
+			__func__, ret);
+	msm_host->pm_qos_group_enable_attr.show =
+			sdhci_msm_pm_qos_group_enable_show;
+	msm_host->pm_qos_group_enable_attr.store =
+			sdhci_msm_pm_qos_group_enable_store;
+	sysfs_attr_init(&msm_host->pm_qos_group_enable_attr.attr);
+	msm_host->pm_qos_group_enable_attr.attr.name =
+			"pm_qos_cpu_groups_enable";
+	msm_host->pm_qos_group_enable_attr.attr.mode = S_IRUGO;
+	ret = device_create_file(&msm_host->pdev->dev,
+			&msm_host->pm_qos_group_enable_attr);
+	if (ret)
+		dev_err(&msm_host->pdev->dev, "%s: fail to create pm_qos_group_enable_attr (%d)\n",
+			__func__, ret);
+}
+
+static void sdhci_msm_pre_req(struct sdhci_host *host,
+		struct mmc_request *mmc_req)
+{
+	int cpu;
+	int group;
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+	int prev_group = sdhci_msm_get_cpu_group(msm_host,
+			msm_host->pm_qos_prev_cpu);
+
+	sdhci_msm_pm_qos_irq_vote(host);
+
+	cpu = get_cpu();
+	put_cpu();
+	group = sdhci_msm_get_cpu_group(msm_host, cpu);
+	if (group < 0)
+		return;
+
+	if (group != prev_group && prev_group >= 0) {
+		sdhci_msm_pm_qos_cpu_unvote(host,
+				msm_host->pm_qos_prev_cpu, false);
+		prev_group = -1; /* make sure to vote for new group */
+	}
+
+	if (prev_group < 0) {
+		sdhci_msm_pm_qos_cpu_vote(host,
+				msm_host->pdata->pm_qos_data.latency, cpu);
+		msm_host->pm_qos_prev_cpu = cpu;
+	}
+}
+
+static void sdhci_msm_post_req(struct sdhci_host *host,
+				struct mmc_request *mmc_req)
+{
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+
+	sdhci_msm_pm_qos_irq_unvote(host, false);
+
+	if (sdhci_msm_pm_qos_cpu_unvote(host, msm_host->pm_qos_prev_cpu, false))
+			msm_host->pm_qos_prev_cpu = -1;
+}
+
+static void sdhci_msm_init(struct sdhci_host *host)
+{
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+
+	sdhci_msm_pm_qos_irq_init(host);
+
+	if (msm_host->pdata->pm_qos_data.legacy_valid)
+		sdhci_msm_pm_qos_cpu_init(host,
+				msm_host->pdata->pm_qos_data.latency);
+}
+
 static struct sdhci_ops sdhci_msm_ops = {
 	.crypto_engine_cfg = sdhci_msm_ice_cfg,
+	.crypto_cfg_reset = sdhci_msm_ice_cfg_reset,
 	.crypto_engine_reset = sdhci_msm_ice_reset,
 	.set_uhs_signaling = sdhci_msm_set_uhs_signaling,
 	.check_power_status = sdhci_msm_check_power_status,
@@ -2909,6 +3608,10 @@ static struct sdhci_ops sdhci_msm_ops = {
 	.enhanced_strobe_mask = sdhci_msm_enhanced_strobe_mask,
 	.detect = sdhci_msm_detect,
 	.notify_load = sdhci_msm_notify_load,
+	.reset_workaround = sdhci_msm_reset_workaround,
+	.init = sdhci_msm_init,
+	.pre_req = sdhci_msm_pre_req,
+	.post_req = sdhci_msm_post_req,
 };
 
 static void sdhci_set_default_hw_caps(struct sdhci_msm_host *msm_host,
@@ -2917,6 +3620,7 @@ static void sdhci_set_default_hw_caps(struct sdhci_msm_host *msm_host,
 	u32 version, caps = 0;
 	u16 minor;
 	u8 major;
+	u32 val;
 
 	version = readl_relaxed(msm_host->core_mem + CORE_MCI_VERSION);
 	major = (version & CORE_VERSION_MAJOR_MASK) >>
@@ -2946,6 +3650,16 @@ static void sdhci_set_default_hw_caps(struct sdhci_msm_host *msm_host,
 	}
 
 	/*
+	 * Enable one MID mode for SDCC5 (major 1) on 8916/8939 (minor 0x2e) and
+	 * on 8992 (minor 0x3e) as a workaround to reset for data stuck issue.
+	 */
+	if (major == 1 && (minor == 0x2e || minor == 0x3e)) {
+		host->quirks2 |= SDHCI_QUIRK2_USE_RESET_WORKAROUND;
+		val = readl_relaxed(host->ioaddr + CORE_VENDOR_SPEC_FUNC2);
+		writel_relaxed((val | CORE_ONE_MID_EN),
+			host->ioaddr + CORE_VENDOR_SPEC_FUNC2);
+	}
+	/*
 	 * SDCC 5 controller with major version 1, minor version 0x34 and later
 	 * with HS 400 mode support will use CM DLL instead of CDC LP 533 DLL.
 	 */
@@ -2973,6 +3687,9 @@ static void sdhci_set_default_hw_caps(struct sdhci_msm_host *msm_host,
 	if ((major == 1) && ((minor == 0x42) || (minor == 0x46) ||
 				(minor == 0x49)))
 		msm_host->use_14lpp_dll = true;
+
+	if ((major == 1) && (minor >= 0x49))
+		msm_host->rclk_delay_fix = true;
 	/*
 	 * Mask 64-bit support for controller with 32-bit address bus so that
 	 * smaller descriptor size will be used and improve memory consumption.
@@ -3094,8 +3811,10 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 		}
 
 		/* skip the probe if eMMC isn't a boot device */
-		if ((ret == 1) && !sdhci_msm_is_bootdevice(&pdev->dev))
+		if ((ret == 1) && !sdhci_msm_is_bootdevice(&pdev->dev)) {
+			ret = -ENODEV;
 			goto pltfm_free;
+		}
 
 		if (disable_slots & (1 << (ret - 1))) {
 			dev_info(&pdev->dev, "%s: Slot %d disabled\n", __func__,
@@ -3339,12 +4058,14 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	msm_host->mmc->caps |= msm_host->pdata->mmc_bus_width;
 	msm_host->mmc->caps |= msm_host->pdata->caps;
 	msm_host->mmc->caps |= MMC_CAP_AGGRESSIVE_PM;
+	msm_host->mmc->caps |= MMC_CAP_WAIT_WHILE_BUSY;
 	msm_host->mmc->caps2 |= msm_host->pdata->caps2;
 	msm_host->mmc->caps2 |= MMC_CAP2_BOOTPART_NOACC;
 	msm_host->mmc->caps2 |= MMC_CAP2_FULL_PWR_CYCLE;
 	msm_host->mmc->caps2 |= MMC_CAP2_ASYNC_SDIO_IRQ_4BIT_MODE;
 	msm_host->mmc->caps2 |= MMC_CAP2_HS400_POST_TUNING;
 	msm_host->mmc->caps2 |= MMC_CAP2_CLK_SCALE;
+	msm_host->mmc->caps2 |= MMC_CAP2_SANITIZE;
 
 	if (msm_host->pdata->nonremovable)
 		msm_host->mmc->caps |= MMC_CAP_NONREMOVABLE;
@@ -3352,8 +4073,6 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	if (msm_host->pdata->nonhotplug)
 		msm_host->mmc->caps2 |= MMC_CAP2_NONHOTPLUG;
 
-	host->cpu_dma_latency_us = msm_host->pdata->cpu_dma_latency_us;
-	host->pm_qos_req_dma.type = msm_host->pdata->cpu_affinity_type;
 
 	/* Initialize ICE if present */
 	if (msm_host->ice.pdev) {
@@ -3380,6 +4099,11 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 		 */
 		sdhci_msm_setup_pins(msm_host->pdata, true);
 
+		/*
+		 * This delay is needed for stabilizing the card detect GPIO
+		 * line after changing the pull configs.
+		 */
+		usleep_range(10000, 10500);
 		ret = mmc_gpio_request_cd(msm_host->mmc,
 				msm_host->pdata->status_gpio, 0);
 		if (ret) {

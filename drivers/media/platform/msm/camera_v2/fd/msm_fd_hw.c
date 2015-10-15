@@ -29,6 +29,7 @@
 #include "msm_fd_hw.h"
 #include "msm_fd_regs.h"
 #include "cam_smmu_api.h"
+#include "msm_camera_io_util.h"
 
 /* After which revision misc irq for engine is needed */
 #define MSM_FD_MISC_IRQ_FROM_REV 0x10010000
@@ -42,6 +43,19 @@
 #define MSM_FD_HALT_TIMEOUT_MS 100
 /* Smmu callback name */
 #define MSM_FD_SMMU_CB_NAME "camera_fd"
+/*
+ * enum msm_fd_reg_setting_entries - FD register setting entries in DT.
+ * @MSM_FD_REG_ADDR_OFFSET_IDX: Register address offset index.
+ * @MSM_FD_REG_VALUE_IDX: Register value index.
+ * @MSM_FD_REG_MASK_IDX: Regester mask index.
+ * @MSM_FD_REG_LAST_IDX: Index count.
+ */
+enum msm_fd_dt_reg_setting_index {
+	MSM_FD_REG_ADDR_OFFSET_IDX,
+	MSM_FD_REG_VALUE_IDX,
+	MSM_FD_REG_MASK_IDX,
+	MSM_FD_REG_LAST_IDX
+};
 
 /*
  * msm_fd_hw_read_reg - Fd read from register.
@@ -52,7 +66,7 @@
 static inline u32 msm_fd_hw_read_reg(struct msm_fd_device *fd,
 	enum msm_fd_mem_resources base_idx, u32 reg)
 {
-	return readl_relaxed(fd->iomem_base[base_idx] + reg);
+	return msm_camera_io_r(fd->iomem_base[base_idx] + reg);
 }
 
 /*
@@ -65,7 +79,7 @@ static inline u32 msm_fd_hw_read_reg(struct msm_fd_device *fd,
 static inline void msm_fd_hw_write_reg(struct msm_fd_device *fd,
 	enum msm_fd_mem_resources base_idx, u32 reg, u32 value)
 {
-	writel_relaxed(value, fd->iomem_base[base_idx] + reg);
+	msm_camera_io_w(value, fd->iomem_base[base_idx] + reg);
 }
 
 /*
@@ -593,7 +607,7 @@ void msm_fd_hw_release_irq(struct msm_fd_device *fd)
 }
 
 /*
- * msm_fd_hw_set_dt_parms() - read device tree params and write to registers.
+ * msm_fd_hw_set_dt_parms_by_name() - read DT params and write to registers.
  * @fd: Pointer to fd device.
  * @dt_prop_name: Name of the device tree property to read.
  * @base_idx: Fd memory resource index.
@@ -603,7 +617,7 @@ void msm_fd_hw_release_irq(struct msm_fd_device *fd)
  *
  * Return: 0 on success and negative error on failure.
  */
-int32_t msm_fd_hw_set_dt_parms(struct msm_fd_device *fd,
+int32_t msm_fd_hw_set_dt_parms_by_name(struct msm_fd_device *fd,
 			const char *dt_prop_name,
 			enum msm_fd_mem_resources base_idx)
 {
@@ -619,11 +633,11 @@ int32_t msm_fd_hw_set_dt_parms(struct msm_fd_device *fd,
 		pr_err("%s: Error property does not exist\n", __func__);
 		return -ENOENT;
 	}
-	if (dt_count % 8) {
+	if (dt_count % (sizeof(int32_t) * MSM_FD_REG_LAST_IDX)) {
 		pr_err("%s: Error invalid entries\n", __func__);
 		return -EINVAL;
 	}
-	dt_count /= 4;
+	dt_count /= sizeof(int32_t);
 	if (dt_count != 0) {
 		dt_reg_settings = kcalloc(dt_count,
 			sizeof(uint32_t),
@@ -642,16 +656,57 @@ int32_t msm_fd_hw_set_dt_parms(struct msm_fd_device *fd,
 			return -EINVAL;
 		}
 
-		for (i = 0; i < dt_count; i = i + 2) {
+		for (i = 0; i < dt_count; i = i + MSM_FD_REG_LAST_IDX) {
+			msm_fd_hw_reg_clr(fd, base_idx,
+				dt_reg_settings[i + MSM_FD_REG_ADDR_OFFSET_IDX],
+				dt_reg_settings[i + MSM_FD_REG_MASK_IDX]);
+			msm_fd_hw_reg_set(fd, base_idx,
+				dt_reg_settings[i + MSM_FD_REG_ADDR_OFFSET_IDX],
+				dt_reg_settings[i + MSM_FD_REG_VALUE_IDX] &
+				dt_reg_settings[i + MSM_FD_REG_MASK_IDX]);
 			pr_debug("%s:%d] %p %08x\n", __func__, __LINE__,
-				fd->iomem_base[base_idx] + dt_reg_settings[i],
-				dt_reg_settings[i + 1]);
-			msm_fd_hw_reg_set(fd, base_idx, dt_reg_settings[i],
-				dt_reg_settings[i + 1]);
+				fd->iomem_base[base_idx] +
+				dt_reg_settings[i + MSM_FD_REG_ADDR_OFFSET_IDX],
+				dt_reg_settings[i + MSM_FD_REG_VALUE_IDX] &
+				dt_reg_settings[i + MSM_FD_REG_MASK_IDX]);
 		}
 		kfree(dt_reg_settings);
 	}
 	return 0;
+}
+
+/*
+ * msm_fd_hw_set_dt_parms() - set FD device tree configuration.
+ * @fd: Pointer to fd device.
+ *
+ * This function holds an array of device tree property names and calls
+ * msm_fd_hw_set_dt_parms_by_name() for each property.
+ *
+ * Return: 0 on success and negative error on failure.
+ */
+int msm_fd_hw_set_dt_parms(struct msm_fd_device *fd)
+{
+	int rc = 0;
+	uint8_t dt_prop_cnt = MSM_FD_IOMEM_LAST;
+	char *dt_prop_name[MSM_FD_IOMEM_LAST] = {"qcom,fd-core-reg-settings",
+		"qcom,fd-misc-reg-settings", "qcom,fd-vbif-reg-settings"};
+
+	while (dt_prop_cnt) {
+		dt_prop_cnt--;
+		rc = msm_fd_hw_set_dt_parms_by_name(fd,
+			dt_prop_name[dt_prop_cnt],
+			dt_prop_cnt);
+		if (rc == -ENOENT) {
+			pr_debug("%s: No %s property\n", __func__,
+				dt_prop_name[dt_prop_cnt]);
+			rc = 0;
+		} else if (rc < 0) {
+			pr_err("%s: %s params set fail\n", __func__,
+				dt_prop_name[dt_prop_cnt]);
+			return rc;
+		}
+	}
+	return rc;
 }
 
 /*
@@ -1177,15 +1232,9 @@ int msm_fd_hw_get(struct msm_fd_device *fd, unsigned int clock_rate_idx)
 		if (msm_fd_hw_misc_irq_supported(fd))
 			msm_fd_hw_misc_irq_enable(fd);
 
-		ret = msm_fd_hw_set_dt_parms(fd, "qcom,vbif-reg-settings",
-			MSM_FD_IOMEM_VBIF);
-		if (ret == -ENOENT) {
-			pr_debug("%s: No qcom,vbif-reg-settings property\n",
-				__func__);
-		} else if (ret < 0) {
-			pr_err("%s: vbif params set fail\n", __func__);
-			goto error_vbif;
-		}
+		ret = msm_fd_hw_set_dt_parms(fd);
+		if (ret < 0)
+			goto error_set_dt;
 	}
 
 	fd->ref_count++;
@@ -1193,7 +1242,7 @@ int msm_fd_hw_get(struct msm_fd_device *fd, unsigned int clock_rate_idx)
 
 	return 0;
 
-error_vbif:
+error_set_dt:
 	if (msm_fd_hw_misc_irq_supported(fd))
 		msm_fd_hw_misc_irq_disable(fd);
 	msm_fd_hw_disable_clocks(fd);

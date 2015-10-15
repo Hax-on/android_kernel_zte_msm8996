@@ -21,6 +21,7 @@
 
 		qcom,memory-size = <0x100000>;
 		qcom,sg-enable;
+		qcom,force-reg-dump;
 
 		coresight-id = <0>;
 		coresight-name = "coresight-tmc-etr";
@@ -96,6 +97,7 @@
 		coresight-child-ports = <0>;
 		coresight-default-sink;
 		coresight-ctis = <&cti0 &cti8>;
+		qcom,force-reg-dump;
 
 		clocks = <&clock_gcc clk_qdss_clk>,
 			 <&clock_gcc clk_qdss_a_clk>;
@@ -644,9 +646,9 @@
 		clock-names = "core_clk", "core_a_clk";
 	};
 
-	cti_modem_cpu0: cti@838000 {
+	cti_modem_cpu0: cti@860000 {
 		compatible = "arm,coresight-cti";
-		reg = <0x838000 0x1000>;
+		reg = <0x860000 0x1000>;
 		reg-names = "cti-base";
 
 		coresight-id = <37>;
@@ -658,9 +660,9 @@
 		clock-names = "core_clk", "core_a_clk";
 	};
 
-	cti_modem_cpu1: cti@860000 {
+	cti_modem_cpu1: cti@838000 {
 		compatible = "arm,coresight-cti";
-		reg = <0x860000 0x1000>;
+		reg = <0x838000 0x1000>;
 		reg-names = "cti-base";
 
 		coresight-id = <38>;

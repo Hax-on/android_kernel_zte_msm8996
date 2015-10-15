@@ -419,12 +419,14 @@ EXPORT_SYMBOL_GPL(usb_func_wakeup);
 int usb_func_ep_queue(struct usb_function *func, struct usb_ep *ep,
 			       struct usb_request *req, gfp_t gfp_flags)
 {
-	int ret = -ENOTSUPP;
+	int ret;
 	struct usb_gadget *gadget;
 
 	if (!func || !func->config || !func->config->cdev ||
-			!func->config->cdev->gadget || !ep || !req)
-		return -EINVAL;
+			!func->config->cdev->gadget || !ep || !req) {
+		ret = -EINVAL;
+		goto done;
+	}
 
 	pr_debug("Function %s queueing new data into ep %u\n",
 		func->name ? func->name : "", ep->address);
@@ -440,13 +442,16 @@ int usb_func_ep_queue(struct usb_function *func, struct usb_ep *ep,
 			pr_err("Failed to wake function %s from suspend state. ret=%d.\n",
 				func->name ? func->name : "", ret);
 		}
+		goto done;
 	}
 
-	if (!func->func_is_suspended)
-		ret = 0;
+	if (func->func_is_suspended && !func->func_wakeup_allowed) {
+		ret = -ENOTSUPP;
+		goto done;
+	}
 
-	if (!ret)
-		ret = usb_ep_queue(ep, req, gfp_flags);
+	ret = usb_ep_queue(ep, req, gfp_flags);
+done:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(usb_func_ep_queue);
@@ -802,6 +807,12 @@ static int set_config(struct usb_composite_dev *cdev,
 		 */
 		switch (gadget->speed) {
 		case USB_SPEED_SUPER:
+			if (!f->ss_descriptors) {
+				pr_err("%s(): No SS desc for function:%s\n",
+							__func__, f->name);
+				usb_gadget_set_state(gadget, USB_STATE_ADDRESS);
+				return -EINVAL;
+			}
 			descriptors = f->ss_descriptors;
 			break;
 		case USB_SPEED_HIGH:
@@ -2103,7 +2114,8 @@ int composite_dev_prepare(struct usb_composite_driver *composite,
 	if (!cdev->req)
 		return -ENOMEM;
 
-	cdev->req->buf = kmalloc(USB_COMP_EP0_BUFSIZ, GFP_KERNEL);
+	cdev->req->buf = kmalloc(USB_COMP_EP0_BUFSIZ +
+				(gadget->extra_buf_alloc), GFP_KERNEL);
 	if (!cdev->req->buf)
 		goto fail;
 

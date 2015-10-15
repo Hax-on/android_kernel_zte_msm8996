@@ -864,6 +864,12 @@ struct adm_cmd_connect_afe_port_v5 {
 #define AFE_PORT_ID_SECONDARY_PCM_TX        0x100D
 #define AFE_PORT_ID_MULTICHAN_HDMI_RX       0x100E
 #define AFE_PORT_ID_SECONDARY_MI2S_RX_SD1	0x1010
+#define AFE_PORT_ID_QUINARY_MI2S_RX		0x1016
+#define AFE_PORT_ID_QUINARY_MI2S_TX		0x1017
+/* ID of the senary MI2S Rx port. */
+#define AFE_PORT_ID_SENARY_MI2S_RX		0x1018
+/* ID of the senary MI2S Tx port. */
+#define AFE_PORT_ID_SENARY_MI2S_TX		0x1019
 #define AFE_PORT_ID_SPDIF_RX                0x5000
 #define  AFE_PORT_ID_RT_PROXY_PORT_001_RX   0x2000
 #define  AFE_PORT_ID_RT_PROXY_PORT_001_TX   0x2001
@@ -2526,7 +2532,7 @@ struct afe_lpass_core_shared_clk_config_command {
 #define VPM_TX_QMIC_FLUENCE_COPP_TOPOLOGY		0x00010F75
 #define VPM_TX_DM_RFECNS_COPP_TOPOLOGY			0x00010F86
 #define ADM_CMD_COPP_OPEN_TOPOLOGY_ID_DTS_HPX		0x10015002
-#define ADM_CMD_COPP_OPEN_TOPOLOGY_ID_AUDIOSPHERE	0x10015003
+#define ADM_CMD_COPP_OPEN_TOPOLOGY_ID_AUDIOSPHERE	0x10028000
 
 /* Memory map regions command payload used by the
  * #ASM_CMD_SHARED_MEM_MAP_REGIONS ,#ADM_CMD_SHARED_MEM_MAP_REGIONS
@@ -7412,6 +7418,7 @@ struct afe_param_id_clip_bank_sel {
 
 /* Supported OSR clock values */
 #define Q6AFE_LPASS_OSR_CLK_12_P288_MHZ		0xBB8000
+#define Q6AFE_LPASS_OSR_CLK_9_P600_MHZ		0x927C00
 #define Q6AFE_LPASS_OSR_CLK_8_P192_MHZ		0x7D0000
 #define Q6AFE_LPASS_OSR_CLK_6_P144_MHZ		0x5DC000
 #define Q6AFE_LPASS_OSR_CLK_4_P096_MHZ		0x3E8000
@@ -7424,6 +7431,7 @@ struct afe_param_id_clip_bank_sel {
 #define Q6AFE_LPASS_OSR_CLK_DISABLE		     0x0
 
 /* Supported Bit clock values */
+#define Q6AFE_LPASS_IBIT_CLK_11_P2896_MHZ		0xAC4400
 #define Q6AFE_LPASS_IBIT_CLK_8_P192_MHZ		0x7D0000
 #define Q6AFE_LPASS_IBIT_CLK_6_P144_MHZ		0x5DC000
 #define Q6AFE_LPASS_IBIT_CLK_4_P096_MHZ		0x3E8000
@@ -7474,6 +7482,15 @@ enum afe_lpass_clk_mode {
 /* Clock ID for Speaker I2S OSR */
 #define Q6AFE_LPASS_CLK_ID_SPEAKER_I2S_OSR                        0x10A
 
+/* Clock ID for QUINARY  I2S IBIT */
+#define Q6AFE_LPASS_CLK_ID_QUI_MI2S_IBIT			0x10B
+/* Clock ID for QUINARY  I2S EBIT */
+#define Q6AFE_LPASS_CLK_ID_QUI_MI2S_EBIT			0x10C
+/* Clock ID for SENARY  I2S IBIT */
+#define Q6AFE_LPASS_CLK_ID_SEN_MI2S_IBIT			0x10D
+/* Clock ID for SENARY  I2S EBIT */
+#define Q6AFE_LPASS_CLK_ID_SEN_MI2S_EBIT			0x10E
+
 /* Clock ID for Primary PCM IBIT */
 #define Q6AFE_LPASS_CLK_ID_PRI_PCM_IBIT                           0x200
 /* Clock ID for Primary PCM EBIT */
@@ -7515,6 +7532,8 @@ enum afe_lpass_clk_mode {
 #define Q6AFE_LPASS_CLK_ATTRIBUTE_COUPLE_DIVIDEND	0x2
 /* Clock attribute for divisor couple case */
 #define Q6AFE_LPASS_CLK_ATTRIBUTE_COUPLE_DIVISOR	0x3
+/* Clock set API version */
+#define Q6AFE_LPASS_CLK_CONFIG_API_VERSION		0x1
 
 struct afe_clk_set {
 	/*

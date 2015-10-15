@@ -11,9 +11,6 @@
 # Copyright (C) 1995-2002 Russell King
 #
 
-ifneq ($(MACHINE),)
-include $(srctree)/$(MACHINE)/Makefile.boot
-endif
 include $(srctree)/arch/arm/boot/dts/Makefile
 
 include $(srctree)/arch/arm/boot/dts/Makefile
@@ -40,7 +37,7 @@ DTB_LIST := $(addsuffix .dtb,$(DTB_NAMES))
 else
 DTB_LIST := $(dtb-y)
 endif
-DTB_OBJS := $(addprefix $(obj)/dts/,$(DTB_LIST))
+DTB_OBJS := $(addprefix $(obj)/dts/qcom/,$(DTB_LIST))
 
 ifeq ($(CONFIG_XIP_KERNEL),y)
 

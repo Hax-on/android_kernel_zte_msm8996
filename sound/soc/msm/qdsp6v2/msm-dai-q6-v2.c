@@ -1429,7 +1429,7 @@ static inline void msm_dai_q6_set_dai_id(struct snd_soc_dai *dai)
 	return;
 }
 
-static int msm_dai_q6_sb_cal_info_put(struct snd_kcontrol *kcontrol,
+static int msm_dai_q6_cal_info_put(struct snd_kcontrol *kcontrol,
 				    struct snd_ctl_elem_value *ucontrol)
 {
 	struct msm_dai_q6_dai_data *dai_data = kcontrol->private_data;
@@ -1444,7 +1444,7 @@ static int msm_dai_q6_sb_cal_info_put(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-static int msm_dai_q6_sb_cal_info_get(struct snd_kcontrol *kcontrol,
+static int msm_dai_q6_cal_info_get(struct snd_kcontrol *kcontrol,
 				    struct snd_ctl_elem_value *ucontrol)
 {
 	struct msm_dai_q6_dai_data *dai_data = kcontrol->private_data;
@@ -1479,21 +1479,38 @@ static int msm_dai_q6_sb_format_get(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-static const char * const slim_2_rx_text[] = {
+static const char * const afe_cal_mode_text[] = {
 	"CAL_MODE_DEFAULT", "CAL_MODE_NONE"
 };
 
 static const struct soc_enum slim_2_rx_enum =
-	SOC_ENUM_SINGLE(SLIMBUS_2_RX, 0, ARRAY_SIZE(slim_2_rx_text),
-			slim_2_rx_text);
+	SOC_ENUM_SINGLE(SLIMBUS_2_RX, 0, ARRAY_SIZE(afe_cal_mode_text),
+			afe_cal_mode_text);
+
+static const struct soc_enum rt_proxy_1_rx_enum =
+	SOC_ENUM_SINGLE(RT_PROXY_PORT_001_RX, 0, ARRAY_SIZE(afe_cal_mode_text),
+			afe_cal_mode_text);
+
+static const struct soc_enum rt_proxy_1_tx_enum =
+	SOC_ENUM_SINGLE(RT_PROXY_PORT_001_TX, 0, ARRAY_SIZE(afe_cal_mode_text),
+			afe_cal_mode_text);
 
 static const struct snd_kcontrol_new sb_config_controls[] = {
 	SOC_ENUM_EXT("SLIM_4_TX Format", sb_config_enum[0],
 		     msm_dai_q6_sb_format_get,
 		     msm_dai_q6_sb_format_put),
 	SOC_ENUM_EXT("SLIM_2_RX SetCalMode", slim_2_rx_enum,
-		     msm_dai_q6_sb_cal_info_get,
-		     msm_dai_q6_sb_cal_info_put)
+		     msm_dai_q6_cal_info_get,
+		     msm_dai_q6_cal_info_put)
+};
+
+static const struct snd_kcontrol_new rt_proxy_config_controls[] = {
+	SOC_ENUM_EXT("RT_PROXY_1_RX SetCalMode", rt_proxy_1_rx_enum,
+		     msm_dai_q6_cal_info_get,
+		     msm_dai_q6_cal_info_put),
+	SOC_ENUM_EXT("RT_PROXY_1_TX SetCalMode", rt_proxy_1_tx_enum,
+		     msm_dai_q6_cal_info_get,
+		     msm_dai_q6_cal_info_put),
 };
 
 static int msm_dai_q6_dai_probe(struct snd_soc_dai *dai)
@@ -1521,23 +1538,32 @@ static int msm_dai_q6_dai_probe(struct snd_soc_dai *dai)
 
 	msm_dai_q6_set_dai_id(dai);
 
-	if (dai->id == SLIMBUS_4_TX) {
+	switch (dai->id) {
+	case SLIMBUS_4_TX:
 		rc = snd_ctl_add(dai->card->snd_card,
-				  snd_ctl_new1(&sb_config_controls[0],
-				  dai_data));
-		if (IS_ERR_VALUE(rc)) {
-			dev_err(dai->dev, "%s: err add TX format ctl DAI = %s\n",
-				__func__, dai->name);
-		}
-	}
-	if (dai->id == SLIMBUS_2_RX) {
+				 snd_ctl_new1(&sb_config_controls[0],
+				 dai_data));
+		break;
+	case SLIMBUS_2_RX:
 		rc = snd_ctl_add(dai->card->snd_card,
-				  snd_ctl_new1(&sb_config_controls[1],
-				  dai_data));
-		if (IS_ERR_VALUE(rc))
-			dev_err(dai->dev, "%s: err add RX Cal ctl, DAI = %s\n",
-				__func__, dai->name);
+				 snd_ctl_new1(&sb_config_controls[1],
+				 dai_data));
+		break;
+	case RT_PROXY_DAI_001_RX:
+		rc = snd_ctl_add(dai->card->snd_card,
+				 snd_ctl_new1(&rt_proxy_config_controls[0],
+				 dai_data));
+		break;
+	case RT_PROXY_DAI_001_TX:
+		rc = snd_ctl_add(dai->card->snd_card,
+				 snd_ctl_new1(&rt_proxy_config_controls[1],
+				 dai_data));
+		break;
 	}
+	if (IS_ERR_VALUE(rc))
+		dev_err(dai->dev, "%s: err add config ctl, DAI = %s\n",
+			__func__, dai->name);
+
 	rc = msm_dai_q6_dai_add_route(dai);
 	return rc;
 }
@@ -2360,6 +2386,9 @@ static const struct snd_kcontrol_new mi2s_config_controls[] = {
 	SOC_ENUM_EXT("QUAT MI2S RX Format", mi2s_config_enum[0],
 		     msm_dai_q6_mi2s_format_get,
 		     msm_dai_q6_mi2s_format_put),
+	SOC_ENUM_EXT("QUIN MI2S RX Format", mi2s_config_enum[0],
+		     msm_dai_q6_mi2s_format_get,
+		     msm_dai_q6_mi2s_format_put),
 	SOC_ENUM_EXT("PRI MI2S TX Format", mi2s_config_enum[0],
 		     msm_dai_q6_mi2s_format_get,
 		     msm_dai_q6_mi2s_format_put),
@@ -2370,6 +2399,12 @@ static const struct snd_kcontrol_new mi2s_config_controls[] = {
 		     msm_dai_q6_mi2s_format_get,
 		     msm_dai_q6_mi2s_format_put),
 	SOC_ENUM_EXT("QUAT MI2S TX Format", mi2s_config_enum[0],
+		     msm_dai_q6_mi2s_format_get,
+		     msm_dai_q6_mi2s_format_put),
+	SOC_ENUM_EXT("QUIN MI2S TX Format", mi2s_config_enum[0],
+		     msm_dai_q6_mi2s_format_get,
+		     msm_dai_q6_mi2s_format_put),
+	SOC_ENUM_EXT("SENARY MI2S TX Format", mi2s_config_enum[0],
 		     msm_dai_q6_mi2s_format_get,
 		     msm_dai_q6_mi2s_format_put),
 };
@@ -2395,6 +2430,8 @@ static int msm_dai_q6_dai_mi2s_probe(struct snd_soc_dai *dai)
 			ctrl = &mi2s_config_controls[2];
 		if (dai->id == MSM_QUAT_MI2S)
 			ctrl = &mi2s_config_controls[3];
+		if (dai->id == MSM_QUIN_MI2S)
+			ctrl = &mi2s_config_controls[4];
 	}
 
 	if (ctrl) {
@@ -2419,6 +2456,10 @@ static int msm_dai_q6_dai_mi2s_probe(struct snd_soc_dai *dai)
 			ctrl = &mi2s_config_controls[6];
 		if (dai->id == MSM_QUAT_MI2S)
 			ctrl = &mi2s_config_controls[7];
+		if (dai->id == MSM_QUIN_MI2S)
+			ctrl = &mi2s_config_controls[9];
+		if (dai->id == MSM_SENARY_MI2S)
+			ctrl = &mi2s_config_controls[10];
 	}
 
 	if (ctrl) {
@@ -2496,6 +2537,9 @@ static int msm_mi2s_get_port_id(u32 mi2s_id, int stream, u16 *port_id)
 		case MSM_SEC_MI2S_SD1:
 			*port_id = AFE_PORT_ID_SECONDARY_MI2S_RX_SD1;
 			break;
+		case MSM_QUIN_MI2S:
+			*port_id = AFE_PORT_ID_QUINARY_MI2S_RX;
+			break;
 		break;
 		default:
 			pr_err("%s: playback err id 0x%x\n",
@@ -2517,6 +2561,12 @@ static int msm_mi2s_get_port_id(u32 mi2s_id, int stream, u16 *port_id)
 			break;
 		case MSM_QUAT_MI2S:
 			*port_id = AFE_PORT_ID_QUATERNARY_MI2S_TX;
+			break;
+		case MSM_QUIN_MI2S:
+			*port_id = AFE_PORT_ID_QUINARY_MI2S_TX;
+			break;
+		case MSM_SENARY_MI2S:
+			*port_id = AFE_PORT_ID_SENARY_MI2S_TX;
 			break;
 		default:
 			pr_err("%s: capture err id 0x%x\n", __func__, mi2s_id);
@@ -2911,6 +2961,45 @@ static struct snd_soc_dai_driver msm_dai_q6_mi2s_dai[] = {
 		},
 		.id = MSM_SEC_MI2S_SD1,
 	},
+	{
+		.playback = {
+			.stream_name = "Quinary MI2S Playback",
+			.aif_name = "QUIN_MI2S_RX",
+			.rates = SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_8000 |
+			SNDRV_PCM_RATE_16000,
+			.formats = SNDRV_PCM_FMTBIT_S16_LE,
+			.rate_min =     8000,
+			.rate_max =     48000,
+		},
+		.capture = {
+			.stream_name = "Quinary MI2S Capture",
+			.aif_name = "QUIN_MI2S_TX",
+			.rates = SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_8000 |
+			SNDRV_PCM_RATE_16000,
+			.formats = SNDRV_PCM_FMTBIT_S16_LE,
+			.rate_min =     8000,
+			.rate_max =     48000,
+		},
+		.ops = &msm_dai_q6_mi2s_ops,
+		.id = MSM_QUIN_MI2S,
+		.probe = msm_dai_q6_dai_mi2s_probe,
+		.remove = msm_dai_q6_dai_mi2s_remove,
+	},
+	{
+		.capture = {
+			.stream_name = "Senary_mi2s Capture",
+			.aif_name = "SENARY_TX",
+			.rates = SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_8000 |
+			SNDRV_PCM_RATE_16000,
+			.formats = SNDRV_PCM_FMTBIT_S16_LE,
+			.rate_min =     8000,
+			.rate_max =     48000,
+		},
+		.ops = &msm_dai_q6_mi2s_ops,
+		.id = MSM_SENARY_MI2S,
+		.probe = msm_dai_q6_dai_mi2s_probe,
+		.remove = msm_dai_q6_dai_mi2s_remove,
+	},
 };
 
 
@@ -3078,7 +3167,7 @@ static int msm_dai_q6_mi2s_dev_probe(struct platform_device *pdev)
 	dev_dbg(&pdev->dev, "dev name %s dev id 0x%x\n", dev_name(&pdev->dev),
 		mi2s_intf);
 
-	if ((mi2s_intf < MSM_PRIM_MI2S || mi2s_intf > MSM_SEC_MI2S_SD1)
+	if ((mi2s_intf < MSM_MI2S_MIN || mi2s_intf > MSM_MI2S_MAX)
 		|| (mi2s_intf >= ARRAY_SIZE(msm_dai_q6_mi2s_dai))) {
 		dev_err(&pdev->dev,
 			"%s: Invalid MI2S ID %u from Device Tree\n",

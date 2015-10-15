@@ -90,6 +90,7 @@ enum mmc_load {
 };
 
 struct mmc_cmdq_host_ops {
+	int (*init)(struct mmc_host *host);
 	int (*enable)(struct mmc_host *host);
 	void (*disable)(struct mmc_host *host, bool soft);
 	int (*request)(struct mmc_host *host, struct mmc_request *mrq);
@@ -101,6 +102,7 @@ struct mmc_cmdq_host_ops {
 };
 
 struct mmc_host_ops {
+	int (*init)(struct mmc_host *host);
 	/*
 	 * 'enable' is called when the host is claimed and 'disable' is called
 	 * when the host is released. 'enable' and 'disable' are deprecated.
@@ -255,6 +257,7 @@ struct mmc_cmdq_context_info {
 	/* no free tag available */
 	unsigned long	req_starved;
 	wait_queue_head_t	queue_empty_wq;
+	struct request_queue *q;
 };
 
 /**
@@ -431,6 +434,8 @@ struct mmc_host {
 #define MMC_CAP2_HS400_POST_TUNING	(1 << 21)
 #define MMC_CAP2_NONHOTPLUG	(1 << 25)	/*Don't support hotplug*/
 #define MMC_CAP2_CMD_QUEUE	(1 << 26)	/* support eMMC command queue */
+#define MMC_CAP2_SANITIZE       (1 << 27)               /* Support Sanitize */
+#define MMC_CAP2_SLEEP_AWAKE	(1 << 28)	/* Use Sleep/Awake (CMD5) */
 
 	mmc_pm_flag_t		pm_caps;	/* supported pm features */
 
@@ -459,6 +464,7 @@ struct mmc_host {
 	spinlock_t		lock;		/* lock for claim and bus ops */
 
 	struct mmc_ios		ios;		/* current io bus settings */
+	struct mmc_ios		cached_ios;
 
 	/* group bitfields together to minimize padding */
 	unsigned int		use_spi_crc:1;

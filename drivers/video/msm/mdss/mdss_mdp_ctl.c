@@ -2096,6 +2096,7 @@ int mdss_mdp_ctl_free(struct mdss_mdp_ctl *ctl)
 	ctl->mixer_left = NULL;
 	ctl->mixer_right = NULL;
 	ctl->wb = NULL;
+	ctl->cdm = NULL;
 	memset(&ctl->ops, 0, sizeof(ctl->ops));
 	mutex_unlock(&mdss_mdp_ctl_lock);
 
@@ -2147,18 +2148,16 @@ struct mdss_mdp_mixer *mdss_mdp_mixer_alloc(
 			alt_mixer = mixer_pool;
 			mixer_pool++;
 			nmixers--;
-		} else if (ctl->panel_data->panel_info.type ==
-							WRITEBACK_PANEL) {
-			mixer_pool += mdss_mdp_get_wb_ctl_support(ctl->mdata,
-									false);
+		} else if ((ctl->panel_data->panel_info.type == WRITEBACK_PANEL)
+			&& (ctl->mdata->ndspp < nmixers)) {
+			mixer_pool += ctl->mdata->ndspp;
+			nmixers -= ctl->mdata->ndspp;
 		}
 		break;
 
 	case MDSS_MDP_MIXER_TYPE_WRITEBACK:
 		mixer_pool = ctl->mdata->mixer_wb;
 		nmixers = nmixers_wb;
-		if ((ctl->mdata->wfd_mode == MDSS_MDP_WFD_DEDICATED) && rotator)
-			mixer_pool = mixer_pool + nmixers;
 		break;
 
 	default:
@@ -2166,15 +2165,6 @@ struct mdss_mdp_mixer *mdss_mdp_mixer_alloc(
 		pr_err("invalid pipe type %d\n", type);
 		break;
 	}
-
-	/* early mdp revision only supports mux of dual pipe on mixers 0 and 1,
-	 * need to ensure that these pipes are readily available by using
-	 * mixer 2 if available and mux is not required */
-	if (!mux && (ctl->mdata->mdp_rev == MDSS_MDP_HW_REV_100) &&
-			(type == MDSS_MDP_MIXER_TYPE_INTF) &&
-			(nmixers >= MDSS_MDP_INTF_LAYERMIXER2) &&
-			(mixer_pool[MDSS_MDP_INTF_LAYERMIXER2].ref_cnt == 0))
-		mixer_pool += MDSS_MDP_INTF_LAYERMIXER2;
 
 	/*Allocate virtual wb mixer if no dedicated wfd wb blk is present*/
 	if ((ctl->mdata->wfd_mode == MDSS_MDP_WFD_SHARED) &&
@@ -2595,11 +2585,6 @@ static int mdss_mdp_ctl_fbc_enable(int enable,
 
 	fbc = &pdata->fbc;
 
-	if (!fbc || !fbc->enabled) {
-		pr_err("Invalid FBC structure\n");
-		return -EINVAL;
-	}
-
 	if (mixer->num == MDSS_MDP_INTF_LAYERMIXER0 ||
 			mixer->num == MDSS_MDP_INTF_LAYERMIXER1) {
 		pr_debug("Mixer supports FBC.\n");
@@ -2767,8 +2752,8 @@ int mdss_mdp_ctl_setup(struct mdss_mdp_ctl *ctl)
 int mdss_mdp_ctl_reconfig(struct mdss_mdp_ctl *ctl,
 		struct mdss_panel_data *pdata)
 {
-	int (*stop_fnc)(struct mdss_mdp_ctl *ctl, int panel_power_state);
-	int ret;
+	void *tmp;
+	int ret = 0;
 
 	/*
 	 * Switch first to prevent deleting important data in the case
@@ -2780,13 +2765,17 @@ int mdss_mdp_ctl_reconfig(struct mdss_mdp_ctl *ctl,
 		return -EINVAL;
 	}
 
+	/* if only changing resolution there is no need for intf reconfig */
+	if (!ctl->is_video_mode == (pdata->panel_info.type == MIPI_CMD_PANEL))
+		goto skip_intf_reconfig;
+
 	/*
 	 * Intentionally not clearing stop function, as stop will
 	 * be called after panel is instructed mode switch is happening
 	 */
-	stop_fnc = ctl->ops.stop_fnc;
+	tmp = ctl->ops.stop_fnc;
 	memset(&ctl->ops, 0, sizeof(ctl->ops));
-	ctl->ops.stop_fnc = stop_fnc;
+	ctl->ops.stop_fnc = tmp;
 
 	switch (pdata->panel_info.type) {
 	case MIPI_VIDEO_PANEL:
@@ -2809,6 +2798,16 @@ int mdss_mdp_ctl_reconfig(struct mdss_mdp_ctl *ctl,
 	ctl->play_cnt = 0;
 
 	ctl->opmode |= (ctl->intf_num << 4);
+
+skip_intf_reconfig:
+	ctl->width = get_panel_xres(&pdata->panel_info);
+	ctl->height = get_panel_yres(&pdata->panel_info);
+	if (ctl->mixer_left) {
+		ctl->mixer_left->width = ctl->width;
+		ctl->mixer_left->height = ctl->height;
+	}
+	ctl->border_x_off = pdata->panel_info.lcdc.border_left;
+	ctl->border_y_off = pdata->panel_info.lcdc.border_top;
 
 	return ret;
 }
@@ -3098,7 +3097,7 @@ int mdss_mdp_ctl_intf_event(struct mdss_mdp_ctl *ctl, int event, void *arg,
 		if (pdata->event_handler)
 			rc = pdata->event_handler(pdata, event, arg);
 		pdata = pdata->next;
-	} while (rc == 0 && pdata && !skip_broadcast);
+	} while (rc == 0 && pdata && pdata->active && !skip_broadcast);
 
 	return rc;
 }
@@ -3247,7 +3246,7 @@ int mdss_mdp_ctl_start(struct mdss_mdp_ctl *ctl, bool handoff)
 	pr_debug("ctl_num=%d, power_state=%d\n", ctl->num, ctl->power_state);
 
 	if (mdss_mdp_ctl_is_power_on_interactive(ctl)
-			&& !(ctl->force_ctl_start)) {
+			&& !(ctl->pending_mode_switch)) {
 		pr_debug("%d: panel already on!\n", __LINE__);
 		return 0;
 	}
@@ -3267,7 +3266,7 @@ int mdss_mdp_ctl_start(struct mdss_mdp_ctl *ctl, bool handoff)
 	 * keep power_on false during handoff to avoid unexpected
 	 * operations to overlay.
 	 */
-	if (!handoff || ctl->force_ctl_start)
+	if (!handoff || ctl->pending_mode_switch)
 		ctl->power_state = MDSS_PANEL_POWER_ON;
 
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
@@ -3333,8 +3332,7 @@ int mdss_mdp_ctl_stop(struct mdss_mdp_ctl *ctl, int power_state)
 
 	if (ctl->ops.stop_fnc) {
 		ret = ctl->ops.stop_fnc(ctl, power_state);
-		if (ctl->panel_data->panel_info.fbc.enabled)
-			mdss_mdp_ctl_fbc_enable(0, ctl->mixer_left,
+		mdss_mdp_ctl_fbc_enable(0, ctl->mixer_left,
 				&ctl->panel_data->panel_info);
 	} else {
 		pr_warn("no stop func for ctl=%d\n", ctl->num);
@@ -3342,8 +3340,7 @@ int mdss_mdp_ctl_stop(struct mdss_mdp_ctl *ctl, int power_state)
 
 	if (sctl && sctl->ops.stop_fnc) {
 		ret = sctl->ops.stop_fnc(sctl, power_state);
-		if (ctl->panel_data->panel_info.fbc.enabled)
-			mdss_mdp_ctl_fbc_enable(0, sctl->mixer_left,
+		mdss_mdp_ctl_fbc_enable(0, sctl->mixer_left,
 				&sctl->panel_data->panel_info);
 	}
 	if (ret) {
@@ -3378,7 +3375,8 @@ int mdss_mdp_ctl_stop(struct mdss_mdp_ctl *ctl, int power_state)
 end:
 	if (!ret) {
 		ctl->power_state = power_state;
-		mdss_mdp_ctl_perf_update(ctl, 0, true);
+		if (!ctl->pending_mode_switch)
+			mdss_mdp_ctl_perf_update(ctl, 0, true);
 	}
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
 
@@ -3499,20 +3497,6 @@ static void mdss_mdp_mixer_update_pipe_map(struct mdss_mdp_ctl *master_ctl,
 	mixer->pipe_mapped = mixer->next_pipe_map;
 }
 
-static inline u32 mdss_mdp_mpq_pipe_num_map(u32 pipe_num)
-{
-	u32 mpq_num;
-	if (pipe_num == MDSS_MDP_SSPP_VIG3)
-		mpq_num = MDSS_MDP_SSPP_VIG2 + 1;
-	else if (pipe_num == MDSS_MDP_SSPP_RGB0)
-		mpq_num = MDSS_MDP_SSPP_VIG2 + 2;
-	else if (pipe_num == MDSS_MDP_SSPP_RGB1)
-		mpq_num = MDSS_MDP_SSPP_VIG2 + 3;
-	else
-		mpq_num = pipe_num;
-	return mpq_num;
-}
-
 void mdss_mdp_set_roi(struct mdss_mdp_ctl *ctl,
 	struct mdss_rect *l_roi, struct mdss_rect *r_roi)
 {
@@ -3539,12 +3523,54 @@ void mdss_mdp_set_roi(struct mdss_mdp_ctl *ctl,
 		mdss_mdp_set_mixer_roi(ctl->mixer_right->ctl, r_roi);
 }
 
+u32 mdss_mdp_get_mixer_mask(u32 pipe_num, u32 stage)
+{
+	u32 mask = 0;
+
+	if ((pipe_num == MDSS_MDP_SSPP_VIG3 ||
+			pipe_num == MDSS_MDP_SSPP_RGB3)) {
+		/* Add 2 to account for Cursor & Border bits */
+		mask = stage << ((3 * pipe_num) + 2);
+	} else {
+		mask = stage << (3 * pipe_num);
+	}
+	return mask;
+}
+
+u32 mdss_mdp_get_mixer_extn_mask(u32 pipe_num, u32 stage)
+{
+	u32 mask = 0;
+
+	/*
+	 * The ctl layer extension bits are ordered
+	 * VIG0-3, RGB0-3, DMA0-1
+	 */
+	if (pipe_num < MDSS_MDP_SSPP_RGB0) {
+		mask = BIT(pipe_num << 1);
+	} else if (pipe_num >= MDSS_MDP_SSPP_RGB0 &&
+			pipe_num < MDSS_MDP_SSPP_DMA0) {
+		mask = BIT((pipe_num + 1) << 1);
+	} else if (pipe_num >= MDSS_MDP_SSPP_DMA0 &&
+			pipe_num < MDSS_MDP_SSPP_VIG3) {
+		mask = BIT((pipe_num + 2) << 1);
+	} else if (pipe_num >= MDSS_MDP_SSPP_CURSOR0 &&
+			pipe_num <= MDSS_MDP_SSPP_CURSOR1) {
+		mask = stage << (20 + (6 * (pipe_num - MDSS_MDP_SSPP_CURSOR0)));
+	} else if (pipe_num == MDSS_MDP_SSPP_VIG3) {
+		mask = BIT(6);
+	} else if (pipe_num == MDSS_MDP_SSPP_RGB3) {
+		mask = BIT(14);
+	}
+
+	return mask;
+}
+
 static void mdss_mdp_mixer_setup(struct mdss_mdp_ctl *master_ctl,
 	int mixer_mux)
 {
 	int i;
 	int stage, screen_state, outsize;
-	u32 off, blend_op, blend_stage, mpq_num;
+	u32 off, blend_op, blend_stage;
 	u32 mixercfg = 0, mixer_op_mode = 0, bg_alpha_enable = 0,
 	    mixercfg_extn = 0;
 	u32 fg_alpha = 0, bg_alpha = 0;
@@ -3589,19 +3615,12 @@ static void mdss_mdp_mixer_setup(struct mdss_mdp_ctl *master_ctl,
 	if (pipe == NULL) {
 		mixercfg = MDSS_MDP_LM_BORDER_COLOR;
 	} else {
-		if (mdata->mdp_rev == MDSS_MDP_HW_REV_200) {
-			mpq_num = mdss_mdp_mpq_pipe_num_map(pipe->num);
-			mixercfg = 1 << (3 * mpq_num);
-		} else if (pipe->num == MDSS_MDP_SSPP_VIG3 ||
-			pipe->num == MDSS_MDP_SSPP_RGB3) {
-			/* Add 2 to account for Cursor & Border bits */
-			mixercfg = 1 << ((3 * pipe->num)+2);
-		} else if (pipe->type == MDSS_MDP_PIPE_TYPE_CURSOR) {
-			mixercfg_extn = BIT(20 + (6 *
-					(pipe->num - MDSS_MDP_SSPP_CURSOR0)));
-		} else {
-			mixercfg = 1 << (3 * pipe->num);
-		}
+		if (pipe->type == MDSS_MDP_PIPE_TYPE_CURSOR)
+			mixercfg_extn |= mdss_mdp_get_mixer_extn_mask(
+						pipe->num, 1);
+		else
+			mixercfg  |= mdss_mdp_get_mixer_mask(pipe->num, 1);
+
 		if (pipe->src_fmt->alpha_enable)
 			bg_alpha_enable = 1;
 	}
@@ -3700,40 +3719,12 @@ static void mdss_mdp_mixer_setup(struct mdss_mdp_ctl *master_ctl,
 		if (!pipe->src_fmt->alpha_enable && bg_alpha_enable)
 			mixer_op_mode = 0;
 
-		if (mdata->mdp_rev == MDSS_MDP_HW_REV_200) {
-			mpq_num = mdss_mdp_mpq_pipe_num_map(pipe->num);
-			mixercfg |= stage << (3 * mpq_num);
-		} else if ((stage < MDSS_MDP_STAGE_6) &&
-			(pipe->num == MDSS_MDP_SSPP_VIG3 ||
-			 pipe->num == MDSS_MDP_SSPP_RGB3)) {
-			/*
-			 * STAGE_6 require extension register
-			 * Add 2 to account for Cursor & Border bits
-			 */
-			mixercfg |= stage << ((3 * pipe->num)+2);
-		} else if (pipe->type == MDSS_MDP_PIPE_TYPE_CURSOR) {
-			mixercfg_extn |= stage << (20 + (6 *
-					(pipe->num - MDSS_MDP_SSPP_CURSOR0)));
-		} else if (stage < MDSS_MDP_STAGE_6) {
-			mixercfg |= stage << (3 * pipe->num);
-		} else {
-			/*
-			 * The ctl layer extension bits are ordered
-			 * VIG0-3, RGB0-3, DMA0-1
-			 */
-			if (pipe->num < MDSS_MDP_SSPP_RGB0)
-				mixercfg_extn |= BIT(pipe->num << 1);
-			else if (pipe->num >= MDSS_MDP_SSPP_RGB0  &&
-					pipe->num < MDSS_MDP_SSPP_DMA0)
-				mixercfg_extn |= BIT((pipe->num + 1) << 1);
-			else if (pipe->num >= MDSS_MDP_SSPP_DMA0 &&
-					pipe->num < MDSS_MDP_SSPP_VIG3)
-				mixercfg_extn |= BIT((pipe->num + 2) << 1);
-			else if (pipe->num == MDSS_MDP_SSPP_VIG3)
-				mixercfg_extn |= BIT(6);
-			else
-				mixercfg_extn |= BIT(14);
-		}
+		if ((stage < MDSS_MDP_STAGE_6) &&
+			(pipe->type != MDSS_MDP_PIPE_TYPE_CURSOR))
+			mixercfg |= mdss_mdp_get_mixer_mask(pipe->num, stage);
+		else
+			mixercfg_extn |= mdss_mdp_get_mixer_extn_mask(
+						pipe->num, stage);
 
 		trace_mdp_sspp_change(pipe);
 
@@ -3996,22 +3987,15 @@ int mdss_mdp_async_ctl_flush(struct msm_fb_data_type *mfd,
 {
 	struct mdss_overlay_private *mdp5_data = mfd_to_mdp5_data(mfd);
 	struct mdss_mdp_ctl *ctl = mdp5_data->ctl;
-	struct mdss_mdp_ctl *sctl = NULL;
+	struct mdss_mdp_ctl *sctl = mdss_mdp_get_split_ctl(ctl);
 	int ret = 0;
 
 	mutex_lock(&ctl->flush_lock);
 
 	mdss_mdp_ctl_write(ctl, MDSS_MDP_REG_CTL_FLUSH, flush_bits);
-	if ((!ctl->split_flush_en) && is_split_lm(mfd)) {
-		sctl = mdss_mdp_get_split_ctl(ctl);
-		if (!sctl) {
-			pr_err("not able to get the other ctl\n");
-			ret = -EINVAL;
-			goto end;
-		}
+	if ((!ctl->split_flush_en) && sctl)
 		mdss_mdp_ctl_write(sctl, MDSS_MDP_REG_CTL_FLUSH, flush_bits);
-	}
-end:
+
 	mutex_unlock(&ctl->flush_lock);
 	return ret;
 }
@@ -4021,7 +4005,6 @@ int mdss_mdp_mixer_pipe_update(struct mdss_mdp_pipe *pipe,
 {
 	struct mdss_mdp_ctl *ctl;
 	int i, j, k;
-	u32 mpq_num;
 
 	if (!pipe)
 		return -EINVAL;
@@ -4074,12 +4057,7 @@ int mdss_mdp_mixer_pipe_update(struct mdss_mdp_pipe *pipe,
 		}
 	}
 
-	if (ctl->mdata->mdp_rev == MDSS_MDP_HW_REV_200) {
-		mpq_num = mdss_mdp_mpq_pipe_num_map(pipe->num);
-		ctl->flush_bits |= BIT(mpq_num);
-	} else {
-		ctl->flush_bits |= mdss_mdp_get_pipe_flush_bits(pipe);
-	}
+	ctl->flush_bits |= mdss_mdp_get_pipe_flush_bits(pipe);
 
 	mutex_unlock(&ctl->flush_lock);
 
@@ -4140,15 +4118,40 @@ int mdss_mdp_mixer_pipe_unstage(struct mdss_mdp_pipe *pipe,
 	return 0;
 }
 
-int mdss_mdp_ctl_update_fps(struct mdss_mdp_ctl *ctl, int fps)
+int mdss_mdp_ctl_update_fps(struct mdss_mdp_ctl *ctl)
 {
+	struct mdss_panel_info *pinfo;
+	struct mdss_overlay_private *mdp5_data;
 	int ret = 0;
-	struct mdss_mdp_ctl *sctl = NULL;
+	int new_fps;
 
-	sctl = mdss_mdp_get_split_ctl(ctl);
+	if (!ctl->panel_data || !ctl->mfd)
+		return -ENODEV;
 
-	if (ctl->ops.config_fps_fnc)
-		ret = ctl->ops.config_fps_fnc(ctl, sctl, fps);
+	pinfo = &ctl->panel_data->panel_info;
+
+	if (!pinfo->dynamic_fps || !ctl->ops.config_fps_fnc)
+		return 0;
+
+	mdp5_data = mfd_to_mdp5_data(ctl->mfd);
+	if (!mdp5_data)
+		return -ENODEV;
+
+	mutex_lock(&mdp5_data->dfps_lock);
+	new_fps = pinfo->new_fps;
+	mutex_unlock(&mdp5_data->dfps_lock);
+
+	if (new_fps == pinfo->mipi.frame_rate) {
+		pr_debug("FPS is already %d\n", new_fps);
+		return 0;
+	}
+
+	ret = ctl->ops.config_fps_fnc(ctl, new_fps);
+	if (!ret)
+		pr_debug("fps set to %d\n", new_fps);
+	else
+		pr_err("Failed to configure %d fps rc=%d\n",
+			new_fps, ret);
 
 	return ret;
 }
@@ -4572,7 +4575,7 @@ int mdss_mdp_display_commit(struct mdss_mdp_ctl *ctl, void *arg,
 			sctl_flush_bits);
 		sctl->flush_bits = 0;
 	}
-	MDSS_XLOG(ctl_flush_bits, sctl_flush_bits);
+	MDSS_XLOG(ctl->intf_num, ctl_flush_bits, sctl_flush_bits);
 	wmb();
 	ctl->flush_reg_data = ctl_flush_bits;
 	ctl->flush_bits = 0;
@@ -4598,7 +4601,7 @@ int mdss_mdp_display_commit(struct mdss_mdp_ctl *ctl, void *arg,
 	ctl->valid_roi = 0;
 
 	if (ret)
-		pr_warn("error displaying frame\n");
+		pr_warn("ctl %d error displaying frame\n", ctl->num);
 
 	ctl->play_cnt++;
 	ATRACE_END("flush_kickoff");
@@ -4712,13 +4715,18 @@ static inline int __mdss_mdp_ctl_get_mixer_off(struct mdss_mdp_mixer *mixer)
 	}
 }
 
-u32 mdss_mdp_get_mixercfg(struct mdss_mdp_mixer *mixer)
+u32 mdss_mdp_get_mixercfg(struct mdss_mdp_mixer *mixer, bool extn)
 {
+	u32 mixer_off;
+
 	if (!mixer || !mixer->ctl)
 		return 0;
 
-	return mdss_mdp_ctl_read(mixer->ctl,
-		__mdss_mdp_ctl_get_mixer_off(mixer));
+	mixer_off = __mdss_mdp_ctl_get_mixer_off(mixer);
+	mixer_off = extn ? (mixer_off + MDSS_MDP_REG_CTL_LAYER_EXTN_OFFSET) :
+				mixer_off;
+
+	return mdss_mdp_ctl_read(mixer->ctl, mixer_off);
 }
 
 static int __mdss_mdp_mixer_handoff_helper(struct mdss_mdp_mixer *mixer,
@@ -4834,6 +4842,25 @@ struct mdss_mdp_writeback *mdss_mdp_wb_alloc(u32 caps, u32 reg_index)
 	}
 
 	return wb;
+}
+
+bool mdss_mdp_is_wb_mdp_intf(u32 num, u32 reg_index)
+{
+	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
+	struct mdss_mdp_writeback *wb = NULL;
+	bool wb_virtual_on;
+
+	wb_virtual_on = (mdata->nctl == mdata->nwb_offsets);
+
+	if (num >= mdata->nwb || (wb_virtual_on && reg_index >=
+			mdata->nwb_offsets))
+		return false;
+
+	wb = mdata->wb + num;
+	if (!wb)
+		return false;
+
+	return (wb->caps & MDSS_MDP_WB_INTF) ? true : false;
 }
 
 struct mdss_mdp_writeback *mdss_mdp_wb_assign(u32 num, u32 reg_index)

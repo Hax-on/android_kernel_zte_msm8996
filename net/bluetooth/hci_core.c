@@ -2554,6 +2554,10 @@ static int hci_dev_do_close(struct hci_dev *hdev)
 {
 	BT_DBG("%s %p", hdev->name, hdev);
 
+	/* do not call cancel_delayed_work_sync for power_off here as
+	 * hci_dev_do_close function is called from work handler which might
+	 * cause deadlock. Instead to it in hci_unregister_dev
+	*/
 	cancel_delayed_work(&hdev->power_off);
 
 	hci_req_cancel(hdev, ENODEV);
@@ -2570,14 +2574,14 @@ static int hci_dev_do_close(struct hci_dev *hdev)
 	flush_work(&hdev->rx_work);
 
 	if (hdev->discov_timeout > 0) {
-		cancel_delayed_work(&hdev->discov_off);
+		cancel_delayed_work_sync(&hdev->discov_off);
 		hdev->discov_timeout = 0;
 		clear_bit(HCI_DISCOVERABLE, &hdev->dev_flags);
 		clear_bit(HCI_LIMITED_DISCOVERABLE, &hdev->dev_flags);
 	}
 
 	if (test_and_clear_bit(HCI_SERVICE_CACHE, &hdev->dev_flags))
-		cancel_delayed_work(&hdev->service_cache);
+		cancel_delayed_work_sync(&hdev->service_cache);
 
 	cancel_delayed_work_sync(&hdev->le_scan_disable);
 
@@ -2599,8 +2603,7 @@ static int hci_dev_do_close(struct hci_dev *hdev)
 	skb_queue_purge(&hdev->cmd_q);
 	atomic_set(&hdev->cmd_cnt, 1);
 	if (!test_bit(HCI_AUTO_OFF, &hdev->dev_flags) &&
-	    !test_bit(HCI_UNCONFIGURED, &hdev->dev_flags) &&
-	    test_bit(HCI_QUIRK_RESET_ON_CLOSE, &hdev->quirks)) {
+	    !test_bit(HCI_UNCONFIGURED, &hdev->dev_flags)) {
 		set_bit(HCI_INIT, &hdev->flags);
 		__hci_req_sync(hdev, hci_reset_req, 0, HCI_CMD_TIMEOUT);
 		clear_bit(HCI_INIT, &hdev->flags);
@@ -2863,7 +2866,7 @@ int hci_dev_cmd(unsigned int cmd, void __user *arg)
 
 	case HCISETLINKMODE:
 		hdev->link_mode = ((__u16) dr.dev_opt) &
-					(HCI_LM_MASTER | HCI_LM_ACCEPT);
+					(HCI_LM_MASTER);
 		break;
 
 	case HCISETPTYPE:
@@ -3982,7 +3985,7 @@ struct hci_dev *hci_alloc_dev(void)
 
 	hdev->pkt_type  = (HCI_DM1 | HCI_DH1 | HCI_HV1);
 	hdev->esco_type = (ESCO_HV1);
-	hdev->link_mode = (HCI_LM_ACCEPT);
+	hdev->link_mode = (HCI_LM_MASTER); /* Allow DUT to be in MASTER role */
 	hdev->num_iac = 0x01;		/* One IAC support is mandatory */
 	hdev->io_capability = 0x03;	/* No Input No Output */
 	hdev->manufacturer = 0xffff;	/* Default to internal use */
@@ -4181,6 +4184,11 @@ void hci_unregister_dev(struct hci_dev *hdev)
 		kfree_skb(hdev->reassembly[i]);
 
 	cancel_work_sync(&hdev->power_on);
+
+	/* hci_dev_do_close does not call cancel_delayed_work_sync on power_off
+	 * work, call it here while deregistration before wqs are destroyed
+	*/
+	cancel_delayed_work_sync(&hdev->power_off);
 
 	if (!test_bit(HCI_INIT, &hdev->flags) &&
 	    !test_bit(HCI_SETUP, &hdev->dev_flags) &&

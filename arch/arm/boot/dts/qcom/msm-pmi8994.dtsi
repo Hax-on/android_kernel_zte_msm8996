@@ -308,7 +308,7 @@
 
 				interrupt-names =	"power-ok",
 							"temp-shutdown",
-							"safety-timeout",
+							"wdog-timeout",
 							"flash-fail",
 							"otst2",
 							"otst3";
@@ -475,9 +475,9 @@
 
 				qcom,qpnp-ibb-soft-start = <1000>;
 
-				qcom,qpnp-ibb-discharge-resistor = <300>;
-				qcom,qpnp-ibb-lab-pwrup-delay = <4000>;
-				qcom,qpnp-ibb-lab-pwrdn-delay = <4000>;
+				qcom,qpnp-ibb-discharge-resistor = <32>;
+				qcom,qpnp-ibb-lab-pwrup-delay = <8000>;
+				qcom,qpnp-ibb-lab-pwrdn-delay = <8000>;
 				qcom,qpnp-ibb-en-discharge;
 
 				qcom,qpnp-ibb-full-pull-down;
@@ -517,11 +517,11 @@
 				qcom,qpnp-lab-ps-enable;
 				qcom,qpnp-lab-nfet-size = <100>;
 				qcom,qpnp-lab-pfet-size = <100>;
-				qcom,qpnp-lab-max-precharge-time = <200>;
+				qcom,qpnp-lab-max-precharge-time = <300>;
 			};
 		};
 
-		qcom,leds@d800 {
+		pmi8994_wled: qcom,leds@d800 {
 			compatible = "qcom,qpnp-wled";
 			reg = <0xd800 0x100>,
 				<0xd900 0x100>,
@@ -585,7 +585,7 @@
 			label = "rgb";
 			status = "okay";
 
-			qcom,rgb_0 {
+			red_led: qcom,rgb_0 {
 				label = "rgb";
 				qcom,id = <3>;
 				qcom,mode = "pwm";
@@ -598,7 +598,7 @@
 					"battery-charging";
 			};
 
-			qcom,rgb_1 {
+			green_led: qcom,rgb_1 {
 				label = "rgb";
 				qcom,id = <4>;
 				qcom,mode = "pwm";
@@ -610,7 +610,7 @@
 				linux,default-trigger = "battery-full";
 			};
 
-			qcom,rgb_2 {
+			blue_led: qcom,rgb_2 {
 				label = "rgb";
 				qcom,id = <5>;
 				qcom,mode = "pwm";
@@ -676,8 +676,6 @@
 				qcom,id = <0>;
 				qcom,current = <120>;
 				qcom,max-current = <200>;
-				boost-supply = <&pmi8994_boostbypass>;
-				boost-voltage-max = <3600000>;
 			};
 
 			pmi8994_torch1: qcom,torch_1 {
@@ -688,8 +686,6 @@
 				qcom,id = <1>;
 				qcom,current = <120>;
 				qcom,max-current = <200>;
-				boost-supply = <&pmi8994_boostbypass>;
-				boost-voltage-max = <3600000>;
 			};
 
 			pmi8994_switch: qcom,switch {
@@ -701,8 +697,14 @@
 				qcom,current = <625>;
 				qcom,max-current = <1000>;
 				qcom,duration = <1280>;
-				boost-supply = <&pmi8994_boostbypass>;
-				boost-voltage-max = <3600000>;
+				reg0 {
+					regulator-name =
+						"pmi8994_boostbypass";
+					max-voltage = <3600000>;
+				};
+				reg1 {
+					regulator-name = "pon_spare_reg";
+				};
 			};
 		};
 	};

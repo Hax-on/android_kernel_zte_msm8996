@@ -562,6 +562,12 @@ struct regmap *regmap_init(struct device *dev,
 		}
 		map->lock_arg = map;
 	}
+
+	if ((bus && bus->fast_io) || config->fast_io)
+		map->alloc_flags = GFP_ATOMIC;
+	else
+		map->alloc_flags = GFP_KERNEL;
+
 	map->format.reg_bytes = DIV_ROUND_UP(config->reg_bits, 8);
 	map->format.pad_bytes = config->pad_bits / 8;
 	map->format.val_bytes = DIV_ROUND_UP(config->val_bits, 8);
@@ -1716,7 +1722,7 @@ out:
 		if (!val_count)
 			return -EINVAL;
 
-		wval = kmemdup(val, val_count * val_bytes, GFP_KERNEL);
+		wval = kmemdup(val, val_count * val_bytes, map->alloc_flags);
 		if (!wval) {
 			dev_err(map->dev, "Error in memory allocation\n");
 			return -ENOMEM;
@@ -1741,7 +1747,7 @@ EXPORT_SYMBOL_GPL(regmap_bulk_write);
  * they are all in the same page and have been changed to being page
  * relative. The page register has been written if that was neccessary.
  */
-static int _regmap_raw_multi_reg_write(struct regmap *map,
+int _regmap_raw_multi_reg_write(struct regmap *map,
 				       const struct reg_default *regs,
 				       size_t num_regs)
 {

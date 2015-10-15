@@ -1282,6 +1282,14 @@ void u_bam_data_stop_rndis_ipa(void)
 	}
 }
 
+void bam_data_flow_control_enable(bool enable)
+{
+	if (enable)
+		u_bam_data_stop_rndis_ipa();
+	else
+		u_bam_data_start_rndis_ipa();
+}
+
 static void bam_data_free_reqs(struct bam_data_port *port)
 {
 
@@ -1311,7 +1319,7 @@ void bam_data_disconnect(struct data_port *gr, enum function_type func,
 	int port_num;
 
 	port_num = u_bam_data_func_to_port(func, dev_port_num);
-	if (port_num < 0 || port_num >= n_bam2bam_data_ports) {
+	if (port_num < 0) {
 		pr_err("invalid bam2bam portno#%d\n", port_num);
 		return;
 	}
@@ -1452,7 +1460,7 @@ int bam_data_connect(struct data_port *gr, enum transport_type trans,
 	}
 
 	port_num = u_bam_data_func_to_port(func, dev_port_num);
-	if (port_num < 0 || port_num >= n_bam2bam_data_ports) {
+	if (port_num < 0) {
 		pr_err("invalid portno#%d\n", port_num);
 		return -EINVAL;
 	}
@@ -1793,7 +1801,7 @@ void bam_data_suspend(struct data_port *port_usb, u8 dev_port_num,
 	int port_num;
 
 	port_num = u_bam_data_func_to_port(func, dev_port_num);
-	if (port_num < 0 || port_num >= n_bam2bam_data_ports) {
+	if (port_num < 0) {
 		pr_err("invalid bam2bam portno#%d\n", port_num);
 		return;
 	}
@@ -1840,7 +1848,7 @@ void bam_data_resume(struct data_port *port_usb, u8 dev_port_num,
 	int port_num;
 
 	port_num = u_bam_data_func_to_port(func, dev_port_num);
-	if (port_num < 0 || port_num >= n_bam2bam_data_ports) {
+	if (port_num < 0) {
 		pr_err("invalid bam2bam portno#%d\n", port_num);
 		return;
 	}

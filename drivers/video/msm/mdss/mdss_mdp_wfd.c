@@ -198,6 +198,8 @@ int mdss_mdp_wfd_setup(struct mdss_mdp_wfd *wfd,
 	ctl->height = layer->buffer.height;
 	ctl->roi =  (struct mdss_rect) {0, 0, ctl->width, ctl->height};
 
+	ctl->is_secure = (layer->flags & MDP_LAYER_SECURE_SESSION);
+
 	mixer->width = layer->buffer.width;
 	mixer->height = layer->buffer.height;
 	mixer->roi = (struct mdss_rect) {0, 0, mixer->width, mixer->height};
@@ -289,10 +291,33 @@ void mdss_mdp_wfd_remove_data(struct mdss_mdp_wfd *wfd,
 	kfree(wfd_data);
 }
 
+static int mdss_mdp_wfd_validate_out_configuration(struct mdss_mdp_wfd *wfd,
+	struct mdp_output_layer *layer)
+{
+	struct mdss_mdp_format_params *fmt = NULL;
+	struct mdss_mdp_ctl *ctl = wfd->ctl;
+	u32 wb_idx = layer->writeback_ndx;
+
+	if (mdss_mdp_is_wb_mdp_intf(wb_idx, ctl->num)) {
+		fmt = mdss_mdp_get_format_params(layer->buffer.format);
+		if (!(fmt->flag & VALID_MDP_WB_INTF_FORMAT)) {
+			pr_err("wb=%d does not support dst fmt:%d\n", wb_idx,
+				layer->buffer.format);
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
 int mdss_mdp_wfd_validate(struct mdss_mdp_wfd *wfd,
 	struct mdp_output_layer *layer)
 {
 	u32 wb_idx = layer->writeback_ndx;
+
+	if (mdss_mdp_wfd_validate_out_configuration(wfd, layer)) {
+		pr_err("failed to validate output config\n");
+		return -EINVAL;
+	}
 
 	if (wb_idx > wfd->ctl->mdata->nwb)
 		return -EINVAL;

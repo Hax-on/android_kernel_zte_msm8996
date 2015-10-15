@@ -116,6 +116,8 @@
 #define DIAG_EXT_MOBILE_ID	0x06
 #define DIAG_GET_TIME_API	0x21B
 #define DIAG_SET_TIME_API	0x21C
+#define DIAG_SWITCH_COMMAND	0x081B
+#define DIAG_BUFFERING_MODE	0x080C
 
 #define DIAG_CMD_OP_LOG_DISABLE		0
 #define DIAG_CMD_OP_GET_LOG_RANGE	1
@@ -433,6 +435,7 @@ struct diagchar_dev {
 	struct device *diag_dev;
 	int ref_count;
 	struct mutex diagchar_mutex;
+	struct mutex diag_file_mutex;
 	wait_queue_head_t wait_q;
 	struct diag_client_map *client_map;
 	int *data_ready;
@@ -491,6 +494,7 @@ struct diagchar_dev {
 	struct diagfwd_info *diagfwd_dci_cmd[NUM_PERIPHERALS];
 	struct diag_feature_t feature[NUM_PERIPHERALS];
 	struct diag_buffering_mode_t buffering_mode[NUM_PERIPHERALS];
+	uint8_t buffering_flag[NUM_PERIPHERALS];
 	struct mutex mode_lock;
 	unsigned char *user_space_data_buf;
 	uint8_t user_space_data_busy;

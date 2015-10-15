@@ -17,6 +17,7 @@
 #include <linux/debugfs.h>
 #include <linux/kernel.h>
 #include <linux/iommu.h>
+#include <linux/qcom_iommu.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/clk/msm-clk.h>
@@ -265,7 +266,7 @@ static int mdss_smmu_map_dma_buf_v2(struct dma_buf *dma_buf,
 	ATRACE_BEGIN("map_buffer");
 	rc = msm_dma_map_sg_lazy(mdss_smmu->dev, table->sgl, table->nents, dir,
 		dma_buf);
-	if (!rc) {
+	if (rc != table->nents) {
 		pr_err("dma map sg failed\n");
 		return -ENOMEM;
 	}
@@ -505,6 +506,7 @@ int mdss_smmu_probe(struct platform_device *pdev)
 	const struct of_device_id *match;
 	struct dss_module_power *mp;
 	int disable_htw = 1;
+	char name[MAX_CLIENT_NAME_LEN];
 
 	if (!mdata) {
 		pr_err("probe failed as mdata is not initialized\n");
@@ -568,7 +570,8 @@ int mdss_smmu_probe(struct platform_device *pdev)
 		return rc;
 	}
 
-	mdss_smmu->reg_bus_clt = mdss_reg_bus_vote_client_create();
+	snprintf(name, MAX_CLIENT_NAME_LEN, "smmu:%u", domain);
+	mdss_smmu->reg_bus_clt = mdss_reg_bus_vote_client_create(name);
 	if (IS_ERR_OR_NULL(mdss_smmu->reg_bus_clt)) {
 		pr_err("mdss bus client register failed\n");
 		msm_dss_config_vreg(&pdev->dev, mp->vreg_config, mp->num_vreg,
@@ -583,7 +586,7 @@ int mdss_smmu_probe(struct platform_device *pdev)
 	}
 
 	mdss_smmu->mmu_mapping = arm_iommu_create_mapping(
-		&platform_bus_type, va_start, va_size);
+		msm_iommu_get_bus(dev), va_start, va_size);
 	if (IS_ERR(mdss_smmu->mmu_mapping)) {
 		pr_err("iommu create mapping failed for domain[%d]\n", domain);
 		rc = PTR_ERR(mdss_smmu->mmu_mapping);

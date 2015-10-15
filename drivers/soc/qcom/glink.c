@@ -2708,6 +2708,7 @@ static int glink_tx_common(void *handle, void *pkt_priv,
 	tx_info->pkt_priv = pkt_priv;
 	tx_info->data = data;
 	tx_info->riid = riid;
+	tx_info->rcid = ctx->rcid;
 	tx_info->size = size;
 	tx_info->size_remaining = size;
 	tx_info->tracer_pkt = tx_flags & GLINK_TX_TRACER_PKT ? true : false;
@@ -3415,7 +3416,7 @@ int of_get_glink_core_qos_cfg(struct device_node *phandle,
 	num_flows /= 2;
 	cfg->num_flows = num_flows;
 
-	cfg->flow_info = kmalloc_array(num_flows, sizeof(cfg->flow_info),
+	cfg->flow_info = kmalloc_array(num_flows, sizeof(*(cfg->flow_info)),
 					GFP_KERNEL);
 	if (!cfg->flow_info) {
 		GLINK_ERR("%s: Memory allocation for flow info failed\n",
@@ -3423,7 +3424,7 @@ int of_get_glink_core_qos_cfg(struct device_node *phandle,
 		rc = -ENOMEM;
 		goto error;
 	}
-	arr32 = kmalloc_array(num_flows, sizeof(uint32_t), GFP_KERNEL);
+	arr32 = kmalloc_array(num_flows * 2, sizeof(uint32_t), GFP_KERNEL);
 	if (!arr32) {
 		GLINK_ERR("%s: Memory allocation for temporary array failed\n",
 				__func__);
@@ -4962,6 +4963,13 @@ static int glink_scheduler_tx(struct channel_ctx *ctx,
 					"%s: unrecoverable xprt failure %d\n",
 					__func__, ret);
 			break;
+		} else if (!ret && tx_info->size_remaining) {
+			/*
+			 * Transport unable to send any data on this channel.
+			 * Break out of the loop so that the scheduler can
+			 * continue with the next channel.
+			 */
+			break;
 		} else {
 			txd_len += tx_len;
 		}
@@ -5000,7 +5008,10 @@ static void tx_work_func(struct work_struct *work)
 			container_of(work, struct glink_core_xprt_ctx, tx_work);
 	struct channel_ctx *ch_ptr;
 	uint32_t prio;
+	uint32_t tx_ready_head_prio;
 	int ret;
+	struct channel_ctx *tx_ready_head = NULL;
+	bool transmitted_successfully = true;
 
 	GLINK_PERF("%s: worker starting\n", __func__);
 
@@ -5018,6 +5029,19 @@ static void tx_work_func(struct work_struct *work)
 		ch_ptr = list_first_entry(&xprt_ptr->prio_bin[prio].tx_ready,
 				struct channel_ctx, tx_ready_list_node);
 		mutex_unlock(&xprt_ptr->tx_ready_mutex_lhb2);
+
+		if (tx_ready_head == NULL || tx_ready_head_prio < prio) {
+			tx_ready_head = ch_ptr;
+			tx_ready_head_prio = prio;
+		}
+
+		if (ch_ptr == tx_ready_head && !transmitted_successfully) {
+			GLINK_ERR_XPRT(xprt_ptr,
+				"%s: Unable to send data on this transport.\n",
+				__func__);
+			break;
+		}
+		transmitted_successfully = false;
 
 		ret = glink_scheduler_tx(ch_ptr, xprt_ptr);
 		if (ret == -EAGAIN) {
@@ -5038,6 +5062,16 @@ static void tx_work_func(struct work_struct *work)
 					"%s: unrecoverable xprt failure %d\n",
 					__func__, ret);
 			break;
+		} else if (!ret) {
+			/*
+			 * Transport unable to send any data on this channel,
+			 * but didn't return an error. Move to the next channel
+			 * and continue.
+			 */
+			mutex_lock(&xprt_ptr->tx_ready_mutex_lhb2);
+			list_rotate_left(&xprt_ptr->prio_bin[prio].tx_ready);
+			mutex_unlock(&xprt_ptr->tx_ready_mutex_lhb2);
+			continue;
 		}
 
 		mutex_lock(&xprt_ptr->tx_ready_mutex_lhb2);
@@ -5051,6 +5085,9 @@ static void tx_work_func(struct work_struct *work)
 
 		mutex_unlock(&ch_ptr->tx_lists_mutex_lhc3);
 		mutex_unlock(&xprt_ptr->tx_ready_mutex_lhb2);
+
+		tx_ready_head = NULL;
+		transmitted_successfully = true;
 	}
 	glink_pm_qos_unvote(xprt_ptr);
 	GLINK_PERF("%s: worker exiting\n", __func__);

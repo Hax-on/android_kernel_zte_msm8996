@@ -51,6 +51,7 @@ static int statistics_mode[] = {
 	[ilog2(HAL_STATISTICS_MODE_DEFAULT)] = HFI_STATISTICS_MODE_DEFAULT,
 	[ilog2(HAL_STATISTICS_MODE_1)] = HFI_STATISTICS_MODE_1,
 	[ilog2(HAL_STATISTICS_MODE_2)] = HFI_STATISTICS_MODE_2,
+	[ilog2(HAL_STATISTICS_MODE_3)] = HFI_STATISTICS_MODE_3,
 };
 
 static int color_format[] = {
@@ -924,14 +925,36 @@ int create_pkt_cmd_session_get_property(
 		pkt->rg_property_data[0] =
 			HFI_PROPERTY_PARAM_PROFILE_LEVEL_CURRENT;
 		break;
-	case HAL_CONFIG_VDEC_ENTROPY:
-		pkt->rg_property_data[0] = HFI_PROPERTY_CONFIG_VDEC_ENTROPY;
-		break;
 	default:
 		dprintk(VIDC_ERR, "%s cmd:%#x not supported\n", __func__,
 			ptype);
 		rc = -EINVAL;
 		break;
+	}
+	return rc;
+}
+
+int create_3x_pkt_cmd_session_get_property(
+		struct hfi_cmd_session_get_property_packet *pkt,
+		struct hal_session *session, enum hal_property ptype)
+{
+	int rc = 0;
+
+	if (!pkt || !session) {
+		dprintk(VIDC_ERR, "%s Invalid parameters\n", __func__);
+		return -EINVAL;
+	}
+	pkt->size = sizeof(struct hfi_cmd_session_get_property_packet);
+	pkt->packet_type = HFI_CMD_SESSION_GET_PROPERTY;
+	pkt->session_id = hash32_ptr(session);
+	pkt->num_properties = 1;
+	switch (ptype) {
+	case HAL_CONFIG_VDEC_ENTROPY:
+		pkt->rg_property_data[0] = HFI_PROPERTY_CONFIG_VDEC_ENTROPY;
+		break;
+	default:
+		rc = create_pkt_cmd_session_get_property(pkt,
+				session, ptype);
 	}
 	return rc;
 }
@@ -1021,8 +1044,8 @@ int create_pkt_cmd_session_set_property(
 	case HAL_CONFIG_REALTIME:
 	{
 		create_pkt_enable(pkt->rg_property_data,
-				HFI_PROPERTY_CONFIG_REALTIME,
-				((struct hal_enable *)pdata)->enable);
+			HFI_PROPERTY_CONFIG_REALTIME,
+			(((struct hal_enable *) pdata)->enable));
 		pkt->size += sizeof(u32) * 2;
 		break;
 	}
@@ -1047,30 +1070,6 @@ int create_pkt_cmd_session_set_property(
 		pkt->size += sizeof(u32) + sizeof(struct
 				hfi_buffer_count_actual);
 
-		break;
-	}
-	case HAL_PARAM_BUFFER_SIZE_MINIMUM:
-	{
-		struct hfi_buffer_size_minimum *hfi;
-		struct hal_buffer_size_minimum *prop =
-			(struct hal_buffer_size_minimum *) pdata;
-		u32 buffer_type;
-
-		pkt->rg_property_data[0] =
-			HFI_PROPERTY_PARAM_BUFFER_SIZE_MINIMUM;
-
-		hfi = (struct hfi_buffer_size_minimum *)
-			&pkt->rg_property_data[1];
-		hfi->buffer_size = prop->buffer_size;
-
-		buffer_type = get_hfi_buffer(prop->buffer_type);
-		if (buffer_type)
-			hfi->buffer_type = buffer_type;
-		else
-			return -EINVAL;
-
-		pkt->size += sizeof(u32) + sizeof(struct
-				hfi_buffer_count_actual);
 		break;
 	}
 	case HAL_PARAM_NAL_STREAM_FORMAT_SELECT:
@@ -1959,6 +1958,14 @@ int create_pkt_cmd_session_set_property(
 				sizeof(struct hfi_aspect_ratio);
 		break;
 	}
+	case HAL_PARAM_VENC_BITRATE_TYPE:
+	{
+		create_pkt_enable(pkt->rg_property_data,
+			HFI_PROPERTY_PARAM_VENC_BITRATE_TYPE,
+			((struct hal_enable *)pdata)->enable);
+		pkt->size += sizeof(u32) + sizeof(struct hfi_enable);
+		break;
+	}
 	/* FOLLOWING PROPERTIES ARE NOT IMPLEMENTED IN CORE YET */
 	case HAL_CONFIG_BUFFER_REQUIREMENTS:
 	case HAL_CONFIG_PRIORITY:
@@ -1984,6 +1991,7 @@ int create_pkt_cmd_session_set_property(
 	case HAL_CONFIG_VDEC_MULTI_STREAM:
 	case HAL_PARAM_VENC_MULTI_SLICE_INFO:
 	case HAL_CONFIG_VENC_TIMESTAMP_SCALE:
+	case HAL_PARAM_BUFFER_SIZE_MINIMUM:
 	default:
 		dprintk(VIDC_ERR, "DEFAULT: Calling %#x\n", ptype);
 		rc = -ENOTSUPP;
@@ -2135,6 +2143,30 @@ static int create_3x_pkt_cmd_session_set_property(
 		rc = -ENOTSUPP;
 		break;
 	}
+	case HAL_PARAM_BUFFER_SIZE_MINIMUM:
+	{
+		struct hfi_buffer_size_minimum *hfi;
+		struct hal_buffer_size_minimum *prop =
+			(struct hal_buffer_size_minimum *) pdata;
+		u32 buffer_type;
+
+		pkt->rg_property_data[0] =
+			HFI_PROPERTY_PARAM_BUFFER_SIZE_MINIMUM;
+
+		hfi = (struct hfi_buffer_size_minimum *)
+			&pkt->rg_property_data[1];
+		hfi->buffer_size = prop->buffer_size;
+
+		buffer_type = get_hfi_buffer(prop->buffer_type);
+		if (buffer_type)
+			hfi->buffer_type = buffer_type;
+		else
+			return -EINVAL;
+
+		pkt->size += sizeof(u32) + sizeof(struct
+				hfi_buffer_count_actual);
+		break;
+	}
 	default:
 		rc = create_pkt_cmd_session_set_property(pkt,
 				session, ptype, pdata);
@@ -2194,6 +2226,8 @@ struct hfi_packetization_ops *get_venus_3x_ops(void)
 	/* Override new HFI functions for HFI_PACKETIZATION_3XX here. */
 	hfi_venus_3x.session_set_property =
 		create_3x_pkt_cmd_session_set_property;
+	hfi_venus_3x.session_get_property =
+		create_3x_pkt_cmd_session_get_property;
 	hfi_venus_3x.session_cmd = create_3x_pkt_cmd_session_cmd;
 	hfi_venus_3x.session_sync_process = create_pkt_cmd_session_sync_process;
 

@@ -454,7 +454,7 @@ int map_and_register_buf(struct msm_vidc_inst *inst, struct v4l2_buffer *b)
 		if (temp && !is_dynamic_output_buffer_mode(b, inst)) {
 			dprintk(VIDC_DBG,
 				"This memory region has already been prepared\n");
-			rc = -EINVAL;
+			rc = 0;
 			mutex_unlock(&inst->registeredbufs.lock);
 			goto exit;
 		}
@@ -827,13 +827,11 @@ int msm_vidc_qbuf(void *instance, struct v4l2_buffer *b)
 		return -EINVAL;
 	}
 
-	if (is_dynamic_output_buffer_mode(b, inst)) {
-		rc = map_and_register_buf(inst, b);
-		if (rc == -EEXIST)
-			return 0;
-		if (rc)
-			return rc;
-	}
+	rc = map_and_register_buf(inst, b);
+	if (rc == -EEXIST)
+		return 0;
+	if (rc)
+		return rc;
 
 	for (i = 0; i < b->length; ++i) {
 		if (EXTRADATA_IDX(b->length) &&
@@ -932,6 +930,8 @@ int msm_vidc_dqbuf(void *instance, struct v4l2_buffer *b)
 		}
 
 		b->m.planes[i].m.userptr = buffer_info->uvaddr[i];
+		b->m.planes[i].reserved[0] = buffer_info->fd[i];
+		b->m.planes[i].reserved[1] = buffer_info->buff_off[i];
 		if (!b->m.planes[i].m.userptr) {
 			dprintk(VIDC_ERR,
 			"%s: Failed to find user virtual address, %#lx, %d, %d\n",
@@ -1286,15 +1286,16 @@ int msm_vidc_destroy(struct msm_vidc_inst *inst)
 
 	core = inst->core;
 
-	v4l2_fh_del(&inst->event_handler);
-
-	for (i = 0; i < MAX_PORT_NUM; i++)
-		vb2_queue_release(&inst->bufq[i].vb2_bufq);
-
 	mutex_lock(&core->lock);
 	/* inst->list lives in core->instances */
 	list_del(&inst->list);
 	mutex_unlock(&core->lock);
+
+	v4l2_fh_del(&inst->event_handler);
+	v4l2_fh_exit(&inst->event_handler);
+
+	for (i = 0; i < MAX_PORT_NUM; i++)
+		vb2_queue_release(&inst->bufq[i].vb2_bufq);
 
 	pr_info(VIDC_DBG_TAG "Closed video instance: %p\n",
 			VIDC_MSG_PRIO2STRING(VIDC_INFO), inst);

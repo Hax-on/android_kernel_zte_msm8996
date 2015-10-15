@@ -487,13 +487,23 @@ static void bulk_in_complete(struct usb_ep *ep, struct usb_request *req)
 	struct fsg_buffhd	*bh = req->context;
 
 	if (req->status || req->actual != req->length)
-		DBG(common, "%s --> %d, %u/%u\n", __func__,
+		pr_debug("%s --> %d, %u/%u\n", __func__,
 		    req->status, req->actual, req->length);
 	if (req->status == -ECONNRESET)		/* Request was cancelled */
 		usb_ep_fifo_flush(ep);
 
 	/* Hold the lock while we update the request and buffer states */
 	smp_wmb();
+	/*
+	 * Disconnect and completion might race each other and driver data
+	 * is set to NULL during ep disable. So, add a check if that is case.
+	 */
+	if (!common) {
+		bh->inreq_busy = 0;
+		bh->state = BUF_STATE_EMPTY;
+		return;
+	}
+
 	spin_lock(&common->lock);
 	bh->inreq_busy = 0;
 	bh->state = BUF_STATE_EMPTY;
@@ -2893,6 +2903,10 @@ int fsg_common_set_num_buffers(struct fsg_common *common, unsigned int n)
 {
 	struct fsg_buffhd *bh, *buffhds;
 	int i, rc;
+	size_t extra_buf_alloc = 0;
+
+	if (common->gadget)
+		extra_buf_alloc = common->gadget->extra_buf_alloc;
 
 	rc = fsg_num_buffers_validate(n);
 	if (rc != 0)
@@ -2910,7 +2924,8 @@ int fsg_common_set_num_buffers(struct fsg_common *common, unsigned int n)
 		bh->next = bh + 1;
 		++bh;
 buffhds_first_it:
-		bh->buf = kmalloc(FSG_BUFLEN, GFP_KERNEL);
+		bh->buf = kmalloc(FSG_BUFLEN + extra_buf_alloc,
+				GFP_KERNEL);
 		if (unlikely(!bh->buf))
 			goto error_release;
 	} while (--i);

@@ -42,6 +42,7 @@
 
 #include "configfs.h"
 
+#define MTP_RX_BUFFER_INIT_SIZE    1048576
 #define MTP_BULK_BUFFER_SIZE       16384
 #define INTR_BUFFER_SIZE           28
 #define MAX_INST_NAME_LEN          40
@@ -77,7 +78,7 @@
 
 #define MAX_ITERATION		100
 
-unsigned int mtp_rx_req_len = MTP_BULK_BUFFER_SIZE;
+unsigned int mtp_rx_req_len = MTP_RX_BUFFER_INIT_SIZE;
 module_param(mtp_rx_req_len, uint, S_IRUGO | S_IWUSR);
 
 unsigned int mtp_tx_req_len = MTP_BULK_BUFFER_SIZE;
@@ -515,6 +516,7 @@ static int mtp_create_bulk_endpoints(struct mtp_dev *dev,
 	struct usb_composite_dev *cdev = dev->cdev;
 	struct usb_request *req;
 	struct usb_ep *ep;
+	size_t extra_buf_alloc = cdev->gadget->extra_buf_alloc;
 	int i;
 
 	DBG(cdev, "create_bulk_endpoints dev: %p\n", dev);
@@ -552,7 +554,8 @@ retry_tx_alloc:
 
 	/* now allocate requests for our endpoints */
 	for (i = 0; i < mtp_tx_reqs; i++) {
-		req = mtp_request_new(dev->ep_in, mtp_tx_req_len);
+		req = mtp_request_new(dev->ep_in,
+				mtp_tx_req_len + extra_buf_alloc);
 		if (!req) {
 			if (mtp_tx_req_len <= MTP_BULK_BUFFER_SIZE)
 				goto fail;
@@ -590,7 +593,8 @@ retry_rx_alloc:
 		dev->rx_req[i] = req;
 	}
 	for (i = 0; i < INTR_REQ_MAX; i++) {
-		req = mtp_request_new(dev->ep_intr, INTR_BUFFER_SIZE);
+		req = mtp_request_new(dev->ep_intr,
+				INTR_BUFFER_SIZE + extra_buf_alloc);
 		if (!req)
 			goto fail;
 		req->complete = mtp_complete_intr;
@@ -1832,8 +1836,24 @@ struct usb_function *function_alloc_mtp_ptp(struct usb_function_instance *fi,
 					bool mtp_config)
 {
 	struct mtp_instance *fi_mtp = to_fi_mtp(fi);
-	struct mtp_dev *dev = fi_mtp->dev;
+	struct mtp_dev *dev;
 
+	/*
+	 * PTP piggybacks on MTP function so make sure we have
+	 * created MTP function before we associate this PTP
+	 * function with a gadget configuration.
+	 */
+	if (fi_mtp->dev == NULL) {
+		pr_err("Error: Create MTP function before linking"
+				" PTP function with a gadget configuration\n");
+		pr_err("\t1: Delete existing PTP function if any\n");
+		pr_err("\t2: Create MTP function\n");
+		pr_err("\t3: Create and symlink PTP function"
+				" with a gadget configuration\n");
+		return NULL;
+	}
+
+	dev = fi_mtp->dev;
 	dev->function.name = DRIVER_NAME;
 	dev->function.strings = mtp_strings;
 	if (mtp_config) {

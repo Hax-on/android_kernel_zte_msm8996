@@ -32,6 +32,7 @@
 #include <linux/of.h>
 #include <linux/pm.h>
 #include <linux/jiffies.h>
+#include <linux/blkdev.h>
 
 #include <trace/events/mmc.h>
 
@@ -258,25 +259,6 @@ out:
 EXPORT_SYMBOL(mmc_cmdq_clk_scaling_stop_busy);
 
 /**
- * mmc_disable_devfreq_clk_scaling() - Disable clock scaling
- * @host: pointer to mmc host structure
- *
- * Disables clock scaling aggresively
- */
-void mmc_disable_clk_scaling(struct mmc_host *host)
-{
-	if (!host) {
-		pr_err("bad host parameter\n");
-		WARN_ON(1);
-		return;
-	}
-	pr_debug("%s: disabling clock scaling\n", mmc_hostname(host));
-	mmc_exit_clk_scaling(host);
-
-}
-EXPORT_SYMBOL(mmc_disable_clk_scaling);
-
-/**
  * mmc_can_scale_clk() - Check clock scaling capability
  * @host: pointer to mmc host structure
  */
@@ -288,8 +270,7 @@ bool mmc_can_scale_clk(struct mmc_host *host)
 		return false;
 	}
 
-	return (host->caps2 & MMC_CAP2_CLK_SCALE) &&
-		(!(host->pm_flags & MMC_PM_IGNORE_PM_NOTIFY));
+	return host->caps2 & MMC_CAP2_CLK_SCALE;
 }
 EXPORT_SYMBOL(mmc_can_scale_clk);
 
@@ -354,7 +335,8 @@ static bool mmc_is_valid_state_for_clk_scaling(struct mmc_host *host)
 	 * this mode.
 	 */
 	if (!card || (mmc_card_mmc(card) &&
-			card->part_curr == EXT_CSD_PART_CONFIG_ACC_RPMB))
+			(card->part_curr == EXT_CSD_PART_CONFIG_ACC_RPMB ||
+			mmc_card_doing_bkops(card))))
 		return false;
 
 	if (mmc_send_status(card, &status)) {
@@ -737,6 +719,94 @@ int mmc_init_clk_scaling(struct mmc_host *host)
 EXPORT_SYMBOL(mmc_init_clk_scaling);
 
 /**
+ * mmc_suspend_clk_scaling() - suspend clock scaling
+ * @host: pointer to mmc host structure
+ *
+ * This API will suspend devfreq feature for the specific host.
+ * The statistics collected by mmc will be cleared.
+ * This function is intended to be called by the pm callbacks
+ * (e.g. runtime_suspend, suspend) of the mmc device
+ */
+int mmc_suspend_clk_scaling(struct mmc_host *host)
+{
+	int err;
+
+	if (!host) {
+		WARN(1, "bad host parameter\n");
+		return -EINVAL;
+	}
+
+	if (!mmc_can_scale_clk(host) || !host->clk_scaling.enable)
+		return 0;
+
+	if (!host->clk_scaling.devfreq) {
+		pr_err("%s: %s: no devfreq is assosiated with this device\n",
+			mmc_hostname(host), __func__);
+		return -EPERM;
+	}
+
+	atomic_inc(&host->clk_scaling.devfreq_abort);
+	err = devfreq_suspend_device(host->clk_scaling.devfreq);
+	if (err) {
+		pr_err("%s: %s: failed to suspend devfreq\n",
+			mmc_hostname(host), __func__);
+		return err;
+	}
+	host->clk_scaling.enable = false;
+
+	host->clk_scaling.total_busy_time_us = 0;
+
+	pr_debug("%s: devfreq suspended\n", mmc_hostname(host));
+
+	return 0;
+}
+EXPORT_SYMBOL(mmc_suspend_clk_scaling);
+
+/**
+ * mmc_resume_clk_scaling() - resume clock scaling
+ * @host: pointer to mmc host structure
+ *
+ * This API will resume devfreq feature for the specific host.
+ * This API is intended to be called by the pm callbacks
+ * (e.g. runtime_suspend, suspend) of the mmc device
+ */
+int mmc_resume_clk_scaling(struct mmc_host *host)
+{
+	int err = 0;
+
+	if (!host) {
+		WARN(1, "bad host parameter\n");
+		return -EINVAL;
+	}
+
+	if (!mmc_can_scale_clk(host))
+		return 0;
+
+	if (!host->clk_scaling.devfreq) {
+		pr_err("%s: %s: no devfreq is assosiated with this device\n",
+			mmc_hostname(host), __func__);
+		return -EPERM;
+	}
+
+	atomic_set(&host->clk_scaling.devfreq_abort, 0);
+	host->clk_scaling.curr_freq = host->ios.clock;
+	host->clk_scaling.clk_scaling_in_progress = false;
+	host->clk_scaling.need_freq_change = false;
+
+	err = devfreq_resume_device(host->clk_scaling.devfreq);
+	if (err) {
+		pr_err("%s: %s: failed to resume devfreq (%d)\n",
+			mmc_hostname(host), __func__, err);
+	} else {
+		host->clk_scaling.enable = true;
+		pr_debug("%s: devfreq resumed\n", mmc_hostname(host));
+	}
+
+	return err;
+}
+EXPORT_SYMBOL(mmc_resume_clk_scaling);
+
+/**
  * mmc_exit_devfreq_clk_scaling() - Disable clock scaling
  * @host: pointer to mmc host structure
  *
@@ -747,64 +817,41 @@ int mmc_exit_clk_scaling(struct mmc_host *host)
 	int err;
 
 	if (!host) {
-		pr_err("bad host parameter\n");
+		pr_err("%s: bad host parameter\n", __func__);
 		WARN_ON(1);
 		return -EINVAL;
 	}
 
-	if (!mmc_can_scale_clk(host) || !host->clk_scaling.enable)
+	if (!mmc_can_scale_clk(host))
 		return 0;
 
 	if (!host->clk_scaling.devfreq) {
-		pr_err("%s: no devfreq is assosiated with this device\n",
-			mmc_hostname(host));
+		pr_err("%s: %s: no devfreq is assosiated with this device\n",
+			mmc_hostname(host), __func__);
 		return -EPERM;
 	}
 
-	host->clk_scaling.enable = false;
-	atomic_inc(&host->clk_scaling.devfreq_abort);
-	err = devfreq_suspend_device(host->clk_scaling.devfreq);
+	err = mmc_suspend_clk_scaling(host);
 	if (err) {
-		pr_err("%s: failed to suspend devfreq\n", mmc_hostname(host));
+		pr_err("%s: %s: fail to suspend clock scaling (%d)\n",
+			mmc_hostname(host), __func__,  err);
 		return err;
 	}
-	pr_debug("%s: devfreq suspended\n", mmc_hostname(host));
 
 	err = devfreq_remove_device(host->clk_scaling.devfreq);
 	if (err) {
-		pr_err("%s: remove devfreq failed\n", mmc_hostname(host));
+		pr_err("%s: remove devfreq failed (%d)\n",
+			mmc_hostname(host), err);
 		return err;
 	}
 
 	host->clk_scaling.devfreq = NULL;
 	atomic_set(&host->clk_scaling.devfreq_abort, 1);
-	mmc_reset_clk_scale_stats(host);
 	pr_debug("%s: devfreq was removed\n", mmc_hostname(host));
 
 	return 0;
 }
 EXPORT_SYMBOL(mmc_exit_clk_scaling);
-
-
-/**
- * mmc_reset_clk_scale_stats() - reset clock scaling statistics
- * @host: pointer to mmc host structure
- */
-void mmc_reset_clk_scale_stats(struct mmc_host *host)
-{
-	if (!host) {
-		pr_err("bad host parameter\n");
-		WARN_ON(1);
-		return;
-	}
-	if (!host->clk_scaling.enable)
-		return;
-	spin_lock_bh(&host->clk_scaling.lock);
-	host->clk_scaling.total_busy_time_us = 0;
-	spin_unlock_bh(&host->clk_scaling.lock);
-
-}
-EXPORT_SYMBOL(mmc_reset_clk_scale_stats);
 
 /**
  *	mmc_request_done - finish processing an MMC request
@@ -955,9 +1002,10 @@ mmc_start_request(struct mmc_host *host, struct mmc_request *mrq)
 	mmc_host_clk_hold(host);
 	led_trigger_event(host->led, LED_FULL);
 
-	mmc_deferred_scaling(host);
-	if (mmc_is_data_request(mrq))
+	if (mmc_is_data_request(mrq)) {
+		mmc_deferred_scaling(host);
 		mmc_clk_scaling_start_busy(host, true);
+	}
 
 	host->ops->request(host, mrq);
 }
@@ -1155,7 +1203,8 @@ EXPORT_SYMBOL(mmc_check_bkops);
  *	mmc_start_manual_bkops - start BKOPS for supported cards
  *	@card: MMC card to start BKOPS
  *
- *	Send START_BKOPS to the card.
+ *      Send START_BKOPS to the card.
+ *      The function should be called with claimed host.
 */
 void mmc_start_manual_bkops(struct mmc_card *card)
 {
@@ -1169,7 +1218,6 @@ void mmc_start_manual_bkops(struct mmc_card *card)
 	if (mmc_card_doing_bkops(card))
 		return;
 
-	mmc_claim_host(card->host);
 	err = __mmc_switch(card, EXT_CSD_CMD_SET_NORMAL, EXT_CSD_BKOPS_START,
 				1, 0, false, true, false);
 	if (err) {
@@ -1180,7 +1228,6 @@ void mmc_start_manual_bkops(struct mmc_card *card)
 		mmc_update_bkops_start(&card->bkops.stats);
 		card->bkops.needs_manual = false;
 	}
-	mmc_release_host(card->host);
 }
 EXPORT_SYMBOL(mmc_start_manual_bkops);
 
@@ -1434,8 +1481,11 @@ int mmc_cmdq_halt(struct mmc_host *host, bool halt)
 			host->ops->notify_halt(host, halt);
 		if (!err && halt)
 			mmc_host_set_halt(host);
-		else if (!err && !halt)
+		else if (!err && !halt) {
 			mmc_host_clr_halt(host);
+			if (host->cmdq_ctx.q)
+				blk_run_queue(host->cmdq_ctx.q);
+		}
 	} else {
 		err = -ENOSYS;
 	}
@@ -3716,6 +3766,7 @@ void mmc_rescan(struct work_struct *work)
 
 void mmc_start_host(struct mmc_host *host)
 {
+	mmc_claim_host(host);
 	host->f_init = max(freqs[0], host->f_min);
 	host->rescan_disable = 0;
 	host->ios.power_mode = MMC_POWER_UNDEFINED;
@@ -3724,6 +3775,7 @@ void mmc_start_host(struct mmc_host *host)
 	else
 		mmc_power_up(host, host->ocr_avail);
 	mmc_gpiod_request_cd_irq(host);
+	mmc_release_host(host);
 	_mmc_detect_change(host, 0, false);
 }
 
@@ -3902,7 +3954,6 @@ int mmc_pm_notify(struct notifier_block *notify_block,
 		spin_unlock_irqrestore(&host->lock, flags);
 		cancel_delayed_work_sync(&host->detect);
 
-		mmc_disable_clk_scaling(host);
 		if (!host->bus_ops)
 			break;
 

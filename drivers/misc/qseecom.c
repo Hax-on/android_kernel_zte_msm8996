@@ -1520,6 +1520,7 @@ static int __qseecom_reentrancy_process_incomplete_cmd(
 		/* lock mutex again after resp sent */
 		mutex_lock(&app_access_lock);
 		ptr_svc->send_resp_flag = 0;
+		qseecom.send_resp_flag = 0;
 
 		/* restore signal mask */
 		sigprocmask(SIG_SETMASK, &old_sigset, NULL);
@@ -2221,18 +2222,10 @@ static int qseecom_send_service_cmd(struct qseecom_dev_handle *data,
 				send_req_ptr))
 			return -EINVAL;
 		break;
-	case QSEOS_FSM_LTE_INIT_DB:
-	case QSEOS_FSM_LTE_STORE_KENB:
-	case QSEOS_FSM_LTE_GEN_KEYS:
-	case QSEOS_FSM_LTE_GET_KEY_OFFSETS:
-	case QSEOS_FSM_LTE_GEN_KENB_STAR:
-	case QSEOS_FSM_LTE_GET_KENB_STAR:
-	case QSEOS_FSM_LTE_STORE_NH:
-	case QSEOS_FSM_LTE_DELETE_NH:
-	case QSEOS_FSM_LTE_DELETE_KEYS:
-	case QSEOS_FSM_IKE_CMD_SIGN:
-	case QSEOS_FSM_IKE_CMD_PROV_KEY:
-	case QSEOS_FSM_IKE_CMD_ENCRYPT_PRIVATE_KEY:
+	case QSEOS_FSM_LTEOTA_REQ_CMD:
+	case QSEOS_FSM_LTEOTA_REQ_RSP_CMD:
+	case QSEOS_FSM_IKE_REQ_CMD:
+	case QSEOS_FSM_IKE_REQ_RSP_CMD:
 	case QSEOS_FSM_OEM_FUSE_WRITE_ROW:
 	case QSEOS_FSM_OEM_FUSE_READ_ROW:
 		send_req_ptr = &send_fsm_key_svc_ireq;
@@ -4720,6 +4713,10 @@ static int __qseecom_set_clear_ce_key(struct qseecom_dev_handle *data,
 			resp.result == QSEOS_RESULT_FAIL_MAX_ATTEMPT) {
 			pr_debug("Max attempts to input password reached.\n");
 			ret = -ERANGE;
+		} else if (ret == -EINVAL &&
+			resp.result == QSEOS_RESULT_FAIL_PENDING_OPERATION) {
+			pr_debug("Set Key operation under processing...\n");
+			ret = QSEOS_RESULT_FAIL_PENDING_OPERATION;
 		} else {
 			pr_err("scm call to set QSEOS_PIPE_ENC key failed : %d\n",
 				ret);
@@ -4736,6 +4733,11 @@ static int __qseecom_set_clear_ce_key(struct qseecom_dev_handle *data,
 		if (ret) {
 			pr_err("process_incomplete_cmd FAILED, resp.result %d\n",
 					resp.result);
+			if (resp.result ==
+				QSEOS_RESULT_FAIL_PENDING_OPERATION) {
+				pr_debug("Set Key operation under processing...\n");
+				ret = QSEOS_RESULT_FAIL_PENDING_OPERATION;
+			}
 			if (resp.result == QSEOS_RESULT_FAIL_MAX_ATTEMPT) {
 				pr_debug("Max attempts to input password reached.\n");
 				ret = -ERANGE;
@@ -4745,6 +4747,10 @@ static int __qseecom_set_clear_ce_key(struct qseecom_dev_handle *data,
 	case QSEOS_RESULT_FAIL_MAX_ATTEMPT:
 		pr_debug("Max attempts to input password reached.\n");
 		ret = -ERANGE;
+		break;
+	case QSEOS_RESULT_FAIL_PENDING_OPERATION:
+		pr_debug("Set Key operation under processing...\n");
+		ret = QSEOS_RESULT_FAIL_PENDING_OPERATION;
 		break;
 	case QSEOS_RESULT_FAILURE:
 	default:
@@ -4779,9 +4785,16 @@ static int __qseecom_update_current_key_user_info(
 		ireq, sizeof(struct qseecom_key_userinfo_update_ireq),
 		&resp, sizeof(struct qseecom_command_scm_resp));
 	if (ret) {
-		pr_err("scm call to update key userinfo failed : %d\n", ret);
-		__qseecom_disable_clk(CLK_QSEE);
-		return -EFAULT;
+		if (ret == -EINVAL &&
+			resp.result == QSEOS_RESULT_FAIL_PENDING_OPERATION) {
+			pr_debug("Set Key operation under processing...\n");
+			ret = QSEOS_RESULT_FAIL_PENDING_OPERATION;
+		} else {
+			pr_err("scm call to update key userinfo failed: %d\n",
+									ret);
+			__qseecom_disable_clk(CLK_QSEE);
+			return -EFAULT;
+		}
 	}
 
 	switch (resp.result) {
@@ -4789,9 +4802,18 @@ static int __qseecom_update_current_key_user_info(
 		break;
 	case QSEOS_RESULT_INCOMPLETE:
 		ret = __qseecom_process_incomplete_cmd(data, &resp);
+		if (resp.result ==
+			QSEOS_RESULT_FAIL_PENDING_OPERATION) {
+			pr_debug("Set Key operation under processing...\n");
+			ret = QSEOS_RESULT_FAIL_PENDING_OPERATION;
+		}
 		if (ret)
 			pr_err("process_incomplete_cmd FAILED, resp.result %d\n",
 					resp.result);
+		break;
+	case QSEOS_RESULT_FAIL_PENDING_OPERATION:
+		pr_debug("Update Key operation under processing...\n");
+		ret = QSEOS_RESULT_FAIL_PENDING_OPERATION;
 		break;
 	case QSEOS_RESULT_FAILURE:
 	default:
@@ -4925,9 +4947,11 @@ static int qseecom_create_key(struct qseecom_dev_handle *data,
 		if (qseecom_enable_ice_setup(create_key_req.usage))
 			goto free_buf;
 
-		ret = __qseecom_set_clear_ce_key(data,
+		do {
+			ret = __qseecom_set_clear_ce_key(data,
 					create_key_req.usage,
 					&set_key_ireq);
+		} while (ret == QSEOS_RESULT_FAIL_PENDING_OPERATION);
 
 		qseecom_disable_ice_setup(create_key_req.usage);
 
@@ -5087,8 +5111,11 @@ static int qseecom_update_key_user_info(struct qseecom_dev_handle *data,
 	memcpy((void *)ireq.new_hash32,
 		(void *)update_key_req.new_hash32, QSEECOM_HASH_SIZE);
 
-	ret = __qseecom_update_current_key_user_info(data, update_key_req.usage,
+	do {
+		ret = __qseecom_update_current_key_user_info(data,
+						update_key_req.usage,
 						&ireq);
+	} while (ret == QSEOS_RESULT_FAIL_PENDING_OPERATION);
 	if (ret) {
 		pr_err("Failed to update key info: %d\n", ret);
 		return ret;
@@ -6337,8 +6364,6 @@ long qseecom_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 			ret = -EINVAL;
 			break;
 		}
-		/* Only one client allowed here at a time */
-		mutex_lock(&app_access_lock);
 		atomic_inc(&data->ioctl_count);
 		if (cmd == QSEECOM_IOCTL_SEND_MODFD_RESP)
 			ret = qseecom_send_modfd_resp(data, argp);
@@ -6346,7 +6371,6 @@ long qseecom_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 			ret = qseecom_send_modfd_resp_64(data, argp);
 		atomic_dec(&data->ioctl_count);
 		wake_up_all(&data->abort_wq);
-		mutex_unlock(&app_access_lock);
 		if (ret)
 			pr_err("failed qseecom_send_mod_resp: %d\n", ret);
 		break;
@@ -6359,7 +6383,7 @@ long qseecom_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 			ret = -EINVAL;
 			break;
 		}
-		if (qseecom.qsee_version < QSEE_VERSION_20) {
+		if (qseecom.qsee_version < QSEE_VERSION_40) {
 			pr_err("GP feature unsupported: qsee ver %u\n",
 				qseecom.qsee_version);
 			return -EINVAL;
@@ -6383,7 +6407,7 @@ long qseecom_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 			ret = -EINVAL;
 			break;
 		}
-		if (qseecom.qsee_version < QSEE_VERSION_20) {
+		if (qseecom.qsee_version < QSEE_VERSION_40) {
 			pr_err("GP feature unsupported: qsee ver %u\n",
 				qseecom.qsee_version);
 			return -EINVAL;
@@ -6407,7 +6431,7 @@ long qseecom_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 			ret = -EINVAL;
 			break;
 		}
-		if (qseecom.qsee_version < QSEE_VERSION_20) {
+		if (qseecom.qsee_version < QSEE_VERSION_40) {
 			pr_err("GP feature unsupported: qsee ver %u\n",
 				qseecom.qsee_version);
 			return -EINVAL;
@@ -6431,7 +6455,7 @@ long qseecom_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 			ret = -EINVAL;
 			break;
 		}
-		if (qseecom.qsee_version < QSEE_VERSION_20) {
+		if (qseecom.qsee_version < QSEE_VERSION_40) {
 			pr_err("GP feature unsupported: qsee ver %u\n",
 				qseecom.qsee_version);
 			return -EINVAL;

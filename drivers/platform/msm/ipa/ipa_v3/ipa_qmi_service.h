@@ -41,10 +41,10 @@ struct ipa3_qmi_context {
 struct ipa_ioc_ext_intf_prop q6_ul_filter_rule[MAX_NUM_Q6_RULE];
 u32 q6_ul_filter_rule_hdl[MAX_NUM_Q6_RULE];
 int num_ipa_install_fltr_rule_req_msg;
-struct ipa_install_fltr_rule_req_msg_v01
+struct ipa3_install_fltr_rule_req_msg_v01
 		ipa_install_fltr_rule_req_msg_cache[MAX_NUM_QMI_RULE_CACHE];
 int num_ipa_fltr_installed_notif_req_msg;
-struct ipa_fltr_installed_notif_req_msg_v01
+struct ipa3_fltr_installed_notif_req_msg_v01
 		ipa_fltr_installed_notif_req_msg_cache[MAX_NUM_QMI_RULE_CACHE];
 bool modem_cfg_emb_pipe_flt;
 };
@@ -105,14 +105,15 @@ int ipa3_qmi_service_init(bool load_uc, uint32_t wan_platform_type);
 void ipa3_qmi_service_exit(void);
 
 /* sending filter-install-request to modem*/
-int ipa3_qmi_filter_request_send(struct ipa_install_fltr_rule_req_msg_v01 *req);
+int ipa3_qmi_filter_request_send(
+	struct ipa3_install_fltr_rule_req_msg_v01 *req);
 
 /* sending filter-installed-notify-request to modem*/
-int ipa3_qmi_filter_notify_send(struct ipa_fltr_installed_notif_req_msg_v01
+int ipa3_qmi_filter_notify_send(struct ipa3_fltr_installed_notif_req_msg_v01
 		*req);
 
 /* voting for bus BW to ipa_rm*/
-int vote_for_bus_bw(uint32_t *bw_mbps);
+int ipa3_vote_for_bus_bw(uint32_t *bw_mbps);
 
 int ipa3_qmi_enable_force_clear_datapath_send(
 	struct ipa_enable_force_clear_datapath_req_msg_v01 *req);
@@ -120,8 +121,8 @@ int ipa3_qmi_enable_force_clear_datapath_send(
 int ipa3_qmi_disable_force_clear_datapath_send(
 	struct ipa_disable_force_clear_datapath_req_msg_v01 *req);
 
-int ipa3_copy_ul_filter_rule_to_ipa(struct ipa_install_fltr_rule_req_msg_v01
-	*rule_req, uint32_t *rule_hdl);
+int ipa3_copy_ul_filter_rule_to_ipa(struct ipa3_install_fltr_rule_req_msg_v01
+	*rule_req);
 
 int ipa3_wwan_update_mux_channel_prop(void);
 
@@ -141,6 +142,12 @@ int rmnet_ipa3_poll_tethering_stats(struct wan_ioctl_poll_tethering_stats
 int rmnet_ipa3_set_data_quota(struct wan_ioctl_set_data_quota *data);
 
 void ipa3_broadcast_quota_reach_ind(uint32_t mux_id);
+
+int rmnet_ipa3_set_tether_client_pipe(struct wan_ioctl_set_tether_client_pipe
+	*data);
+
+int rmnet_ipa3_query_tethering_stats(struct wan_ioctl_query_tether_stats *data,
+	bool reset);
 
 int ipa3_qmi_get_data_stats(struct ipa_get_data_stats_req_msg_v01 *req,
 	struct ipa_get_data_stats_resp_msg_v01 *resp);
@@ -166,14 +173,14 @@ static inline void ipa3_qmi_service_exit(void) { }
 
 /* sending filter-install-request to modem*/
 static inline int ipa3_qmi_filter_request_send(
-	struct ipa_install_fltr_rule_req_msg_v01 *req)
+	struct ipa3_install_fltr_rule_req_msg_v01 *req)
 {
 	return -EPERM;
 }
 
 /* sending filter-installed-notify-request to modem*/
 static inline int ipa3_qmi_filter_notify_send(
-	struct ipa_fltr_installed_notif_req_msg_v01 *req)
+	struct ipa3_fltr_installed_notif_req_msg_v01 *req)
 {
 	return -EPERM;
 }
@@ -191,7 +198,7 @@ static inline int ipa3_qmi_disable_force_clear_datapath_send(
 }
 
 static inline int ipa3_copy_ul_filter_rule_to_ipa(
-	struct ipa_install_fltr_rule_req_msg_v01 *rule_req, uint32_t *rule_hdl)
+	struct ipa3_install_fltr_rule_req_msg_v01 *rule_req)
 {
 	return -EPERM;
 }
@@ -260,6 +267,6 @@ static inline int ipa3_qmi_stop_data_qouta(void)
 
 static inline void ipa3_q6_handshake_complete(bool ssr_bootup) { }
 
-#endif /* CONFIG_RMNET_IPA */
+#endif /* CONFIG_RMNET_IPA3 */
 
 #endif /* IPA_QMI_SERVICE_H */

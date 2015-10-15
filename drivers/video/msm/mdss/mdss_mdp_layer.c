@@ -488,6 +488,15 @@ static int __configure_pipe_params(struct msm_fb_data_type *mfd,
 	pipe->blend_op = layer->blend_op;
 	pipe->async_update = (layer->flags & MDP_LAYER_ASYNC) ? true : false;
 
+	if (mixer->ctl) {
+		pipe->dst.x += mixer->ctl->border_x_off;
+		pipe->dst.y += mixer->ctl->border_y_off;
+	}
+	pr_debug("src{%d,%d,%d,%d}, dst{%d,%d,%d,%d}, border{%d,%d}\n",
+		pipe->src.x, pipe->src.y, pipe->src.w, pipe->src.h,
+		pipe->dst.x, pipe->dst.y, pipe->dst.w, pipe->dst.h,
+		mixer->ctl->border_x_off, mixer->ctl->border_y_off);
+
 	flags = pipe->flags;
 	if (is_single_layer)
 		flags |= PERF_CALC_PIPE_SINGLE_LAYER;
@@ -1176,6 +1185,7 @@ static int __validate_layers(struct msm_fb_data_type *mfd,
 				else
 					pipe->params_changed++;
 			}
+			pipe->dirty = false;
 			continue;
 		}
 
@@ -1549,7 +1559,7 @@ int mdss_mdp_async_position_update(struct msm_fb_data_type *mfd,
 	struct mdss_mdp_pipe *pipe = NULL;
 	struct mdp_async_layer *layer;
 	struct mdss_rect dst, src;
-	u32 flush_bits = 0;
+	u32 flush_bits = 0, inputndx = 0;
 
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
 
@@ -1583,10 +1593,12 @@ int mdss_mdp_async_position_update(struct msm_fb_data_type *mfd,
 		mdss_mdp_pipe_position_update(pipe, &src, &dst);
 
 		flush_bits |= mdss_mdp_get_pipe_flush_bits(pipe);
+		inputndx |= layer->pipe_ndx;
 	}
 	mdss_mdp_async_ctl_flush(mfd, flush_bits);
 
 done:
+	MDSS_XLOG(inputndx, update_pos->input_layer_cnt, flush_bits, rc);
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
 	return rc;
 }

@@ -18,6 +18,7 @@
 
 #include "msm8996.dtsi"
 #include "msm8996-coresight-v2.dtsi"
+#include "msm-arm-smmu-impl-defs-8996-v2.dtsi"
 
 / {
 	model = "Qualcomm Technologies, Inc. MSM 8996 v2";
@@ -63,20 +64,41 @@
 
 &pm8994_s11 {
 	regulator-max-microvolt = <1015000>;
+	/delete-property/ qcom,recal-mask;
 };
 
 &pm8994_s11_limit {
 	regulator-max-microvolt = <1015000>;
 };
 
+&apc_apm {
+	 /delete-property/ qcom,clock-source-override;
+};
+
 &apcc_cpr {
 	compatible = "qcom,cpr3-msm8996-v2-hmss-regulator";
+
+	qcom,cpr-count-mode = <2>;		/* Staggered */
+	/delete-property/ qcom,cpr-count-repeat;
 
 	qcom,apm-ctrl = <&apc_apm>;
 	qcom,apm-threshold-voltage = <850000>;
 	qcom,apm-hysteresis-voltage = <5000>;
 
 	qcom,cpr-enable;
+	qcom,cpr-hw-closed-loop;
+
+	/delete-property/ qcom,cpr-aging-ref-voltage;
+
+	thread@0 {
+		qcom,cpr-consecutive-down = <2>;
+		qcom,cpr-up-threshold = <0>;
+	};
+
+	thread@1 {
+		qcom,cpr-consecutive-down = <2>;
+		qcom,cpr-up-threshold = <0>;
+	};
 };
 
 &apc0_pwrcl_vreg {
@@ -133,6 +155,15 @@
 		<0 0 0 0 0>,
 		<0 0 0 0 0>,
 		<0 0 0 0 0>;
+
+	/delete-property/ qcom,cpr-open-loop-voltage-adjustment;
+	/delete-property/ qcom,cpr-open-loop-voltage-min-diff;
+	/delete-property/ qcom,cpr-closed-loop-voltage-adjustment;
+
+	/delete-property/ qcom,cpr-aging-max-voltage-adjustment;
+	/delete-property/ qcom,cpr-aging-ref-corner;
+	/delete-property/ qcom,cpr-aging-ro-scaling-factor;
+	/delete-property/ qcom,allow-aging-voltage-adjustment;
 };
 
 &apc0_cbf_vreg {
@@ -181,6 +212,11 @@
 		<0 0 0 0 0>,
 		<0 0 0 0 (-115000)>,
 		<0 0 0 0 (-115000)>;
+
+	/delete-property/ qcom,cpr-aging-max-voltage-adjustment;
+	/delete-property/ qcom,cpr-aging-ref-corner;
+	/delete-property/ qcom,cpr-aging-ro-scaling-factor;
+	/delete-property/ qcom,allow-aging-voltage-adjustment;
 };
 
 &apc1_vreg {
@@ -237,11 +273,22 @@
 		<0 0 0 20000 0>,
 		<0 0 0 0 0>,
 		<0 0 0 0 0>;
+
+	/delete-property/ qcom,cpr-open-loop-voltage-adjustment;
+	/delete-property/ qcom,cpr-open-loop-voltage-min-diff;
+	/delete-property/ qcom,cpr-closed-loop-voltage-adjustment;
+
+	/delete-property/ qcom,cpr-aging-max-voltage-adjustment;
+	/delete-property/ qcom,cpr-aging-ref-corner;
+	/delete-property/ qcom,cpr-aging-ro-scaling-factor;
+	/delete-property/ qcom,allow-aging-voltage-adjustment;
 };
 
 &gfx_cpr {
 	system-supply = <&pm8994_s1_corner>;
 	qcom,cpr-enable;
+
+	/delete-property/ qcom,cpr-aging-ref-voltage;
 };
 
 &gfx_vreg {
@@ -294,6 +341,11 @@
 		<0 0 0 (-10000) (-65000)>;
 	qcom,cpr-floor-to-ceiling-max-range =
 		<0 130000 40000 85000 85000>;
+
+	/delete-property/ qcom,cpr-aging-max-voltage-adjustment;
+	/delete-property/ qcom,cpr-aging-ref-corner;
+	/delete-property/ qcom,cpr-aging-ro-scaling-factor;
+	/delete-property/ qcom,allow-aging-voltage-adjustment;
 };
 
 &kryo0_vreg {

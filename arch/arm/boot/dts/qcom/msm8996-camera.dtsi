@@ -18,7 +18,7 @@
 		reg-names = "msm-cam";
 		status = "ok";
 		bus-vectors = "suspend", "svs", "nominal", "turbo";
-		qcom,bus-votes = <0 320000000 640000000 640000000>;
+		qcom,bus-votes = <0 300000000 640000000 640000000>;
 	};
 
 	qcom,csiphy@a34000 {
@@ -214,7 +214,12 @@
 		mmagic-vdd-supply = <&gdsc_mmagic_camss>;
 		vfe0-vdd-supply = <&gdsc_vfe0>;
 		vfe1-vdd-supply = <&gdsc_vfe1>;
-		clocks = <&clock_mmss clk_camss_ispif_ahb_clk>,
+		qcom,vdd-names = "camss-vdd", "mmagic-vdd", "vfe0-vdd",
+				"vfe1-vdd";
+		clocks = <&clock_mmss clk_mmss_mmagic_ahb_clk>,
+			<&clock_mmss clk_camss_top_ahb_clk>,
+			<&clock_mmss clk_camss_ahb_clk>,
+			<&clock_mmss clk_camss_ispif_ahb_clk>,
 			<&clock_mmss clk_csi0_clk_src>,
 			<&clock_mmss clk_camss_csi0_clk>,
 			<&clock_mmss clk_camss_csi0rdi_clk>,
@@ -237,7 +242,9 @@
 			<&clock_mmss clk_vfe1_clk_src>,
 			<&clock_mmss clk_camss_vfe1_clk>,
 			<&clock_mmss clk_camss_csi_vfe1_clk>;
-		clock-names = "ispif_ahb_clk",
+		clock-names = "mmagic_camss_ahb_clk",
+			"camss_top_ahb_clk",
+			"camss_ahb_clk", "ispif_ahb_clk",
 			"csi0_src_clk", "csi0_clk",
 			"csi0_pix_clk", "csi0_rdi_clk",
 			"csi1_src_clk", "csi1_clk",
@@ -248,14 +255,15 @@
 			"csi3_pix_clk", "csi3_rdi_clk",
 			"vfe0_clk_src", "camss_vfe_vfe0_clk", "camss_csi_vfe0_clk",
 			"vfe1_clk_src", "camss_vfe_vfe1_clk", "camss_csi_vfe1_clk";
-		qcom,clock-rates = <0
+		qcom,clock-rates = <0 0 0 0
 			200000000 0 0 0
 			200000000 0 0 0
 			200000000 0 0 0
 			200000000 0 0 0
 			0 0 0
 			0 0 0>;
-		qcom,clock-control = "NO_SET_RATE",
+		qcom,clock-control = "NO_SET_RATE", "NO_SET_RATE",
+			"NO_SET_RATE", "NO_SET_RATE",
 			"SET_RATE", "NO_SET_RATE", "NO_SET_RATE", "NO_SET_RATE",
 			"SET_RATE", "NO_SET_RATE", "NO_SET_RATE", "NO_SET_RATE",
 			"SET_RATE", "NO_SET_RATE", "NO_SET_RATE", "NO_SET_RATE",
@@ -338,6 +346,7 @@
 				0xCCCC0011
 				0xCCCC0011
 				0x40000103>;
+			max-clk-svs = <300000000>;
 			max-clk-nominal = <465000000>;
 			max-clk-turbo = <600000000>;
 		};
@@ -409,6 +418,7 @@
 				0xCCCC0011
 				0xCCCC0011
 				0x40000103>;
+			max-clk-svs = <300000000>;
 			max-clk-nominal = <465000000>;
 			max-clk-turbo = <600000000>;
 		};
@@ -420,16 +430,10 @@
 		msm_cam_smmu_cb1 {
 			compatible = "qcom,msm-cam-smmu-cb";
 			iommus = <&vfe_smmu 0>,
-					<&vfe_smmu 2>;
-			label = "vfe_image";
-			qcom,scratch-buf-support;
-		};
-
-		msm_cam_smmu_cb2 {
-			compatible = "qcom,msm-cam-smmu-cb";
-			iommus = <&vfe_smmu 1>,
+					<&vfe_smmu 1>,
+					<&vfe_smmu 2>,
 					<&vfe_smmu 3>;
-			label = "vfe_stats";
+			label = "vfe";
 			qcom,scratch-buf-support;
 		};
 
@@ -666,13 +670,12 @@
 		qcom,bus-bandwidth-vectors = <13000000 13000000>,
 			<45000000 45000000>,
 			<90000000 90000000>;
-		qcom,vbif-reg-settings = <0x10 0x40004000>,
-			<0x18 0x10000000>,
-			<0x1c 0x10000000>,
-			<0x20 0x10000000>,
-			<0x24 0x10000000>,
-			<0x28 0x10000000>,
-			<0x2c 0x10000000>;
+		qcom,fd-vbif-reg-settings = <0x20 0x10000000 0x30000000>,
+			<0x24 0x10000000 0x30000000>,
+			<0x28 0x10000000 0x30000000>,
+			<0x2c 0x10000000 0x30000000>;
+		qcom,fd-misc-reg-settings = <0x20 0x2 0x3>,
+			<0x24 0x2 0x3>;
 		status = "ok";
 	};
 

@@ -13,8 +13,6 @@
 
 /dts-v1/;
 
-/memreserve/ 0x90000000 0x00000200;
-
 #include "msmthorium.dtsi"
 
 / {
@@ -31,4 +29,9 @@
 
 &blsp1_uart2 {
 	status = "ok";
+};
+
+&usb_otg {
+	qcom,hsusb-otg-otg-control = <1>;
+	qcom,emulation;
 };

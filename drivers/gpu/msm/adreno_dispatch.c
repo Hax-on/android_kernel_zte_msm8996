@@ -87,7 +87,7 @@ static int dispatcher_do_fault(struct kgsl_device *device);
  * @id: ID of the context to add
  *
  * This function is called when a new item is added to a context - this tracks
- * the number of active contexts seen in the last 500ms for the command queue
+ * the number of active contexts seen in the last 100ms for the command queue
  */
 static void _track_context(struct adreno_dispatcher_cmdqueue *cmdqueue,
 		unsigned int id)
@@ -102,7 +102,7 @@ static void _track_context(struct adreno_dispatcher_cmdqueue *cmdqueue,
 
 		/* If the new ID matches the slot update the expire time */
 		if (list[i].id == id) {
-			list[i].jiffies = jiffies + msecs_to_jiffies(500);
+			list[i].jiffies = jiffies + msecs_to_jiffies(100);
 			updated = true;
 			count++;
 			continue;
@@ -127,7 +127,7 @@ static void _track_context(struct adreno_dispatcher_cmdqueue *cmdqueue,
 	if (updated == false) {
 		int pos = (empty != -1) ? empty : oldest;
 
-		list[pos].jiffies = jiffies + msecs_to_jiffies(500);
+		list[pos].jiffies = jiffies + msecs_to_jiffies(100);
 		list[pos].id = id;
 		count++;
 	}
@@ -136,7 +136,7 @@ static void _track_context(struct adreno_dispatcher_cmdqueue *cmdqueue,
 }
 
 /*
- *  If only one context has queued in the last 500 millseconds increase
+ *  If only one context has queued in the last 100 milliseconds increase
  *  inflight to a high number to load up the GPU. If multiple contexts
  *  have queued drop the inflight for better context switch latency.
  *  If no contexts have queued what are you even doing here?
@@ -338,7 +338,6 @@ static inline void _pop_cmdbatch(struct adreno_context *drawctxt)
 static struct kgsl_cmdbatch *_expire_markers(struct adreno_context *drawctxt)
 {
 	struct kgsl_cmdbatch *cmdbatch;
-	bool pending = false;
 
 	if (drawctxt->cmdqueue_head == drawctxt->cmdqueue_tail)
 		return NULL;
@@ -357,17 +356,7 @@ static struct kgsl_cmdbatch *_expire_markers(struct adreno_context *drawctxt)
 	}
 
 	if (cmdbatch->flags & KGSL_CMDBATCH_SYNC) {
-		/*
-		 * We may have cmdbatch timer running, which also uses same
-		 * lock, take a lock with software interrupt disabled (bh) to
-		 * avoid spin lock recursion.
-		 */
-		spin_lock_bh(&cmdbatch->lock);
-		if (!list_empty(&cmdbatch->synclist))
-			pending = true;
-		spin_unlock_bh(&cmdbatch->lock);
-
-		if (!pending) {
+		if (!kgsl_cmdbatch_events_pending(cmdbatch)) {
 			_pop_cmdbatch(drawctxt);
 			kgsl_cmdbatch_destroy(cmdbatch);
 			return _expire_markers(drawctxt);
@@ -406,10 +395,8 @@ static struct kgsl_cmdbatch *_get_cmdbatch(struct adreno_context *drawctxt)
 			(!test_bit(CMDBATCH_FLAG_SKIP, &cmdbatch->priv)))
 		pending = true;
 
-	rcu_read_lock();
-	if (!list_empty(&cmdbatch->synclist))
+	if (kgsl_cmdbatch_events_pending(cmdbatch))
 		pending = true;
-	rcu_read_unlock();
 
 	/*
 	 * If changes are pending and the canary timer hasn't been
@@ -427,12 +414,6 @@ static struct kgsl_cmdbatch *_get_cmdbatch(struct adreno_context *drawctxt)
 
 		return ERR_PTR(-EAGAIN);
 	}
-
-	/*
-	 * Otherwise, delete the timer to make sure it is good
-	 * and dead before queuing the buffer
-	 */
-	del_timer_sync(&cmdbatch->timer);
 
 	_pop_cmdbatch(drawctxt);
 	return cmdbatch;
@@ -452,6 +433,14 @@ static struct kgsl_cmdbatch *adreno_dispatcher_get_cmdbatch(
 	spin_lock(&drawctxt->lock);
 	cmdbatch = _get_cmdbatch(drawctxt);
 	spin_unlock(&drawctxt->lock);
+
+	/*
+	 * Delete the timer and wait for timer handler to finish executing
+	 * on another core before queueing the buffer. We must do this
+	 * without holding any spin lock that the timer handler might be using
+	 */
+	if (!IS_ERR_OR_NULL(cmdbatch))
+		del_timer_sync(&cmdbatch->timer);
 
 	return cmdbatch;
 }
@@ -2135,7 +2124,7 @@ static void adreno_dispatcher_work(struct work_struct *work)
 	 * stragglers
 	 */
 	if (dispatcher->inflight == 0 && count)
-		queue_work(device->work_queue, &device->event_work);
+		kgsl_schedule_work(&device->event_work);
 
 	/* Try to dispatch new commands */
 	_adreno_dispatcher_issuecmds(adreno_dev);
@@ -2188,7 +2177,7 @@ void adreno_dispatcher_schedule(struct kgsl_device *device)
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	struct adreno_dispatcher *dispatcher = &adreno_dev->dispatcher;
 
-	queue_work(device->work_queue, &dispatcher->work);
+	kgsl_schedule_work(&dispatcher->work);
 }
 
 /**
@@ -2577,7 +2566,7 @@ void adreno_preempt_process_dispatch_queue(struct adreno_device *adreno_dev,
 		cmdbatch->expires = jiffies +
 			msecs_to_jiffies(adreno_cmdbatch_timeout);
 	}
-	queue_work(device->work_queue, &device->event_work);
+	kgsl_schedule_work(&device->event_work);
 }
 
 /**

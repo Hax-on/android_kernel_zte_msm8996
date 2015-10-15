@@ -24,8 +24,12 @@
 #include <linux/mmc/host.h>
 #include <linux/mmc/card.h>
 #include <linux/pm_runtime.h>
+#include <linux/mmc/sdhci.h>
+#include <linux/workqueue.h>
 
 #include "cmdq_hci.h"
+#include "sdhci.h"
+#include "sdhci-msm.h"
 
 #define DCMD_SLOT 31
 #define NUM_SLOTS 32
@@ -301,7 +305,7 @@ static int cmdq_enable(struct mmc_host *mmc)
 		pr_info("%s: %s: cq_host is already enabled\n",
 				mmc_hostname(mmc), __func__);
 		WARN_ON(1);
-		goto out;
+		goto pm_ref_count;
 	}
 
 	if (cq_host->quirks & CMDQ_QUIRK_NO_DCMD)
@@ -321,7 +325,7 @@ static int cmdq_enable(struct mmc_host *mmc)
 			!cq_host->trans_desc_base) {
 		err = cmdq_host_alloc_tdl(cq_host);
 		if (err)
-			goto out;
+			goto pm_ref_count;
 	}
 
 	cmdq_writel(cq_host, lower_32_bits(cq_host->desc_dma_base), CQTDLBA);
@@ -366,8 +370,10 @@ static int cmdq_enable(struct mmc_host *mmc)
 
 	if (cq_host->ops->enhanced_strobe_mask)
 		cq_host->ops->enhanced_strobe_mask(mmc, true);
-out:
+
+pm_ref_count:
 	cmdq_runtime_pm_put(cq_host);
+out:
 	return err;
 }
 
@@ -480,10 +486,9 @@ static int cmdq_dma_map(struct mmc_host *host, struct mmc_request *mrq)
 	return sg_count;
 }
 
-static void cmdq_set_tran_desc(u8 *desc,
-				 dma_addr_t addr, int len, bool end)
+static void cmdq_set_tran_desc(u8 *desc, dma_addr_t addr, int len,
+				bool end, bool is_dma64)
 {
-	__le64 *dataddr = (__le64 __force *)(desc + 4);
 	__le32 *attr = (__le32 __force *)desc;
 
 	*attr = (VALID(1) |
@@ -492,7 +497,15 @@ static void cmdq_set_tran_desc(u8 *desc,
 		 ACT(0x4) |
 		 DAT_LENGTH(len));
 
-	dataddr[0] = cpu_to_le64(addr);
+	if (is_dma64) {
+		__le64 *dataddr = (__le64 __force *)(desc + 4);
+
+		dataddr[0] = cpu_to_le64(addr);
+	} else {
+		__le32 *dataddr = (__le32 __force *)(desc + 4);
+
+		dataddr[0] = cpu_to_le32(addr);
+	}
 }
 
 static int cmdq_prep_tran_desc(struct mmc_request *mrq,
@@ -521,7 +534,7 @@ static int cmdq_prep_tran_desc(struct mmc_request *mrq,
 
 		if ((i+1) == sg_count)
 			end = true;
-		cmdq_set_tran_desc(desc, addr, len, end);
+		cmdq_set_tran_desc(desc, addr, len, end, cq_host->dma64);
 		desc += cq_host->trans_desc_len;
 	}
 
@@ -573,6 +586,21 @@ static void cmdq_prep_dcmd_desc(struct mmc_host *mmc,
 
 }
 
+static void cmdq_pm_qos_vote(struct sdhci_host *host, struct mmc_request *mrq)
+{
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+
+	sdhci_msm_pm_qos_cpu_vote(host,
+		msm_host->pdata->pm_qos_data.cmdq_latency, mrq->req->cpu);
+}
+
+static void cmdq_pm_qos_unvote(struct sdhci_host *host, struct mmc_request *mrq)
+{
+	/* use async as we're inside an atomic context (soft-irq) */
+	sdhci_msm_pm_qos_cpu_unvote(host, mrq->req->cpu, true);
+}
+
 static int cmdq_request(struct mmc_host *mmc, struct mmc_request *mrq)
 {
 	int err = 0;
@@ -580,6 +608,7 @@ static int cmdq_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	u64 *task_desc = NULL;
 	u32 tag = mrq->cmdq_req->tag;
 	struct cmdq_host *cq_host = (struct cmdq_host *)mmc_cmdq_private(mmc);
+	struct sdhci_host *host = mmc_priv(mmc);
 
 	if (!cq_host->enabled) {
 		pr_err("%s: CMDQ host not enabled yet !!!\n",
@@ -620,15 +649,20 @@ static int cmdq_request(struct mmc_host *mmc, struct mmc_request *mrq)
 		goto out;
 	}
 
-	BUG_ON(cmdq_readl(cq_host, CQTDBR) & (1 << tag));
-
 	cq_host->mrq_slot[tag] = mrq;
 	if (cq_host->ops->set_tranfer_params)
 		cq_host->ops->set_tranfer_params(mmc);
 
+	/* PM QoS */
+	sdhci_msm_pm_qos_irq_vote(host);
+	cmdq_pm_qos_vote(host, mrq);
 ring_doorbell:
 	/* Ensure the task descriptor list is flushed before ringing doorbell */
 	wmb();
+	if (cmdq_readl(cq_host, CQTDBR) & (1 << tag)) {
+		cmdq_dumpregs(cq_host);
+		BUG_ON(1);
+	}
 	cmdq_writel(cq_host, 1 << tag, CQTDBR);
 	/* Commit the doorbell write immediately */
 	wmb();
@@ -651,6 +685,8 @@ static void cmdq_finish_data(struct mmc_host *mmc, unsigned int tag)
 			    CMDQ_SEND_STATUS_TRIGGER, CQCTL);
 
 	cmdq_runtime_pm_put(cq_host);
+	if (cq_host->ops->crypto_cfg_reset)
+		cq_host->ops->crypto_cfg_reset(mmc, tag);
 	mrq->done(mrq);
 }
 
@@ -692,7 +728,6 @@ irqreturn_t cmdq_irq(struct mmc_host *mmc, int err)
 			mrq->data->error = err;
 		}
 
-		tag = 0;
 		/*
 		 * CQE detected a reponse error from device
 		 * In most cases, this would require a reset.
@@ -720,18 +755,28 @@ irqreturn_t cmdq_irq(struct mmc_host *mmc, int err)
 	}
 
 	if (status & CQIS_TCC) {
-		/* read QCTCN and complete the request */
+		/* read CQTCN and complete the request */
 		comp_status = cmdq_readl(cq_host, CQTCN);
 		if (!comp_status)
 			goto out;
-
+		/*
+		 * The CQTCN must be cleared before notifying req completion
+		 * to upper layers to avoid missing completion notification
+		 * of new requests with the same tag.
+		 */
+		cmdq_writel(cq_host, comp_status, CQTCN);
+		/*
+		 * A write memory barrier is necessary to guarantee that CQTCN
+		 * gets cleared first before next doorbell for the same tag is
+		 * set but that is already achieved by the barrier present
+		 * before setting doorbell, hence one is not needed here.
+		 */
 		for_each_set_bit(tag, &comp_status, cq_host->num_slots) {
 			/* complete the corresponding mrq */
 			pr_debug("%s: completing tag -> %lu\n",
 				 mmc_hostname(mmc), tag);
 			cmdq_finish_data(mmc, tag);
 		}
-		cmdq_writel(cq_host, comp_status, CQTCN);
 	}
 
 	if (status & CQIS_HAC) {
@@ -778,6 +823,7 @@ static void cmdq_post_req(struct mmc_host *host, struct mmc_request *mrq,
 			  int err)
 {
 	struct mmc_data *data = mrq->data;
+	struct sdhci_host *sdhci_host = mmc_priv(host);
 
 	if (data) {
 		data->error = err;
@@ -788,6 +834,10 @@ static void cmdq_post_req(struct mmc_host *host, struct mmc_request *mrq,
 			data->bytes_xfered = 0;
 		else
 			data->bytes_xfered = blk_rq_bytes(mrq->req);
+
+		/* we're in atomic context (soft-irq) so unvote async. */
+		sdhci_msm_pm_qos_irq_unvote(sdhci_host, true);
+		cmdq_pm_qos_unvote(sdhci_host, mrq);
 	}
 }
 
@@ -799,7 +849,26 @@ static void cmdq_dumpstate(struct mmc_host *mmc)
 	cmdq_runtime_pm_put(cq_host);
 }
 
+static int cmdq_late_init(struct mmc_host *mmc)
+{
+	struct sdhci_host *host = mmc_priv(mmc);
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+
+	/*
+	 * TODO: This should basically move to something like "sdhci-cmdq-msm"
+	 * for msm specific implementation.
+	 */
+	sdhci_msm_pm_qos_irq_init(host);
+
+	if (msm_host->pdata->pm_qos_data.cmdq_valid)
+		sdhci_msm_pm_qos_cpu_init(host,
+			msm_host->pdata->pm_qos_data.cmdq_latency);
+	return 0;
+}
+
 static const struct mmc_cmdq_host_ops cmdq_host_ops = {
+	.init = cmdq_late_init,
 	.enable = cmdq_enable,
 	.disable = cmdq_disable,
 	.request = cmdq_request,
