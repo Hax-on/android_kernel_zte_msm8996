@@ -151,6 +151,13 @@
 		};
 	};
 
+    /*escore-codec {
+            compatible = "adnc,escore-codec";
+            label = "escore-codec";
+            reset-gpio = <&tlmm 74 0>;
+            gpiob-gpio = <&tlmm 73 0>;
+    };*/
+
 	soc: soc { };
 
 	reserved-memory {
@@ -414,6 +421,43 @@
 		qcom,msm-bus,vectors-KBps =
 			    <86 512 0 0>,
 			    <86 512 500 800>;
+	};
+
+	blsp2_uart1: uart@075B0000 { /* BLSP2 UART1 */
+		compatible = "qcom,msm-hsuart-v14";
+		reg = <0x075B0000 0x1000>,
+		    <0x7584000 0x2b000>;
+		status = "ok";
+		reg-names = "core_mem", "bam_mem";
+		interrupt-names = "core_irq", "bam_irq", "wakeup_irq";
+		#address-cells = <0>;
+		interrupt-parent = <&blsp2_uart1>;
+		interrupts = <0 1 2>;
+		#interrupt-cells = <1>;
+		interrupt-map-mask = <0xffffffff>;
+		interrupt-map = <0 &intc 0 114 0
+			    1 &intc 0 239 0
+			    2 &tlmm 5 0>;
+
+		qcom,inject-rx-on-wakeup;
+		qcom,rx-char-to-inject = <0xFD>;
+
+		qcom,bam-tx-ep-pipe-index = <2>;
+		qcom,bam-rx-ep-pipe-index = <3>;
+		qcom,master-id = <84>;
+		clock-names = "core_clk", "iface_clk";
+		clocks = <&clock_gcc clk_gcc_blsp2_uart2_apps_clk>,
+		    <&clock_gcc clk_gcc_blsp2_ahb_clk>;
+		pinctrl-names = "sleep", "default";
+		pinctrl-0 = <&blsp2_uart1_sleep>;
+		pinctrl-1 = <&blsp2_uart1_active>;
+
+		qcom,msm-bus,name = "buart8";
+		qcom,msm-bus,num-cases = <2>;
+		qcom,msm-bus,num-paths = <1>;
+		qcom,msm-bus,vectors-KBps =
+			    <84 512 0 0>,
+			    <84 512 500 800>;
 	};
 
 	m4m_cache: qcom,m4m {
@@ -883,6 +927,22 @@
 			akm,cdc-slim-ifd = "ak4961-slim-ifd";
 			akm,cdc-slim-ifd-elemental-addr = [00 00 61 49 DD 01];
 		};
+
+        es804_codec {
+            compatible = "es804-codec-gen0";
+            elemental-addr = [00 01 83 20 BE 02];
+            adnc,laddr = <0xf0>;
+            slim-ifd = "es804-codec-intf";
+            slim-ifd-elemental-addr = [00 00 83 20 BE 02];
+
+            clock-names = "bb_clk2";
+            clocks = <&clock_gcc clk_bb_clk2>;
+
+            adnc,reset-gpio = <&tlmm 74 0>;
+            adnc,gpiob-gpio = <&tlmm 73 0>;
+            es804,cdc-ldo-gpio = <&tlmm 16 0>;
+            adnc,enable_hs_uart_intf = <1>;
+        };
 
 #if 0
 		tomtom_codec {
