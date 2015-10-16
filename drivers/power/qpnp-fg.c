@@ -4511,9 +4511,8 @@ wait:
 							fg_batt_type_default);
 	if (!profile_node) {
 			pr_err("couldn't find profile handle ,battery_type_default is %s\n",fg_batt_type_default);
-		old_batt_type = default_batt_type;
 		rc = -ENODATA;
-		goto fail;
+		goto no_profile;
 		}else{
 			fg_batt_type = fg_batt_type_default;
 		}	

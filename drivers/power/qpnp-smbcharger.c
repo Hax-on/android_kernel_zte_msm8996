@@ -2277,10 +2277,10 @@ static void smbchg_parallel_usb_en_work(struct work_struct *work)
 #define PARALLEL_CHARGER_EN_DELAY_MS	3500
 static void smbchg_parallel_usb_check_ok(struct smbchg_chip *chip)
 {
-	struct power_supply *parallel_psy = get_parallel_psy(chip);
-	pr_debug("entry smbchg_parallel_usb_check_ok");
 	bool in_progress;
 	int total_current_ma;
+	struct power_supply *parallel_psy = get_parallel_psy(chip);
+	pr_debug("entry smbchg_parallel_usb_check_ok");
 
 	if (!parallel_psy || !chip->parallel_charger_detected)
 		return;
