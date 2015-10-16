@@ -55,6 +55,10 @@
 #include "console_cmdline.h"
 #include "braille.h"
 
+//zte add
+#include <linux/rtc.h>
+//zte add, end
+
 #ifdef CONFIG_EARLY_PRINTK_DIRECT
 extern void printascii(char *);
 #endif
@@ -220,7 +224,8 @@ enum log_flags {
 };
 
 struct printk_log {
-	u64 ts_nsec;		/* timestamp in nanoseconds */
+	u64 ts_nsec;		/* timestamp in nanoseconds */  //zte use for sec
+	long zte_ts_nsec;       //zte add to use for nsec
 	u16 len;		/* length of entire record */
 	u16 text_len;		/* length of text buffer */
 	u16 dict_len;		/* length of dictionary buffer */
@@ -230,6 +235,11 @@ struct printk_log {
 #if defined(CONFIG_LOG_BUF_MAGIC)
 	u32 magic;		/* handle for ramdump analysis tools */
 #endif
+	//zte add
+	unsigned int process_id;
+	pid_t pid;
+	char comm[TASK_COMM_LEN];
+	//zte add, end
 };
 
 /*
@@ -264,8 +274,11 @@ static enum log_flags console_prev;
 static u64 clear_seq;
 static u32 clear_idx;
 
-#define PREFIX_MAX		32
-#define LOG_LINE_MAX		(1024 - PREFIX_MAX)
+//#define PREFIX_MAX		32
+//#define LOG_LINE_MAX		1024 - PREFIX_MAX
+
+#define PREFIX_MAX              128
+#define LOG_LINE_MAX            2048 - PREFIX_MAX  //zte_pm
 
 /* record buffer */
 #if defined(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS)
@@ -428,7 +441,8 @@ static int log_store(int facility, int level,
 {
 	struct printk_log *msg;
 	u32 size, pad_len;
-	u16 trunc_msg_len = 0;
+    u16 trunc_msg_len = 0;
+	 struct timespec zte_ts;         //zte add
 
 	/* number of '\0' padding bytes to next message */
 	size = msg_used_size(text_len, dict_len, &pad_len);
@@ -471,6 +485,16 @@ static int log_store(int facility, int level,
 		msg->ts_nsec = ts_nsec;
 	else
 		msg->ts_nsec = local_clock();
+	//zte add -begin
+	{
+		zte_ts = current_kernel_time();
+		msg->ts_nsec = zte_ts.tv_sec;
+		msg->zte_ts_nsec = zte_ts.tv_nsec;
+	}
+	msg->process_id = smp_processor_id();
+	msg->pid = current->pid;
+	sprintf(msg->comm, "%s", current->comm);
+	//zte add -end
 	memset(log_dict(msg) + dict_len, 0, pad_len);
 	msg->len = size;
 
@@ -1015,20 +1039,41 @@ static inline void boot_delay_msec(int level)
 static bool printk_time = IS_ENABLED(CONFIG_PRINTK_TIME);
 module_param_named(time, printk_time, bool, S_IRUGO | S_IWUSR);
 
-static size_t print_time(u64 ts, char *buf)
-{
-	unsigned long rem_nsec;
+#if 0		//zte change
+    static size_t print_time(u64 ts, char *buf)
+#else
+static size_t print_time(u64 ts, long zte_ns, char *buf,  
+	unsigned int process_id, pid_t pid, const char* comm)
+#endif
 
+{
+	//unsigned long rem_nsec;
+
+	//zte add
+	struct rtc_time tm;
+	int tlen,info_len;
+	//zte add, end
 	if (!printk_time)
 		return 0;
 
-	rem_nsec = do_div(ts, 1000000000);
+	//rem_nsec = do_div(ts, 1000000000); //zte change
 
 	if (!buf)
 		return snprintf(NULL, 0, "[%5lu.000000] ", (unsigned long)ts);
 
+#if 0		//zte change
 	return sprintf(buf, "[%5lu.%06lu] ",
 		       (unsigned long)ts, rem_nsec / 1000);
+#else
+	rtc_time_to_tm(ts, &tm);
+	tlen = sprintf(buf , "[%02d-%02d %02d:%02d:%02d.%03d] ",
+		tm.tm_mon + 1, tm.tm_mday,	tm.tm_hour, tm.tm_min,
+		tm.tm_sec, (int)(zte_ns / NSEC_PER_MSEC));
+
+	info_len = sprintf(buf + tlen, "[%u][%d: %s]",
+		process_id,	pid, comm);
+	return tlen + info_len;
+#endif
 }
 
 static size_t print_prefix(const struct printk_log *msg, bool syslog, char *buf)
@@ -1050,7 +1095,11 @@ static size_t print_prefix(const struct printk_log *msg, bool syslog, char *buf)
 		}
 	}
 
+#if 0		//zte change
 	len += print_time(msg->ts_nsec, buf ? buf + len : NULL);
+#else
+	len += print_time(msg->ts_nsec, msg->zte_ts_nsec, buf ? buf + len : NULL, msg->process_id, msg->pid, msg->comm);
+#endif
 	return len;
 }
 
@@ -1528,11 +1577,17 @@ static inline void printk_delay(void)
  * reached the console in case of a kernel crash.
  */
 static struct cont {
+	//zte add
+	unsigned int process_id;
+	pid_t pid;
+	char comm[TASK_COMM_LEN];
+	//zte add, end
 	char buf[LOG_LINE_MAX];
 	size_t len;			/* length == 0 means unused buffer */
 	size_t cons;			/* bytes written to console */
 	struct task_struct *owner;	/* task of first print*/
 	u64 ts_nsec;			/* time of first print */
+	long zte_ts_nsec;               //zte add to use for nsec
 	u8 level;			/* log level of first message */
 	u8 facility;			/* log facility of first message */
 	enum log_flags flags;		/* prefix, newline flags */
@@ -1569,6 +1624,7 @@ static void cont_flush(enum log_flags flags)
 
 static bool cont_add(int facility, int level, const char *text, size_t len)
 {
+	struct timespec zte_ts;         //zte add
 	if (cont.len && cont.flushed)
 		return false;
 
@@ -1582,10 +1638,22 @@ static bool cont_add(int facility, int level, const char *text, size_t len)
 		cont.facility = facility;
 		cont.level = level;
 		cont.owner = current;
-		cont.ts_nsec = local_clock();
+		//cont.ts_nsec = local_clock(); //zte change
+		#if 1  //zte change
+		 zte_ts = current_kernel_time();
+		 //cont.ts_nsec = zte_ts.tv_sec * NSEC_PER_SEC + zte_ts.tv_nsec;
+		 cont.ts_nsec = zte_ts.tv_sec;
+		 cont.zte_ts_nsec = zte_ts.tv_nsec;
+		#endif
+		
 		cont.flags = 0;
 		cont.cons = 0;
 		cont.flushed = false;
+		//zte add
+		cont.process_id = smp_processor_id();
+		cont.pid = current->pid;
+		sprintf(cont.comm, "%s", current->comm);
+		//zte add
 	}
 
 	memcpy(cont.buf + cont.len, text, len);
@@ -1603,7 +1671,11 @@ static size_t cont_print_text(char *text, size_t size)
 	size_t len;
 
 	if (cont.cons == 0 && (console_prev & LOG_NEWLINE)) {
+#if 0		//zte change
 		textlen += print_time(cont.ts_nsec, text);
+#else
+		textlen += print_time(cont.ts_nsec, cont.zte_ts_nsec, text,  cont.process_id, cont.pid, cont.comm);
+#endif
 		size -= textlen;
 	}
 
@@ -2608,6 +2680,7 @@ static int __init printk_late_init(void)
 		}
 	}
 	hotcpu_notifier(console_cpu_notify, 0);
+	//printk("zte log address __log_buf: 0x%x\n", (unsigned int)__log_buf);	//ZTE add
 	return 0;
 }
 late_initcall(printk_late_init);

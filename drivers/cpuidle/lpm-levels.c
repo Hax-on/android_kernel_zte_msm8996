@@ -844,6 +844,10 @@ bool psci_enter_sleep(struct lpm_cluster *cluster, int idx, bool from_idle)
 }
 #endif
 
+//zte_pm_liyf_20151010
+extern bool zte_msm_cpu_pm_enter_sleep(enum msm_pm_sleep_mode mode, bool from_idle);
+extern void zte_pm_before_powercollapse(void);
+
 static int lpm_cpuidle_enter(struct cpuidle_device *dev,
 		struct cpuidle_driver *drv, int index)
 {
@@ -877,8 +881,7 @@ static int lpm_cpuidle_enter(struct cpuidle_device *dev,
 	if (idx > 0 && !use_psci) {
 		update_debug_pc_event(CPU_ENTER, idx, 0xdeaffeed, 0xdeaffeed,
 					true);
-		success = msm_cpu_pm_enter_sleep(cluster->cpu->levels[idx].mode,
-				true);
+	    success = zte_msm_cpu_pm_enter_sleep(cluster->cpu->levels[idx].mode, true);//zte_pm_liyf	
 		update_debug_pc_event(CPU_EXIT, idx, success, 0xdeaffeed,
 					true);
 	} else {
@@ -1109,7 +1112,7 @@ static int lpm_suspend_enter(suspend_state_t state)
 	clock_debug_print_enabled();
 
 	if (!use_psci)
-		msm_cpu_pm_enter_sleep(cluster->cpu->levels[idx].mode, false);
+	     zte_msm_cpu_pm_enter_sleep(cluster->cpu->levels[idx].mode, false);//zte_pm_liyf
 	else
 		psci_enter_sleep(cluster, idx, true);
 

@@ -372,3 +372,14 @@ obj-$(CONFIG_SND_SOC_MSM_STUB)  += snd-soc-msm-stub.o
 # Amp
 obj-$(CONFIG_SND_SOC_MAX9877)	+= snd-soc-max9877.o
 obj-$(CONFIG_SND_SOC_TPA6130A2)	+= snd-soc-tpa6130a2.o
+# 2015-07-30 weizj add audience es804 start
+obj-$(CONFIG_SND_SOC_ES325)     += audience/
+obj-$(CONFIG_SND_SOC_ES_515)    += audience/
+obj-$(CONFIG_SND_SOC_ES705)     += audience/
+obj-$(CONFIG_SND_SOC_ES705_ESCORE)     += audience/
+obj-$(CONFIG_SND_SOC_ES704_ESCORE)     += audience/
+obj-$(CONFIG_SND_SOC_ES804_ESCORE)     += audience/
+obj-$(CONFIG_SND_SOC_ES755)     += audience/
+obj-$(CONFIG_MQ100_SENSOR_HUB)     += audience/
+obj-$(CONFIG_SND_SOC_ES855)     += audience/
+# 2015-07-30 weizj add audience es804 end
