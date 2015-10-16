@@ -35,6 +35,7 @@
 #include <linux/gpio.h>
 #include <linux/of_gpio.h>
 
+
 #define BYTE_BIT_MASK(nr)		(1UL << ((nr) % BITS_PER_BYTE))
 #define BIT_BYTE(nr)			((nr) / BITS_PER_BYTE)
 #define AK49XX_SYSTEM_RESUME_TIMEOUT_MS 100
@@ -627,14 +628,14 @@ static int ak49xx_irq_probe(struct platform_device *pdev)
 		data = (struct ak49xx_irq_drv_data *)domain->host_data;
 		data->irq = irq;
 // ZTE_chenjun
-      	data->es804_rst_gpio= of_get_named_gpio(pdev->dev.of_node,
+/*      	data->es804_rst_gpio= of_get_named_gpio(pdev->dev.of_node,
 				"es804,cdc-reset-gpio", 0);
 	pr_err("%s data->es804_rst_gpio : %d\n",__func__,data->es804_rst_gpio);	
 	if (data->es804_rst_gpio < 0) {
 		dev_err(&pdev->dev, "Looking up %s property in node %s failed %d\n",
 			"es804,cdc-reset-gpio", pdev->dev.of_node->full_name,
 			data->es804_rst_gpio);
-	}
+	}*/
 
       	data->es804_ldo_gpio= of_get_named_gpio(pdev->dev.of_node,
 				"es804,cdc-ldo-gpio", 0);
@@ -651,35 +652,34 @@ static int ak49xx_irq_probe(struct platform_device *pdev)
 		ak49xx_irq_get_pinctrl_configs(&pdev->dev, data);
 
 // ZTE_chenjun
-	if (data->es804_rst_gpio) {		
+	/*if (data->es804_rst_gpio) {
 		ret = gpio_request(data->es804_rst_gpio, "ES804_RST");		
 		if (ret) {			
 			pr_err("%s: Failed to request gpio %d\n", __func__,				
 				data->es804_rst_gpio);			
 			// data->es804_rst_gpio = 0;			
 			}	
-		}	
-	if (data->es804_rst_gpio) {		
+		}
+	if (data->es804_rst_gpio) {
 		gpio_direction_output(data->es804_rst_gpio, 1);
           pr_err("%s(): 2: es804_rst_gpio(%d) value(%d)",
                          __func__, data->es804_rst_gpio, gpio_get_value_cansleep(data->es804_rst_gpio));
-		}
+		}*/
 
-	if (data->es804_ldo_gpio) {		
-		ret = gpio_request(data->es804_ldo_gpio, "ES804_LDO");		
-		if (ret) {			
-			pr_err("%s: Failed to request gpio %d\n", __func__,				
-				data->es804_ldo_gpio);			
-			// data->es804_ldo_gpio = 0;			
-			}	
-		}	
-	if (data->es804_ldo_gpio) {		
+	if (data->es804_ldo_gpio) {
+		ret = gpio_request(data->es804_ldo_gpio, "ES804_LDO");
+		if (ret) {
+			pr_err("%s: Failed to request gpio %d\n", __func__,
+				data->es804_ldo_gpio);
+			// data->es804_ldo_gpio = 0;
+			}
+		}
+	if (data->es804_ldo_gpio) {
 		gpio_direction_output(data->es804_ldo_gpio, 1);
           pr_err("%s(): 2: es804_ldo_gpio(%d) value(%d)",
                          __func__, data->es804_ldo_gpio, gpio_get_value_cansleep(data->es804_ldo_gpio));
 		}
 //
-
 		wmb();
 		ret = 0;
 	}
