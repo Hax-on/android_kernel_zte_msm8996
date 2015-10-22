@@ -145,6 +145,18 @@ DEFINE_SIMPLE_ATTRIBUTE(sensor_debugfs_value, sensor_debugfs_getvalue,
 
 struct dentry *debugfs_base=NULL;
 
+void msm_sensor_creat_debugfs(void)
+{
+
+	if (!debugfs_base) {
+		debugfs_base = debugfs_create_dir("msm_sensor", NULL);
+		
+		if (!debugfs_base){
+			pr_err(": msm_sensor dir creat fail");
+		}
+	} 
+}
+
 int msm_sensor_enable_debugfs(struct msm_sensor_ctrl_t *s_ctrl)
 {
 	struct dentry  *sensor_dir;

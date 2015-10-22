@@ -29,6 +29,7 @@
 // --->
  #include "msm_eeprom.h"
   // <---400015
+ #include <linux/debugfs.h>
 
 /* Logging macro */
 #undef CDBG
@@ -1433,6 +1434,13 @@ static int __init msm_sensor_driver_init(void)
 	int32_t rc = 0;
 
 	CDBG("Enter");
+/*
+  * by ZTE_YCM_20140909 yi.changming 400006
+  */
+// --->
+	msm_sensor_creat_debugfs();
+// <---400006
+
 	rc = platform_driver_register(&msm_sensor_platform_driver);
 	if (!rc) {
 		CDBG("probe success");

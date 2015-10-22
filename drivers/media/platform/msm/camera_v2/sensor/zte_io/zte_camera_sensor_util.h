@@ -18,6 +18,7 @@
 #ifndef ZTE_CAMERA_SENSOR_UTIL_H
 #define ZTE_CAMERA_SENSOR_UTIL_H
 
+void msm_sensor_creat_debugfs(void);
  int msm_sensor_enable_debugfs(struct msm_sensor_ctrl_t *s_ctrl);
 
 void msm_sensor_register_sysdev(struct msm_sensor_ctrl_t *s_ctrl);
