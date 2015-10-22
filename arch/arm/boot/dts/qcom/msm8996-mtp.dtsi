@@ -14,7 +14,7 @@
 //#include "msm8996-camera-sensor-mtp.dtsi"  
 #include "zte-camera-sensor-mtp.dtsi" //yichangming 400001
 #include "zte-usb-type-c.dtsi"
-//#include "msm8996-camera-sensor-mtp.dtsi"
+//#include "msm8996-camera-sensor-mtp.dtsi"  //yichangming 400001 delete
 #include "msm8996-wsa881x.dtsi"
 
 / {
@@ -856,7 +856,7 @@
 
 &i2c_7 {
 	silabs4705@11 { /* SiLabs FM chip, slave id 0x11*/
-		status = "ok";
+		status = "disabled";  //yichangming disable because of gpio38 
 		compatible = "silabs,si4705";
 		reg = <0x11>;
 		vdd-supply = <&pm8994_s4>;
