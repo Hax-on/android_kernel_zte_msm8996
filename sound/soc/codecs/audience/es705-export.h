@@ -33,7 +33,8 @@ int es705_remote_route_enable(struct snd_soc_dai *dai);
 
 #elif defined(CONFIG_SND_SOC_ES705_ESCORE) || \
 	defined(CONFIG_SND_SOC_ES704_ESCORE) || \
-	defined(CONFIG_SND_SOC_ES804_ESCORE)
+	defined(CONFIG_SND_SOC_ES804_ESCORE) || \
+	defined(CONFIG_SND_SOC_ES902_ESCORE)
 int escore_slim_set_channel_map(struct snd_soc_dai *dai,
 			       unsigned int tx_num, unsigned int *tx_slot,
 			       unsigned int rx_num, unsigned int *rx_slot);

@@ -17,7 +17,6 @@
 #include <linux/slab.h>
 #include <linux/err.h>
 #include <linux/kthread.h>
-#include <linux/esxxx.h>
 #include <linux/serial_core.h>
 #include <linux/tty.h>
 #include <linux/fs.h>
@@ -42,6 +41,13 @@ int escore_uart_read_internal(struct escore_priv *escore, void *buf, int len)
 	set_fs(KERNEL_DS);
 
 	do {
+		if (escore->fw_auto_recovered) {
+			dev_err(escore->dev,
+					"%s() aborted as fw recovery detected\n"
+					, __func__);
+			return -EIO;
+		}
+
 		rc = vfs_read(escore_uart.file, (char __user *)buf, len, &pos);
 		if (rc == -EAGAIN) {
 			usleep_range(EAGAIN_RETRY_DELAY,
@@ -77,16 +83,15 @@ int escore_uart_read(struct escore_priv *escore, void *buf, int len)
 		return -EIO;
 	}
 
-	mutex_lock(&escore->api_mutex);
 	rc = escore_uart_read_internal(escore, buf, len);
 
-	if (rc < len)
-		rc = -EIO;
-	else
-		rc = 0;
+	if (rc < len) {
+		pr_err("%s() Uart Read Failed\n", __func__);
+		ESCORE_FW_RECOVERY_FORCED_OFF(escore);
+		return -EIO;
+	}
 
-	mutex_unlock(&escore->api_mutex);
-	return rc;
+	return 0;
 }
 
 int escore_uart_write(struct escore_priv *escore, const void *buf, int len)
@@ -104,7 +109,6 @@ int escore_uart_write(struct escore_priv *escore, const void *buf, int len)
 
 	dev_dbg(escore->dev, "%s() size %d\n", __func__, len);
 
-	mutex_lock(&escore->api_mutex);
 
 	/*
 	 * we may call from user context via char dev, so allow
@@ -132,14 +136,15 @@ int escore_uart_write(struct escore_priv *escore, const void *buf, int len)
 err_out:
 	/* restore old fs context */
 	set_fs(oldfs);
-	if (count_remain)
+	if (count_remain) {
+		pr_err("%s() Uart write Failed\n", __func__);
+		ESCORE_FW_RECOVERY_FORCED_OFF(escore);
 		rc = -EIO;
-	else
+	} else {
 		rc = 0;
-
+	}
 	pr_debug("%s() returning %d\n", __func__, rc);
 
-	mutex_unlock(&escore->api_mutex);
 	return rc;
 }
 
@@ -152,6 +157,7 @@ int escore_uart_cmd(struct escore_priv *escore, u32 cmd, u32 *resp)
 
 	dev_dbg(escore->dev,
 			"%s: cmd=0x%08x sr=0x%08x\n", __func__, cmd, sr);
+	INC_DISABLE_FW_RECOVERY_USE_CNT(escore);
 
 	*resp = 0;
 	cmd = cpu_to_be32(cmd);
@@ -160,6 +166,14 @@ int escore_uart_cmd(struct escore_priv *escore, u32 cmd, u32 *resp)
 		goto cmd_exit;
 
 	do {
+		if (escore->fw_auto_recovered) {
+			dev_err(escore->dev,
+					"%s() aborted as fw recovery detected\n"
+					, __func__);
+			DEC_DISABLE_FW_RECOVERY_USE_CNT(escore);
+			return -EIO;
+		}
+
 		usleep_range(ES_RESP_POLL_TOUT,
 				ES_RESP_POLL_TOUT + 500);
 
@@ -172,13 +186,13 @@ int escore_uart_cmd(struct escore_priv *escore, u32 cmd, u32 *resp)
 				"%s: uart_read() fail %d\n", __func__, err);
 		} else if ((*resp & ES_ILLEGAL_CMD) == ES_ILLEGAL_CMD) {
 			dev_err(escore->dev, "%s: illegal command 0x%08x\n",
-				__func__, cmd);
+				__func__, be32_to_cpu(cmd));
 			err = -EINVAL;
 			goto cmd_exit;
 		} else if (*resp == ES_NOT_READY) {
 			dev_dbg(escore->dev,
 				"%s: escore_uart_read() not ready\n", __func__);
-			err = -ETIMEDOUT;
+			err = -EBUSY;
 		} else {
 			goto cmd_exit;
 		}
@@ -188,6 +202,10 @@ int escore_uart_cmd(struct escore_priv *escore, u32 cmd, u32 *resp)
 
 cmd_exit:
 	update_cmd_history(be32_to_cpu(cmd), *resp);
+	DEC_DISABLE_FW_RECOVERY_USE_CNT(escore);
+	if (err && ((*resp & ES_ILLEGAL_CMD) != ES_ILLEGAL_CMD))
+		ESCORE_FW_RECOVERY_FORCED_OFF(escore);
+
 	return err;
 }
 
@@ -245,8 +263,7 @@ int escore_uart_open(struct escore_priv *escore)
 	int attempt = 0;
 
 	atomic_inc(&escore->uart_users);
-	pr_debug("%s() users count: %d\n",
-			 __func__, atomic_read(&escore->uart_users));
+
 	if (escore->uart_ready) {
 		pr_debug("%s() UART is already open, users count: %d\n",
 			 __func__, atomic_read(&escore->uart_users));
@@ -292,8 +309,7 @@ int escore_uart_close(struct escore_priv *escore)
 			 __func__, atomic_read(&escore->uart_users));
 		return 0;
 	}
-	pr_debug("%s() users count: %d\n",
-			 __func__, atomic_read(&escore->uart_users));
+
 	filp_close(escore_uart.file, 0);
 	escore->uart_ready = 0;
 

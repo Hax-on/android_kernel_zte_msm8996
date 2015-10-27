@@ -15,6 +15,22 @@
 #include "escore.h"
 #include "escore-spi.h"
 
+#define ESCORE_SPI_SET_BITS_PER_WORD(bits) ({				\
+	int ret;							\
+	escore_spi->bits_per_word = bits;				\
+	ret = spi_setup(escore_spi);					\
+	if (ret < 0) {							\
+		dev_err(&escore_spi->dev,				\
+		"%s(): can't setup SPI bits per word = %d, ret = %d\n",	\
+			__func__, bits, ret);				\
+	} else {							\
+		dev_dbg(&escore_spi->dev,				\
+			"%s(): SPI bits per word changed to %d\n",	\
+				__func__, bits);			\
+	}								\
+	ret;								\
+})
+
 static struct spi_device *escore_spi;
 
 static u32 escore_cpu_to_spi(struct escore_priv *escore, u32 resp)
@@ -31,14 +47,12 @@ static int escore_spi_read(struct escore_priv *escore, void *buf, int len)
 {
 	int rc;
 
-	mutex_lock(&escore->api_mutex);
 	rc = spi_read(escore_spi, buf, len);
 	if (rc < 0) {
 		dev_err(&escore_spi->dev, "%s(): error %d reading SR\n",
 			__func__, rc);
-		return rc;
+		ESCORE_FW_RECOVERY_FORCED_OFF(escore);
 	}
-	mutex_unlock(&escore->api_mutex);
 
 	return rc;
 }
@@ -60,8 +74,13 @@ static int escore_spi_read_streaming(struct escore_priv *escore,
 	 * not blocking call and will always return (with either valid data or
 	 * 0's). This causes kernel thread much faster. This delay is added for
 	 * CVQ streaming only for bug #24910.
+	 *
+	 * This delay is not required in case of hotword streaming as keyword
+	 * should have been preserved by the time detection interrupt is
+	 * received.
 	 */
-	if (escore->es_streaming_mode == ES_CVQ_STREAMING)
+	if (escore->es_streaming_mode == ES_CVQ_STREAMING &&
+					!escore->voice_recognition)
 		usleep_range(20000, 20000);
 
 	for (rdcnt = 0; rdcnt < pk_cnt; rdcnt++) {
@@ -108,13 +127,166 @@ static int escore_spi_write(struct escore_priv *escore,
 			"Alignment required 0x%x bytes\n", rem);
 	}
 
-	mutex_lock(&escore->api_mutex);
 	rc = spi_write(escore_spi, buf, len);
 
 	if (rem != 0)
 		rc = spi_write(escore_spi, align, 4 - rem);
+	if (rc < 0)
+		ESCORE_FW_RECOVERY_FORCED_OFF(escore);
 
-	mutex_unlock(&escore->api_mutex);
+	return rc;
+}
+
+static int escore_spi_high_bw_write(struct escore_priv *escore,
+			    const void *buf, int len)
+{
+	int rc = 0;
+	int rem = 0;
+	char align[4] = {0};
+
+#ifdef CONFIG_SND_SOC_ES_SPI_WRITE_DMA_MODE
+	int dma_bytes = 0;
+	int non_dma_bytes = 0, room = 0, bytes = 0;
+	unsigned long pfn = 0;
+	const void *current_vaddr =  NULL;
+	void *kaddr = NULL;
+	int offset = 0;
+#endif
+	/* Check if length is 4 byte aligned or not
+	   If not aligned send extra bytes after write */
+	if ((len > 4) && (len % 4 != 0)) {
+		rem = len % 4;
+		dev_info(escore->dev,
+			"Alignment required 0x%x bytes\n", rem);
+	}
+
+/* Buffer data can be transmitted by the SPI controller
+ * using either DMA mode or polling mode.
+ * In DMA mode the SPI controller directly takes data from memory without
+ * any interference from processor whereas in polling mode processor is
+ * utilized for transferring buffer data from memory to SPI controller.
+ * As per the implementation of SPI controller a threshold limit is
+ * defined which decides the mode of transfer.
+ * So when number of bytes to be transferred exceeds threshold limit
+ * DMA mode is utilized, otherwise polling mode is utilized.
+ */
+#ifdef CONFIG_SND_SOC_ES_SPI_WRITE_DMA_MODE
+	if (is_vmalloc_or_module_addr(buf)) {
+
+		/* If the buffer is not page aligned,
+		 * transfer the number of bytes from the page offset of buffer
+		 * using DMA mode if number of bytes are greater than
+		 * ES_SPI_DMA_MIN_BYTES otherwise use non dma mode.
+		 * Go to next page if still remaining bytes of data exist.
+		 */
+		if (((unsigned long)buf & (~PAGE_MASK))) {
+			current_vaddr = buf;
+			offset = (unsigned long)current_vaddr & (~PAGE_MASK);
+			bytes = len;
+			room = PAGE_SIZE - offset;
+			bytes = ((bytes < room) ? bytes : room);
+
+			/* DMA mode requires buffer address which has
+			 * a direct mapping with physical address,So
+			 * deduce the physical page frame number from vmalloc
+			 * address and from that deduce the virtual address.
+			 */
+			if (bytes >= ES_SPI_DMA_MIN_BYTES) {
+				pfn = vmalloc_to_pfn(current_vaddr);
+				kaddr = pfn_to_kaddr(pfn);
+				kaddr += offset;
+			} else {
+
+			/* Since ES_SPI_DMA_MIN_BYTES
+			 * may vary across different platforms,
+			 * For number of bytes < ES_SPI_DMA_MIN_BYTES
+			 * the SPI controller may use either DMA mode
+			 * or polling mode.
+			 * So copy the buffer from vmalloc address
+			 * to a kernel logical address so that it can be
+			 * utilized for both DMA and polling mode.
+			 */
+				kaddr = kzalloc(bytes, GFP_KERNEL | GFP_DMA);
+				memcpy(kaddr, current_vaddr, bytes);
+			}
+			rc = spi_write(escore_spi, kaddr, bytes);
+
+			if (bytes < ES_SPI_DMA_MIN_BYTES)
+				kfree(kaddr);
+
+			if (rc < 0) {
+				dev_err(escore->dev,
+					"%s(): SPI Write failed rc = %d\n",
+					__func__, rc);
+				goto spi_write_err;
+			}
+
+			len -= bytes;
+
+			if (len == 0) {
+				if (rem)
+					rc = spi_write(escore_spi,
+							align, 4 - rem);
+				goto spi_write_err;
+			}
+
+			current_vaddr += bytes;
+			buf = current_vaddr;
+		}
+
+		non_dma_bytes = ((len % PAGE_SIZE < ES_SPI_DMA_MIN_BYTES) ?
+				len % PAGE_SIZE : 0);
+		dma_bytes = len - non_dma_bytes;
+		current_vaddr = buf;
+
+		while  (dma_bytes > 0) {
+			pfn = vmalloc_to_pfn(current_vaddr);
+			kaddr = pfn_to_kaddr(pfn);
+			rc = spi_write(escore_spi, kaddr,
+					(dma_bytes > PAGE_SIZE) ?
+					PAGE_SIZE : dma_bytes);
+			if (rc < 0) {
+				dev_err(escore->dev,
+					"%s(): SPI Write failed rc = %d\n",
+					__func__, rc);
+				goto spi_write_err;
+			}
+			current_vaddr += PAGE_SIZE;
+			dma_bytes -= PAGE_SIZE;
+		}
+
+		if (non_dma_bytes) {
+			kaddr = kzalloc(non_dma_bytes, GFP_KERNEL | GFP_DMA);
+			memcpy(kaddr, current_vaddr, non_dma_bytes);
+			rc = spi_write(escore_spi, kaddr, non_dma_bytes);
+			kfree(kaddr);
+			if (rc < 0) {
+				dev_err(escore->dev,
+					"%s(): SPI Write failed rc = %d\n",
+					__func__, rc);
+				goto spi_write_err;
+
+			}
+		}
+		len = 0;
+	}
+#endif
+	if (len) {
+		rc = spi_write(escore_spi, buf, len);
+		if (rc < 0) {
+			dev_err(escore->dev,
+				"%s(): SPI Write failed rc = %d\n",
+				__func__, rc);
+			goto spi_write_err;
+		}
+	}
+
+	if (rem != 0)
+		rc = spi_write(escore_spi, align, 4 - rem);
+spi_write_err:
+	if (rc < 0)
+		ESCORE_FW_RECOVERY_FORCED_OFF(escore);
+
 	return rc;
 }
 
@@ -124,14 +296,15 @@ static int escore_spi_cmd(struct escore_priv *escore,
 	int err = 0;
 	int sr = cmd & BIT(28);
 	int retry = ES_SPI_MAX_RETRIES;
+	u32 resp32;
 	u16 resp16;
 
 	dev_dbg(escore->dev,
 			"%s: cmd=0x%08x  sr=0x%08x\n", __func__, cmd, sr);
+	INC_DISABLE_FW_RECOVERY_USE_CNT(escore);
 
 	if ((escore->cmd_compl_mode == ES_CMD_COMP_INTR) && !sr)
-		escore->wait_api_intr = 1;
-
+		escore_set_api_intr_wait(escore);
 	*resp = 0;
 	cmd = cpu_to_be32(cmd);
 	err = escore_spi_write(escore, &cmd, sizeof(cmd));
@@ -141,15 +314,9 @@ static int escore_spi_cmd(struct escore_priv *escore,
 	if (escore->cmd_compl_mode == ES_CMD_COMP_INTR) {
 		pr_debug("%s(): Waiting for API interrupt. Jiffies:%lu",
 				__func__, jiffies);
-		err = wait_for_completion_timeout(&escore->cmd_compl,
-				msecs_to_jiffies(ES_RESP_TOUT_MSEC));
-		if (!err) {
-			pr_err("%s(): API Interrupt wait timeout\n",
-					__func__);
-			escore->wait_api_intr = 0;
-			err = -ETIMEDOUT;
+		err = escore_api_intr_wait_completion(escore);
+		if (err)
 			goto cmd_exit;
-		}
 	}
 
 	usleep_range(ES_SPI_RETRY_DELAY, ES_SPI_RETRY_DELAY + 50);
@@ -163,26 +330,23 @@ static int escore_spi_cmd(struct escore_priv *escore,
 			}
 		}
 
-		err = escore_spi_read(escore, &resp16, sizeof(resp16));
+		if (escore->fw_auto_recovered) {
+			dev_err(escore->dev,
+					"%s() aborted as fw recovery detected\n"
+					, __func__);
+			return -EIO;
+		}
+
+		err = escore_spi_read(escore, &resp32, sizeof(resp32));
 		dev_dbg(escore->dev, "%s: err=%d\n", __func__, err);
-		*resp = (be16_to_cpu(resp16) << 16);
+		*resp = (be32_to_cpu(resp32));
 		dev_dbg(escore->dev, "%s: *resp=0x%08x\n", __func__, *resp);
 		if (err) {
 			dev_dbg(escore->dev,
 				"%s: escore_spi_read() failure, err=%d\n",
 				__func__, err);
 		}
-		if (resp16 != 0) {
-			err = escore_spi_read(escore, &resp16, sizeof(resp16));
-			(*resp) |= be16_to_cpu(resp16);
-			dev_dbg(escore->dev, "%s: *resp=0x%08x\n",
-					__func__, *resp);
-			if (err) {
-				dev_dbg(escore->dev,
-					"%s: escore_spi_read() failure, err=%d\n",
-					__func__, err);
-			}
-		} else {
+		if (*resp == 0) {
 			if (retry == 0) {
 				err = -ETIMEDOUT;
 				dev_err(escore->dev,
@@ -192,11 +356,30 @@ static int escore_spi_cmd(struct escore_priv *escore,
 			} else {
 				continue;
 			}
+		} else if ((*resp >> 16) == 0) {
+			/* Fw SPI interface is 16bit. So in the 32bit
+			 * read of command's response, sometimes fw
+			 * sends first 16bit in first 32bit read and
+			 * second 16bit in second 32bit. So this is
+			 * special condition handling to make response.
+			 */
+			ESCORE_SPI_SET_BITS_PER_WORD(16);
+
+			err = escore_spi_read(escore, &resp16, sizeof(resp16));
+			if (err)
+				dev_dbg(escore->dev,
+					"%s: escore_spi_read() failure, err=%d\n",
+					__func__, err);
+			else
+				*resp = (*resp << 16) | be16_to_cpu(resp16);
+
+			/* Restore SPI bits per word to 32 */
+			ESCORE_SPI_SET_BITS_PER_WORD(32);
 		}
 
 		if ((*resp & ES_ILLEGAL_CMD) == ES_ILLEGAL_CMD) {
 			dev_err(escore->dev, "%s: illegal command 0x%08x\n",
-				__func__, cmd);
+				__func__, be32_to_cpu(cmd));
 			err = -EINVAL;
 			goto cmd_exit;
 		} else {
@@ -207,6 +390,10 @@ static int escore_spi_cmd(struct escore_priv *escore,
 
 cmd_exit:
 	update_cmd_history(be32_to_cpu(cmd), *resp);
+	DEC_DISABLE_FW_RECOVERY_USE_CNT(escore);
+	if (err && ((*resp & ES_ILLEGAL_CMD) != ES_ILLEGAL_CMD))
+		ESCORE_FW_RECOVERY_FORCED_OFF(escore);
+
 	return err;
 }
 
@@ -230,256 +417,31 @@ static int escore_spi_setup(u32 speed)
 	return status;
 }
 
+
+
 static int escore_spi_datablock_read(struct escore_priv *escore, void *buf,
-		size_t len, int id)
+		size_t len)
 {
 	int rc;
-	int size;
-	u32 cmd;
 	int rdcnt = 0;
-	u32 resp;
-	u8 flush_extra_blk = 0;
-	u32 flush_buf;
 	u16 temp;
 
-	/* Reset read data block size */
-	escore->datablock_dev.rdb_read_count = 0;
-
-	cmd = (ES_READ_DATA_BLOCK << 16) | (id & 0xFFFF);
-
-	rc = escore_spi_cmd(escore, cmd, &resp);
+	rc = escore_spi_read(escore, (char *)buf, len);
 	if (rc < 0) {
-		dev_err(escore->dev, "%s(): escore_spi_cmd() failed rc = %d\n",
-			 __func__, rc);
-		goto out;
-	}
-	if ((resp >> 16) != ES_READ_DATA_BLOCK) {
-		dev_err(escore->dev, "%s(): Invalid respn received: 0x%08x\n",
-				__func__, resp);
-		rc = -EINVAL;
-		goto out;
-	}
-
-	size = resp & 0xFFFF;
-	dev_dbg(escore->dev, "%s(): RDB size = %d\n", __func__, size);
-	if (size == 0 || size % 4 != 0) {
-		dev_err(escore->dev,
-			"%s(): Read Data Block with invalid size:%d\n",
-			__func__, size);
-		rc = -EINVAL;
-		goto out;
-	}
-
-	if (len != size) {
-		dev_dbg(escore->dev, "%s(): Requested:%zd Received:%d\n",
-			 __func__, len, size);
-		if (len < size)
-			flush_extra_blk = (size - len) % 4;
-		else
-			len = size;
-	}
-
-	for (rdcnt = 0; rdcnt < len;) {
-		rc = escore_spi_read(escore, (char *)&temp, sizeof(temp));
-		if (rc < 0) {
-			dev_err(escore->dev, "%s(): Read Data Block error %d\n",
-					__func__, rc);
-			goto out;
-		}
-		temp = be16_to_cpu(temp);
-		memcpy(buf, (char *)&temp, 2);
-		buf += 2;
-		rdcnt += 2;
-	}
-
-	/* Store read data block size */
-	escore->datablock_dev.rdb_read_count = size;
-
-	/* No need to read in case of no extra bytes */
-	if (flush_extra_blk) {
-		/* Discard the extra bytes */
-		rc = escore_spi_read(escore, &flush_buf, flush_extra_blk);
-		if (rc < 0) {
-			dev_err(escore->dev, "%s(): Read Data Block error in flushing %d\n",
-					__func__, rc);
-			goto out;
-		}
-	}
-out:
-	return rc;
-}
-
-#ifdef CONFIG_SND_SOC_ES855
-static int escore_spi_sbl_cmd(struct escore_priv *escore, u32 cmd, u32 *resp,
-				int n_try)
-{
-	int rc;
-	int i;
-	u32 sbl_cmd, sbl_ack;
-
-	sbl_cmd = cpu_to_be32(cmd);
-	rc = escore_spi_write(escore, &sbl_cmd, sizeof(sbl_cmd));
-	pr_debug("[%s:%d]%s():rc=%d, sbl_cmd=0x%08x\n", __FILE__, \
-		__LINE__, __func__, rc, sbl_cmd);
-
-	if (rc < 0) {
-		pr_debug("%s(): failed to write sbl_cmd(0x%08x) -- rc(%d)\n", \
-			__func__, cmd, rc);
+		dev_err(escore->dev, "%s(): Read Data Block error %d\n",
+				__func__, rc);
 		return rc;
 	}
 
-	for (i = 0; i < n_try; i++) {
-		if (escore->pdata->gpioa_gpio != -1) {
-			rc = wait_for_completion_timeout(&escore->cmd_compl, \
-				msecs_to_jiffies(ES_SBL_RESP_TOUT));
-
-			if (!rc) {
-				pr_debug("%s():SBL SYNC response timed out\n", \
-					__func__);
-				rc = -ETIMEDOUT;
-				return rc;
-			}
-		} else
-			usleep_range(10000, 10500);
-
-		rc = escore_spi_read(escore, &sbl_ack, sizeof(sbl_ack));
-
-		if (rc < 0) {
-			pr_debug("%s(): failed to get response %d",
-				 __func__, rc);
-			pr_debug("sbl_cmd(0x%08x) --%dth try: rc(%d)\n",
-				cmd, i, rc);
-			return rc;
-		}
-
-		/* sbl_ack = be32_to_cpu(sbl_ack); */
-		if (sbl_ack != cpu_to_be32(ES_SPI_SYNCBYTE_ACK)) {
-			*resp = sbl_ack;
-			break;
-		}
-
-		sbl_cmd = cpu_to_be32(ES_SPI_SYNCBYTE_CMD);
-		rc = escore_spi_write(escore, &sbl_cmd, sizeof(sbl_cmd));
-		pr_debug("[%s:%d]%s():rc=%d, sbl_cmd=0x%08x\n", __FILE__,
-			__LINE__, __func__, rc, sbl_cmd);
-
-		if (rc < 0) {
-			pr_debug("%s(): write sbl_cmd fail %d", __func__, rc);
-			pr_debug("(0x%08x): %dth -- rc(%d)\n", cmd, i, rc);
-			return rc;
-		}
-	}
-
-	if (i >= n_try) {
-		*resp = cpu_to_be32(ES_SPI_SYNCBYTE_ACK);
-		if (cmd != ES_SPI_SYNCBYTE_CMD)
-			rc = -1;
+	for (rdcnt = 0; rdcnt < len; rdcnt += 2) {
+		temp = *((u16 *)buf);
+		temp = be16_to_cpu(temp);
+		memcpy(buf, (char *)&temp, sizeof(temp));
+		buf += 2;
 	}
 
 	return rc;
 }
-
-static int escore_spi_boot_setup(struct escore_priv *escore)
-{
-	u32 boot_ack;
-	u32 sbl_sync_cmd = ES_SPI_SBL_SYNC_CMD;
-	u32 sbl_sync_ack;
-	int rc;
-	u8 cmd_compl_mode;
-
-	rc = escore_spi_setup(escore->pdata->spi_operational_speed);
-	msleep(50);
-	pr_debug("%s(): prepare for fw download\n", __func__);
-	sbl_sync_cmd = cpu_to_be32(sbl_sync_cmd);
-	/* GPIO_A (INTR_API) transits from low to high once
-	 * SBL SYNC command response is ready. So, for the command completion
-	 * mode to "Interrupt" to read the SBL SYNC response.
-	 */
-	cmd_compl_mode = escore->cmd_compl_mode;
-	if (escore->pdata->gpioa_gpio != -1)
-		escore->cmd_compl_mode = ES_CMD_COMP_INTR;
-
-	/* (1) Sync cmd */
-	rc = escore_spi_sbl_cmd(escore, ES_SPI_SBL_SYNC_CMD, &sbl_sync_ack, 5);
-	pr_debug("[%s:%d]%s():rc=%d, sbl_sync_ack=0x%08x\n", __FILE__, \
-		__LINE__, __func__, rc, sbl_sync_ack);
-	escore->cmd_compl_mode = cmd_compl_mode;
-	if (rc < 0) {
-		pr_err("%s(): firmware load failed sync ack %d\n",
-		       __func__, rc);
-		goto escore_spi_boot_setup_failed;
-	}
-
-	sbl_sync_ack = be32_to_cpu(sbl_sync_ack);
-	pr_debug("%s(): sbl_sync_ack=0x%08x, ES_SPI_SBL_SYNC_ACK = 0x%08x\n",
-		__func__, sbl_sync_ack, ES_SPI_SBL_SYNC_ACK);
-	if (sbl_sync_ack != ES_SPI_SBL_SYNC_ACK) {
-		pr_err("%s(): sync ack pattern fail 0x%x\n", __func__,
-				sbl_sync_ack);
-		rc = -EIO;
-		goto escore_spi_boot_setup_failed;
-	}
-
-	/* (2) Sync byte */
-	rc = escore_spi_sbl_cmd(escore, ES_SPI_SYNCBYTE_CMD, &sbl_sync_ack, 1);
-	pr_debug("[%s:%d]%s():rc=%d, sbl_byte_ack=0x%08x\n", __FILE__, \
-		__LINE__, __func__, rc, sbl_sync_ack);
-
-	if (rc < 0) {
-		pr_err("%s(): firmware load failed sync byte ack %d\n",
-		       __func__, rc);
-		goto escore_spi_boot_setup_failed;
-	}
-
-	if (sbl_sync_ack != ES_SPI_SYNCBYTE_ACK) {
-		pr_err("%s(): boot ack pattern fail\n", __func__);
-		rc = -EIO;
-		goto escore_spi_boot_setup_failed;
-	}
-
-	/* (3) Boot cmd */
-	rc = escore_spi_sbl_cmd(escore, ES_SPI_BOOT_CMD, &boot_ack, 5);
-	pr_debug("[%s:%d]%s():rc=%d, boot_ack=0x%08x\n", __FILE__, __LINE__, \
-		__func__, rc, boot_ack);
-		if (rc < 0) {
-			pr_err("%s(): firmware load failed boot ack %d\n",
-			       __func__, rc);
-			goto escore_spi_boot_setup_failed;
-		}
-
-		boot_ack = be32_to_cpu(boot_ack);
-		pr_debug("%s(): BOOT ACK = 0x%08x\n", __func__, boot_ack);
-
-		if (boot_ack != ES_SPI_BOOT_ACK) {
-			pr_err("%s():boot ack pattern fail 0x%08x", __func__,
-					boot_ack);
-			rc = -EIO;
-			goto escore_spi_boot_setup_failed;
-		}
-	rc = escore_spi_setup(escore->pdata->spi_fw_download_speed);
-escore_spi_boot_setup_failed:
-	return rc;
-}
-
-int escore_spi_boot_finish(struct escore_priv *escore)
-{
-	int rc = 0;
-	int sync_retry = ES_SYNC_MAX_RETRY;
-
-	rc = escore_spi_setup(escore->pdata->spi_operational_speed);
-	msleep(50);
-	/* New es855 sync_seq after firmware downloading */
-	do {
-		rc = es855_sync_seq(escore, NULL, 0);
-		if (rc != 0)
-			continue;
-
-		pr_info("%s(): firmware load success", __func__);
-		break;
-	} while (sync_retry--);
-	return rc;
-}
-#else
 
 static int escore_spi_boot_setup(struct escore_priv *escore)
 {
@@ -488,9 +450,14 @@ static int escore_spi_boot_setup(struct escore_priv *escore)
 	u16 sbl_sync_cmd = ES_SPI_SYNC_CMD;
 	u16 sbl_sync_ack;
 	int retry = 5;
+	int iteration_count = 0;
 	int rc;
 
 	pr_debug("%s(): prepare for fw download\n", __func__);
+	rc = ESCORE_SPI_SET_BITS_PER_WORD(16);
+	if (rc < 0)
+		return rc;
+
 	msleep(20);
 	sbl_sync_cmd = cpu_to_be16(sbl_sync_cmd);
 
@@ -522,14 +489,14 @@ static int escore_spi_boot_setup(struct escore_priv *escore)
 
 	usleep_range(4000, 4050);
 	pr_debug("%s(): write ES_BOOT_CMD = 0x%04x\n", __func__, boot_cmd);
+	boot_cmd = cpu_to_be16(boot_cmd);
+	rc = escore_spi_write(escore, &boot_cmd, sizeof(boot_cmd));
+	if (rc < 0) {
+		pr_err("%s(): firmware load failed boot write %d\n",
+		       __func__, rc);
+		goto escore_spi_boot_setup_failed;
+	}
 	do {
-		boot_cmd = cpu_to_be16(boot_cmd);
-		rc = escore_spi_write(escore, &boot_cmd, sizeof(boot_cmd));
-		if (rc < 0) {
-			pr_err("%s(): firmware load failed boot write %d\n",
-			       __func__, rc);
-			goto escore_spi_boot_setup_failed;
-		}
 		usleep_range(ES_SPI_1MS_DELAY, ES_SPI_1MS_DELAY + 5);
 		rc = escore_spi_read(escore, &boot_ack, sizeof(boot_ack));
 		if (rc < 0) {
@@ -543,8 +510,14 @@ static int escore_spi_boot_setup(struct escore_priv *escore)
 			pr_err("%s():boot ack pattern fail 0x%08x", __func__,
 					boot_ack);
 			rc = -EIO;
+			iteration_count++;
 		}
 	} while (rc && retry--);
+	if (rc < 0) {
+		pr_err("%s(): boot ack pattern fail after %d iterations\n",
+				__func__, iteration_count);
+		goto escore_spi_boot_setup_failed;
+	}
 	rc = escore_spi_setup(escore->pdata->spi_fw_download_speed);
 escore_spi_boot_setup_failed:
 	return rc;
@@ -556,6 +529,10 @@ int escore_spi_boot_finish(struct escore_priv *escore)
 	u32 sync_ack;
 	int rc = 0;
 	int sync_retry = ES_SYNC_MAX_RETRY;
+
+	rc = ESCORE_SPI_SET_BITS_PER_WORD(32);
+	if (rc < 0)
+		return rc;
 
 	rc = escore_spi_setup(escore->pdata->spi_operational_speed);
 	msleep(50);
@@ -582,7 +559,27 @@ int escore_spi_boot_finish(struct escore_priv *escore)
 	} while (sync_retry--);
 	return rc;
 }
-#endif
+
+static int escore_spi_abort_config(struct escore_priv *escore)
+{
+	int rc;
+
+	rc = escore_spi_setup(escore->pdata->spi_operational_speed);
+	if (rc < 0)
+		pr_err("%s(): config spi failed, rc = %d\n", __func__, rc);
+
+	return rc;
+}
+
+static int escore_spi_wdb_config(struct escore_priv *escore)
+{
+	return escore_spi_setup(escore->pdata->spi_wdb_speed);
+}
+
+static int escore_spi_reset_wdb_config(struct escore_priv *escore)
+{
+	return escore_spi_setup(escore->pdata->spi_operational_speed);
+}
 
 static int escore_spi_populate_dt_data(struct escore_priv *escore)
 {
@@ -612,6 +609,17 @@ static int escore_spi_populate_dt_data(struct escore_priv *escore)
 				__func__);
 		return rc;
 	}
+
+	rc = of_property_read_u32(node, "adnc,spi-wdb-speed",
+			&pdata->spi_wdb_speed);
+	if (rc || pdata->spi_wdb_speed == 0) {
+		pr_err("%s, Error in parsing adnc,spi-wdb-speed\n", __func__);
+		pr_debug("%s, Use operational speed for writing data block\n",
+				__func__);
+		pdata->spi_wdb_speed = pdata->spi_operational_speed;
+		rc = 0;
+	}
+
 	return rc;
 
 }
@@ -621,6 +629,8 @@ static void escore_spi_setup_pri_intf(struct escore_priv *escore)
 	escore->bus.ops.write = escore_spi_write;
 	escore->bus.ops.cmd = escore_spi_cmd;
 	escore->streamdev = es_spi_streamdev;
+	escore->bus.ops.cpu_to_bus = escore_cpu_to_spi;
+	escore->bus.ops.bus_to_cpu = escore_spi_to_cpu;
 }
 
 static int escore_spi_setup_high_bw_intf(struct escore_priv *escore)
@@ -629,12 +639,13 @@ static int escore_spi_setup_high_bw_intf(struct escore_priv *escore)
 
 	escore->boot_ops.setup = escore_spi_boot_setup;
 	escore->boot_ops.finish = escore_spi_boot_finish;
-	escore->bus.ops.high_bw_write = escore_spi_write;
+	escore->bus.ops.high_bw_write = escore_spi_high_bw_write;
 	escore->bus.ops.high_bw_read = escore_spi_read;
 	escore->bus.ops.high_bw_cmd = escore_spi_cmd;
+	escore->boot_ops.escore_abort_config = escore_spi_abort_config;
 	escore->bus.ops.rdb = escore_spi_datablock_read;
-	escore->bus.ops.cpu_to_bus = escore_cpu_to_spi;
-	escore->bus.ops.bus_to_cpu = escore_spi_to_cpu;
+	escore->bus.ops.cpu_to_high_bw_bus = escore_cpu_to_spi;
+	escore->bus.ops.high_bw_bus_to_cpu = escore_spi_to_cpu;
 
 	rc = escore->probe(escore->dev);
 	if (rc)
@@ -644,9 +655,19 @@ static int escore_spi_setup_high_bw_intf(struct escore_priv *escore)
 	if (rc)
 		goto out;
 
+	if (escore->pdata->spi_wdb_speed !=
+			escore->pdata->spi_operational_speed) {
+		escore->datablock_dev.wdb_config = escore_spi_wdb_config;
+		escore->datablock_dev.wdb_reset_config =
+			escore_spi_reset_wdb_config;
+	}
+
+#ifdef CONFIG_SND_SOC_ES_ASYNC_FW_LOAD
+	wait_for_completion(&escore->request_fw);
+#endif
+	mutex_lock(&escore->access_lock);
 	rc = escore->boot_ops.bootup(escore);
-	if (rc)
-		goto out;
+	mutex_unlock(&escore->access_lock);
 
 out:
 	return rc;
@@ -656,6 +677,9 @@ static int escore_spi_probe(struct spi_device *spi)
 {
 	int rc;
 	struct escore_priv *escore = &escore_priv;
+#ifdef CONFIG_SND_SOC_ES_ASYNC_FW_LOAD
+	static struct escore_interface interface;
+#endif
 
 	dev_set_drvdata(&spi->dev, &escore_priv);
 
@@ -666,7 +690,18 @@ static int escore_spi_probe(struct spi_device *spi)
 	if (escore->high_bw_intf == ES_SPI_INTF)
 		escore->bus.setup_high_bw_intf = escore_spi_setup_high_bw_intf;
 
+#ifdef CONFIG_SND_SOC_ES_ASYNC_FW_LOAD
+	interface.dev = &escore_spi->dev;
+	interface.curr_intf = ES_SPI_INTF;
+	rc = escore_create_probe_thread(&interface);
+	if (rc < 0) {
+		pr_err("%s(): thread create fail\n", __func__);
+
+		return rc;
+	}
+#else
 	rc = escore_probe(escore, &spi->dev, ES_SPI_INTF, ES_CONTEXT_PROBE);
+#endif
 	return rc;
 }
 

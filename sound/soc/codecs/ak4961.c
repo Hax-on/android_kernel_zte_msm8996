@@ -36,6 +36,68 @@
 #include <linux/timer.h>
 #include "ak4961.h"
 
+//weizj add for audience es804
+#if defined(CONFIG_SND_SOC_ES705) || defined(CONFIG_SND_SOC_ES705_ESCORE) || \
+	defined(CONFIG_SND_SOC_ES804_ESCORE)
+#include "audience/es705-export.h"
+#endif
+
+#if defined(CONFIG_SND_SOC_ES705)
+
+#define CONFIG_SND_SOC_ESXXX
+#define REMOTE_ROUTE_ENABLE_CB  es705_remote_route_enable
+#define SLIM_GET_CHANNEL_MAP_CB es705_slim_get_channel_map
+#define SLIM_SET_CHANNEL_MAP_CB es705_slim_set_channel_map
+#define SLIM_HW_PARAMS_CB       es705_slim_hw_params
+#define REMOTE_CFG_SLIM_RX_CB	es705_remote_cfg_slim_rx
+#define REMOTE_CLOSE_SLIM_RX_CB	es705_remote_close_slim_rx
+#define REMOTE_CFG_SLIM_TX_CB	es705_remote_cfg_slim_tx
+#define REMOTE_CLOSE_SLIM_TX_CB	es705_remote_close_slim_tx
+#define REMOTE_ADD_CODEC_CONTROLS_CB	es705_remote_add_codec_controls
+
+#elif defined(CONFIG_SND_SOC_ES705_ESCORE) || \
+	defined(CONFIG_SND_SOC_ES804_ESCORE)
+
+#if defined(CONFIG_SND_SOC_ES_SLIM)
+#define CONFIG_SND_SOC_ESXXX
+#define REMOTE_ROUTE_ENABLE_CB		es705_remote_route_enable
+#define SLIM_GET_CHANNEL_MAP_CB		escore_slim_get_channel_map
+#define SLIM_SET_CHANNEL_MAP_CB		escore_slim_set_channel_map
+#define SLIM_HW_PARAMS_CB		escore_slim_hw_params
+#define REMOTE_CFG_SLIM_RX_CB		escore_remote_cfg_slim_rx
+#define REMOTE_CLOSE_SLIM_RX_CB		escore_remote_close_slim_rx
+#define REMOTE_CFG_SLIM_TX_CB		escore_remote_cfg_slim_tx
+#define REMOTE_CLOSE_SLIM_TX_CB		escore_remote_close_slim_tx
+#define REMOTE_ADD_CODEC_CONTROLS_CB	es705_remote_add_codec_controls
+#endif
+
+#endif
+
+#ifdef CONFIG_SND_SOC_ESXXX
+int (*remote_route_enable)(struct snd_soc_dai *dai) = REMOTE_ROUTE_ENABLE_CB;
+int (*slim_get_channel_map)(struct snd_soc_dai *dai,
+		unsigned int *tx_num, unsigned int *tx_slot,
+		unsigned int *rx_num, unsigned int *rx_slot)
+			= SLIM_GET_CHANNEL_MAP_CB;
+int (*slim_set_channel_map)(struct snd_soc_dai *dai,
+		unsigned int tx_num, unsigned int *tx_slot,
+		unsigned int rx_num, unsigned int *rx_slot)
+			= SLIM_SET_CHANNEL_MAP_CB;
+int (*slim_hw_params)(struct snd_pcm_substream *substream,
+		struct snd_pcm_hw_params *params,
+		struct snd_soc_dai *dai)
+		= SLIM_HW_PARAMS_CB;
+int (*remote_cfg_slim_rx)(int dai_id)	=	REMOTE_CFG_SLIM_RX_CB;
+int (*remote_close_slim_rx)(int dai_id)	=	REMOTE_CLOSE_SLIM_RX_CB;
+int (*remote_cfg_slim_tx)(int dai_id)	=	REMOTE_CFG_SLIM_TX_CB;
+int (*remote_close_slim_tx)(int dai_id)	=	REMOTE_CLOSE_SLIM_TX_CB;
+int (*remote_add_codec_controls)(struct snd_soc_codec *codec)
+		= REMOTE_ADD_CODEC_CONTROLS_CB;
+
+#endif
+//weizj add for audience es804
+
+
 #define AK4961_NUM_PRAM			7  //for slim_spi 2014-11-17
 #define AK4961_NUM_CRAM			14 //for slim_spi 2014-11-17
 #define AK4961_NUM_ORAM			4 // for oram 
@@ -6439,6 +6501,12 @@ static int ak4961_codec_probe(struct snd_soc_codec *codec)
 	struct clk *cdc_ext_clk = NULL;
 
 	dev_info(codec->dev, "%s()\n", __func__);
+
+//weizj add for audience es804
+#ifdef CONFIG_SND_SOC_ESXXX
+    dev_info(codec->dev, "%s: weizj reg es804", __func__);
+	remote_add_codec_controls(codec);
+#endif
 
 	control = dev_get_drvdata(codec->dev->parent);
 

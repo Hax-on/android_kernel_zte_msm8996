@@ -30,6 +30,7 @@ int escore_queue_msg_to_list(struct escore_priv *escore,
 }
 EXPORT_SYMBOL_GPL(escore_queue_msg_to_list);
 
+/* This function must be called with access_lock acquired */
 int escore_write_msg_list(struct escore_priv *escore)
 {
 	struct msg_list_entry *entry;
@@ -52,8 +53,7 @@ int escore_write_msg_list(struct escore_priv *escore)
 		memcpy((char *)api_word, entry->msg, entry->msg_len);
 		for (i = 0; i < entry->msg_len / 4; i++) {
 			resp = 0;
-			rc = escore->bus.ops.cmd(escore, api_word[i],
-					&resp);
+			rc = escore_cmd_nopm(escore, api_word[i], &resp);
 			if (rc < 0) {
 				pr_err("%s(): Write Msg fail %d\n",
 				       __func__, rc);
