@@ -38,9 +38,7 @@ int escore_i2c_read(struct escore_priv *escore, void *buf, int len)
 	};
 	int rc = 0;
 
-	mutex_lock(&escore->api_mutex);
 	rc = i2c_transfer(escore_i2c->adapter, msg, 1);
-	mutex_unlock(&escore->api_mutex);
 
 	/*
 	 * i2c_transfer returns number of messages executed. Since we
@@ -50,10 +48,12 @@ int escore_i2c_read(struct escore_priv *escore, void *buf, int len)
 	if (rc != 1) {
 		pr_err("%s(): i2c_transfer() failed, rc = %d, msg_len = %d\n",
 			__func__, rc, len);
-		return -EIO;
-	} else {
-		return 0;
+
+		ESCORE_FW_RECOVERY_FORCED_OFF(escore);
+		return rc;
 	}
+
+	return 0;
 }
 
 int escore_i2c_write(struct escore_priv *escore, const void *buf, int len)
@@ -66,13 +66,19 @@ int escore_i2c_write(struct escore_priv *escore, const void *buf, int len)
 	msg.addr = escore_i2c->addr;
 	msg.flags = 0;
 
-	mutex_lock(&escore->api_mutex);
 	while (written < len) {
 		xfer_len = min(len - written, max_xfer_len);
 
 		msg.len = xfer_len;
 		msg.buf = (void *)(buf + written);
 		do {
+			if (escore->fw_auto_recovered) {
+				dev_err(escore->dev,
+					"%s() aborted as fw recovery detected\n"
+						, __func__);
+				return -EIO;
+			}
+
 			rc = i2c_transfer(escore_i2c->adapter, &msg, 1);
 			if (rc == 1)
 				break;
@@ -82,10 +88,23 @@ int escore_i2c_write(struct escore_priv *escore, const void *buf, int len)
 			usleep_range(10000, 10050);
 			--retry;
 		} while (retry != 0);
+
+		/*
+		 * i2c_transfer returns number of messages executed. Since we
+		 * are always sending only 1 msg, return value should be 1 for
+		 * success case
+		 */
+		if (rc != 1) {
+			pr_err("%s:i2c_transfer() failed, rc=%d, msg_len=%d\n",
+					 __func__, rc, xfer_len);
+
+			ESCORE_FW_RECOVERY_FORCED_OFF(escore);
+			return rc;
+		}
+
 		retry = ES_MAX_RETRIES;
 		written += xfer_len;
 	}
-	mutex_unlock(&escore->api_mutex);
 
 	return 0;
 }
@@ -99,9 +118,10 @@ int escore_i2c_cmd(struct escore_priv *escore, u32 cmd, u32 *resp)
 
 	dev_dbg(escore->dev,
 			"%s: cmd=0x%08x  sr=0x%08x\n", __func__, cmd, sr);
+	INC_DISABLE_FW_RECOVERY_USE_CNT(escore);
 
 	if ((escore->cmd_compl_mode == ES_CMD_COMP_INTR) && !sr)
-		escore->wait_api_intr = 1;
+		escore_set_api_intr_wait(escore);
 
 	*resp = 0;
 	cmd = cpu_to_be32(cmd);
@@ -110,18 +130,20 @@ int escore_i2c_cmd(struct escore_priv *escore, u32 cmd, u32 *resp)
 		goto cmd_exit;
 
 	do {
+		if (escore->fw_auto_recovered) {
+			dev_err(escore->dev,
+					"%s() aborted as fw recovery detected\n"
+					, __func__);
+			DEC_DISABLE_FW_RECOVERY_USE_CNT(escore);
+			return -EIO;
+		}
+
 		if (escore->cmd_compl_mode == ES_CMD_COMP_INTR) {
 			pr_debug("%s(): Waiting for API interrupt. Jiffies:%lu",
 					__func__, jiffies);
-			err = wait_for_completion_timeout(&escore->cmd_compl,
-					msecs_to_jiffies(ES_RESP_TOUT_MSEC));
-			if (!err) {
-				pr_debug("%s(): API Interrupt wait timeout\n",
-						__func__);
-				escore->wait_api_intr = 0;
-				err = -ETIMEDOUT;
+			err = escore_api_intr_wait_completion(escore);
+			if (err)
 				break;
-			}
 		} else {
 			usleep_range(ES_RESP_POLL_TOUT,
 					ES_RESP_POLL_TOUT + 500);
@@ -135,13 +157,13 @@ int escore_i2c_cmd(struct escore_priv *escore, u32 cmd, u32 *resp)
 				"%s: I2C Read() failed %d\n", __func__, err);
 		} else if ((*resp & ES_ILLEGAL_CMD) == ES_ILLEGAL_CMD) {
 			dev_err(escore->dev, "%s: illegal command 0x%08x\n",
-				__func__, cmd);
+				__func__, be32_to_cpu(cmd));
 			err = -EINVAL;
 			goto cmd_exit;
 		} else if (*resp == ES_NOT_READY) {
 			dev_dbg(escore->dev,
 				"%s: escore_i2c_read() not ready\n", __func__);
-			err = -ETIMEDOUT;
+			err = -EBUSY;
 		} else {
 			goto cmd_exit;
 		}
@@ -151,6 +173,10 @@ int escore_i2c_cmd(struct escore_priv *escore, u32 cmd, u32 *resp)
 
 cmd_exit:
 	update_cmd_history(be32_to_cpu(cmd), *resp);
+	DEC_DISABLE_FW_RECOVERY_USE_CNT(escore);
+	if (err && ((*resp & ES_ILLEGAL_CMD) != ES_ILLEGAL_CMD))
+		ESCORE_FW_RECOVERY_FORCED_OFF(escore);
+
 	return err;
 }
 
@@ -163,9 +189,6 @@ int escore_i2c_boot_setup(struct escore_priv *escore)
 
 	pr_info("%s()\n", __func__);
 	pr_info("%s(): write ES_BOOT_CMD = 0x%04x\n", __func__, boot_cmd);
-#ifdef CONFIG_MQ100_SENSOR_HUB
-	mq100_indicate_state_change(MQ100_STATE_RESET);
-#endif
 	cpu_to_be16s(&boot_cmd);
 	memcpy(msg, (char *)&boot_cmd, 2);
 	rc = escore_i2c_write(escore, msg, 2);
@@ -218,9 +241,6 @@ int escore_i2c_boot_finish(struct escore_priv *escore)
 					__func__);
 			rc = -EIO;
 		} else {
-#ifdef CONFIG_MQ100_SENSOR_HUB
-			mq100_indicate_state_change(MQ100_STATE_NORMAL);
-#endif
 			pr_info("%s(): firmware load success", __func__);
 			break;
 		}
@@ -235,6 +255,8 @@ static void escore_i2c_setup_pri_intf(struct escore_priv *escore)
 	escore->bus.ops.write = escore_i2c_write;
 	escore->bus.ops.cmd = escore_i2c_cmd;
 	escore->streamdev = es_i2c_streamdev;
+	escore->bus.ops.cpu_to_bus = escore_cpu_to_i2c;
+	escore->bus.ops.bus_to_cpu = escore_i2c_to_cpu;
 }
 
 static int escore_i2c_setup_high_bw_intf(struct escore_priv *escore)
@@ -246,15 +268,18 @@ static int escore_i2c_setup_high_bw_intf(struct escore_priv *escore)
 	escore->bus.ops.high_bw_cmd = escore_i2c_cmd;
 	escore->boot_ops.setup = escore_i2c_boot_setup;
 	escore->boot_ops.finish = escore_i2c_boot_finish;
-	escore->bus.ops.cpu_to_bus = escore_cpu_to_i2c;
-	escore->bus.ops.bus_to_cpu = escore_i2c_to_cpu;
+	escore->bus.ops.cpu_to_high_bw_bus = escore_cpu_to_i2c;
+	escore->bus.ops.high_bw_bus_to_cpu = escore_i2c_to_cpu;
 	rc = escore->probe(escore->dev);
 	if (rc)
 		goto out;
 
+#ifdef CONFIG_SND_SOC_ES_ASYNC_FW_LOAD
+	wait_for_completion(&escore->request_fw);
+#endif
+	mutex_lock(&escore->access_lock);
 	rc = escore->boot_ops.bootup(escore);
-	if (rc)
-		goto out;
+	mutex_unlock(&escore->access_lock);
 
 out:
 	return rc;
@@ -358,9 +383,11 @@ static int escore_i2c_probe(struct i2c_client *i2c,
 			   const struct i2c_device_id *id)
 {
 	struct escore_priv *escore = &escore_priv;
-	int rc;
+	int rc  = 0;
 	struct device_node *np = NULL;
-
+#ifdef CONFIG_SND_SOC_ES_ASYNC_FW_LOAD
+	static struct escore_interface interface;
+#endif
 	pr_debug("%s:%d", __func__, __LINE__);
 
 	escore_i2c = i2c;
@@ -399,17 +426,23 @@ static int escore_i2c_probe(struct i2c_client *i2c,
 
 continue_init:
 #endif
+#ifdef CONFIG_SND_SOC_ES_ASYNC_FW_LOAD
+	interface.dev = &i2c->dev;
+	interface.curr_intf = ES_I2C_INTF;
+	rc = escore_create_probe_thread(&interface);
+	if (rc < 0) {
+		pr_err("%s(): thread create fail\n", __func__);
+
+		return rc;
+	}
+#else
 	rc = escore_probe(escore, &i2c->dev, ES_I2C_INTF, ES_CONTEXT_PROBE);
+#endif
 	return rc;
 }
 
 static int escore_i2c_remove(struct i2c_client *i2c)
 {
-	struct esxxx_platform_data *pdata = i2c->dev.platform_data;
-	if (pdata->reset_gpio != -1)
-		gpio_free(pdata->reset_gpio);
-	gpio_free(pdata->wakeup_gpio);
-	gpio_free(pdata->gpioa_gpio);
 #ifdef CONFIG_ARCH_MSM8974
 	escore_i2c_power_off(&escore_priv);
 	escore_i2c_regulator_disable(&escore_priv);
@@ -419,15 +452,37 @@ static int escore_i2c_remove(struct i2c_client *i2c)
 	return 0;
 }
 
+
+
+/* streamdev read function should return length.
+ * In case of I2C as streaming device,I2C read returns
+ * 0 in case of success  otherwise error.
+ * So implement this wrapper function to support
+ * streaming over I2C.
+ * This function return length on success and 0 in case of failure
+ * so that streaming thread exit gracefully.
+ */
+static int escore_i2c_stream_read(struct escore_priv *escore, void *buf,
+		int len)
+{
+	int rc = escore_i2c_read(escore, buf, len);
+
+	if (rc != 0) {
+		pr_err("%s: i2c stream read fail\n", __func__);
+		return 0;
+	}
+	return len;
+}
+
 struct es_stream_device es_i2c_streamdev = {
-	.read = escore_i2c_read,
+	.read = escore_i2c_stream_read,
 	.intf = ES_I2C_INTF,
 };
 
 int escore_i2c_init(void)
 {
 	int rc;
-	pr_debug("%s: adding i2c driver\n", __func__);
+	pr_info("%s: adding i2c driver\n", __func__);
 
 	rc = i2c_add_driver(&escore_i2c_driver);
 	if (!rc)

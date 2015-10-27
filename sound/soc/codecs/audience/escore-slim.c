@@ -574,7 +574,6 @@ int escore_slim_read(struct escore_priv *escore, void *buf, int len)
 		.comp = NULL,
 	};
 
-	mutex_lock(&escore->api_mutex);
 
 	rc = slim_get_logical_addr(sbdev, escore->gen0_client->e_addr,
 			6, &(escore->gen0_client->laddr));
@@ -583,6 +582,13 @@ int escore_slim_read(struct escore_priv *escore, void *buf, int len)
 							__func__, rc);
 
 	do {
+		if (escore->fw_auto_recovered) {
+			dev_err(escore->dev,
+					"%s() aborted as fw recovery detected\n"
+					, __func__);
+			return -EIO;
+		}
+
 		rc = slim_request_val_element(sbdev, &msg, buf, len);
 		if (rc != 0)
 			dev_warn(&sbdev->dev,
@@ -593,12 +599,14 @@ int escore_slim_read(struct escore_priv *escore, void *buf, int len)
 		usleep_range(SMB_DELAY, SMB_DELAY + 5);
 	} while (--retry);
 
-	if (rc != 0)
+	if (rc != 0) {
 		dev_err(&sbdev->dev,
 			"%s: Error read failed rc=%d after %d retries\n",
 			__func__, rc, MAX_SMB_TRIALS);
 
-	mutex_unlock(&escore->api_mutex);
+		ESCORE_FW_RECOVERY_FORCED_OFF(escore);
+	}
+
 	return rc;
 }
 
@@ -616,7 +624,6 @@ int escore_slim_write(struct escore_priv *escore, const void *buf, int len)
 
 	BUG_ON(len < 0);
 
-	mutex_lock(&escore->api_mutex);
 	rc = wr = 0;
 	while (wr < len) {
 		int sz = min(len - wr, ES_WRITE_VE_WIDTH);
@@ -638,6 +645,13 @@ int escore_slim_write(struct escore_priv *escore, const void *buf, int len)
 				__func__, rc);
 
 		do {
+			if (escore->fw_auto_recovered) {
+				dev_err(escore->dev,
+					"%s() aborted as fw recovery detected\n"
+						, __func__);
+				return -EIO;
+			}
+
 			rc = slim_change_val_element(sbdev, &msg, buf + wr, sz);
 			if (rc != 0)
 				dev_warn(&sbdev->dev,
@@ -657,7 +671,9 @@ int escore_slim_write(struct escore_priv *escore, const void *buf, int len)
 		wr += sz;
 	}
 
-	mutex_unlock(&escore->api_mutex);
+	if (rc)
+		ESCORE_FW_RECOVERY_FORCED_OFF(escore);
+
 	return rc;
 }
 
@@ -671,9 +687,10 @@ int escore_slim_cmd(struct escore_priv *escore, u32 cmd, u32 *resp)
 
 	dev_dbg(&sbdev->dev,
 			"%s: cmd=0x%08x  sr=0x%08x\n", __func__, cmd, sr);
+	INC_DISABLE_FW_RECOVERY_USE_CNT(escore);
 
 	if ((escore->cmd_compl_mode == ES_CMD_COMP_INTR) && !sr)
-		escore->wait_api_intr = 1;
+		escore_set_api_intr_wait(escore);
 
 	*resp = 0;
 	cmd = cpu_to_le32(cmd);
@@ -684,18 +701,20 @@ int escore_slim_cmd(struct escore_priv *escore, u32 cmd, u32 *resp)
 		goto cmd_exit;
 
 	do {
+		if (escore->fw_auto_recovered) {
+			dev_err(escore->dev,
+					"%s() aborted as fw recovery detected\n"
+					, __func__);
+			DEC_DISABLE_FW_RECOVERY_USE_CNT(escore);
+			return -EIO;
+		}
+
 		if (escore->cmd_compl_mode == ES_CMD_COMP_INTR) {
 			pr_debug("%s(): Waiting for API interrupt. Jiffies:%lu",
 					__func__, jiffies);
-			err = wait_for_completion_timeout(&escore->cmd_compl,
-					msecs_to_jiffies(ES_RESP_TOUT_MSEC));
-			if (!err) {
-				pr_debug("%s(): API Interrupt wait timeout\n",
-						__func__);
-				escore->wait_api_intr = 0;
-				err = -ETIMEDOUT;
+			err = escore_api_intr_wait_completion(escore);
+			if (err)
 				break;
-			}
 		} else {
 			pr_debug("%s(): Polling method\n", __func__);
 			usleep_range(ES_RESP_POLL_TOUT,
@@ -710,13 +729,13 @@ int escore_slim_cmd(struct escore_priv *escore, u32 cmd, u32 *resp)
 				"%s: slim_read() fail %d\n", __func__, err);
 		} else if ((*resp & ES_ILLEGAL_CMD) == ES_ILLEGAL_CMD) {
 			dev_err(&sbdev->dev, "%s: illegal command 0x%08x\n",
-				__func__, cmd);
+				__func__, le32_to_cpu(cmd));
 			err = -EINVAL;
 			goto cmd_exit;
 		} else if (*resp == ES_NOT_READY) {
 			dev_dbg(&sbdev->dev,
 				"%s: escore_slim_read() not ready\n", __func__);
-			err = -ETIMEDOUT;
+			err = -EBUSY;
 		} else {
 			goto cmd_exit;
 		}
@@ -726,6 +745,10 @@ int escore_slim_cmd(struct escore_priv *escore, u32 cmd, u32 *resp)
 
 cmd_exit:
 	update_cmd_history(le32_to_cpu(cmd), *resp);
+	DEC_DISABLE_FW_RECOVERY_USE_CNT(escore);
+	if (err && ((*resp & ES_ILLEGAL_CMD) != ES_ILLEGAL_CMD))
+		ESCORE_FW_RECOVERY_FORCED_OFF(escore);
+
 	return err;
 }
 
@@ -895,6 +918,11 @@ void escore_slim_shutdown(struct snd_pcm_substream *substream,
 
 	if (escore_priv.slim_dai_ops.shutdown)
 		escore_priv.slim_dai_ops.shutdown(substream, dai);
+
+	if (codec && codec->dev && codec->dev->parent) {
+		pm_runtime_mark_last_busy(codec->dev->parent);
+		pm_runtime_put(codec->dev->parent);
+	}
 
 	return;
 }
@@ -1163,6 +1191,8 @@ static void escore_slim_setup_pri_intf(struct escore_priv *escore)
 	escore->bus.ops.read = escore_slim_read;
 	escore->bus.ops.write = escore_slim_write;
 	escore->bus.ops.cmd = escore_slim_cmd;
+	escore->bus.ops.cpu_to_bus = escore_cpu_to_slim;
+	escore->bus.ops.bus_to_cpu = escore_slim_to_cpu;
 
 #ifndef CONFIG_SLIMBUS_MSM_NGD
 	/* Fix-Me: Board may not be ready by now. so this may fail */
@@ -1181,17 +1211,20 @@ static int escore_slim_setup_high_bw_intf(struct escore_priv *escore)
 	escore->bus.ops.high_bw_cmd = escore_slim_cmd;
 	escore->boot_ops.setup = escore_slim_boot_setup;
 	escore->boot_ops.finish = escore_slim_boot_finish;
-	escore->bus.ops.cpu_to_bus = escore_cpu_to_slim;
-	escore->bus.ops.bus_to_cpu = escore_slim_to_cpu;
+	escore->bus.ops.cpu_to_high_bw_bus = escore_cpu_to_slim;
+	escore->bus.ops.high_bw_bus_to_cpu = escore_slim_to_cpu;
 
 
 	rc = escore->probe(&escore->gen0_client->dev);
 	if (rc)
 		goto out;
 
+#ifdef CONFIG_SND_SOC_ES_ASYNC_FW_LOAD
+	wait_for_completion(&escore->request_fw);
+#endif
+	mutex_lock(&escore->access_lock);
 	rc = escore->boot_ops.bootup(escore);
-	if (rc)
-		goto out;
+	mutex_unlock(&escore->access_lock);
 
 out:
 
@@ -1268,7 +1301,10 @@ static int escore_slim_probe(struct slim_device *sbdev)
 	const struct slim_device_id *id;
 	static struct slim_device intf_dev;
 	int rc = 0;
-
+#if !defined(CONFIG_SLIMBUS_MSM_NGD) \
+		&& defined(CONFIG_SND_SOC_ES_ASYNC_FW_LOAD)
+	static struct escore_interface interface;
+#endif
 	dev_dbg(&sbdev->dev, "%s(): sbdev->name = %s\n", __func__, sbdev->name);
 
 #ifdef CONFIG_SLIMBUS_MSM_NGD
@@ -1331,9 +1367,22 @@ static int escore_slim_probe(struct slim_device *sbdev)
 		escore->bus.setup_high_bw_intf = escore_slim_setup_high_bw_intf;
 
 #ifndef CONFIG_SLIMBUS_MSM_NGD
+
+#ifdef CONFIG_SND_SOC_ES_ASYNC_FW_LOAD
+	interface.dev = &escore_priv.gen0_client->dev;
+	interface.curr_intf = ES_SLIM_INTF;
+	rc = escore_create_probe_thread(&interface);
+	if (rc < 0) {
+		pr_err("%s(): thread create fail\n", __func__);
+
+		return rc;
+	}
+#else
 	rc = escore_probe(&escore_priv, &escore_priv.gen0_client->dev,
 			ES_SLIM_INTF, ES_CONTEXT_PROBE);
-#endif
+#endif /* CONFIG_SND_SOC_ES_ASYNC_FW_LOAD */
+
+#endif /* !CONFIG_SLIMBUS_MSM_NGD */
 
 #ifdef CONFIG_SLIMBUS_MSM_NGD
 	mutex_unlock(&slimbus_fw_load_mutex);
@@ -1351,13 +1400,7 @@ out:
 
 static int escore_slim_remove(struct slim_device *sbdev)
 {
-	struct esxxx_platform_data *pdata = sbdev->dev.platform_data;
-
 	dev_dbg(&sbdev->dev, "%s(): sbdev->name = %s\n", __func__, sbdev->name);
-
-	gpio_free(pdata->reset_gpio);
-	gpio_free(pdata->wakeup_gpio);
-	gpio_free(pdata->gpioa_gpio);
 
 	snd_soc_unregister_codec(&sbdev->dev);
 

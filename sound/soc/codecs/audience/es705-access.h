@@ -14,7 +14,8 @@
 static struct es705_api_access es705_api_access[ES705_API_ADDR_MAX] = {
 #elif defined(CONFIG_SND_SOC_ES705_ESCORE) || \
 	defined(CONFIG_SND_SOC_ES704_ESCORE) || \
-	defined(CONFIG_SND_SOC_ES804_ESCORE)
+	defined(CONFIG_SND_SOC_ES804_ESCORE) || \
+	defined(CONFIG_SND_SOC_ES902_ESCORE)
 static struct escore_api_access es705_api_access[ES705_API_ADDR_MAX] = {
 #endif
 	[ES705_MIC_CONFIG] = {
@@ -80,15 +81,6 @@ static struct escore_api_access es705_api_access[ES705_API_ADDR_MAX] = {
 		.val_shift = 0,
 		.val_max = 65535,
 	},
-	[ES705_BWE_MAX_SNR] = {
-		.read_msg = { ES705_API_WORD(ES705_GET_ALGO_PARAM, 0x0051) },
-		.read_msg_len = 4,
-		.write_msg = { ES705_API_WORD(ES705_SET_ALGO_PARAM_ID, 0x0051),
-			       ES705_API_WORD(ES705_SET_ALGO_PARAM, 0x0000) },
-		.write_msg_len = 8,
-		.val_shift = 0,
-		.val_max = 65535,
-	},
 	[ES705_BWE_POST_EQ_ENABLE] = {
 		.read_msg = { ES705_API_WORD(ES705_GET_ALGO_PARAM, 0x0052) },
 		.read_msg_len = 4,
@@ -143,14 +135,6 @@ static struct escore_api_access es705_api_access[ES705_API_ADDR_MAX] = {
 		.val_shift = 0,
 		.val_max = 1,
 	},
-	[ES705_ALGO_SAMPLE_RATE] = {
-		.read_msg = { ES705_API_WORD(0x804b, 0x0000) },
-		.read_msg_len = 4,
-		.write_msg = { ES705_API_WORD(0x804c, 0x0000) },
-		.write_msg_len = 4,
-		.val_shift = 0,
-		.val_max = 5,
-	},
 	[ES705_CHANGE_STATUS] = {
 		.read_msg = { ES705_API_WORD(0x804f, 0x0000) },
 		.read_msg_len = 4,
@@ -158,14 +142,6 @@ static struct escore_api_access es705_api_access[ES705_API_ADDR_MAX] = {
 		.write_msg_len = 4,
 		.val_shift = 0,
 		.val_max = 4,
-	},
-	[ES705_MIX_SAMPLE_RATE] = {
-		.read_msg = { ES705_API_WORD(0x8065, 0x0000) },
-		.read_msg_len = 4,
-		.write_msg = { ES705_API_WORD(0x805e, 0x0000) },
-		.write_msg_len = 4,
-		.val_shift = 0,
-		.val_max = 5,
 	},
 	[ES705_FW_FIRST_CHAR] = {
 		.read_msg = { ES705_API_WORD(0x8020, 0x0000) },
@@ -249,7 +225,7 @@ static struct escore_api_access es705_api_access[ES705_API_ADDR_MAX] = {
 			       ES705_API_WORD(ES705_SET_ALGO_PARAM, 0x0000) },
 		.write_msg_len = 8,
 		.val_shift = 0,
-		.val_max = 5,
+		.val_max = 2,
 	},
 	[ES705_VOICE_SENSE_TRAINING_STATUS] = {
 		.read_msg = { ES705_API_WORD(ES705_GET_ALGO_PARAM, 0x5007) },
@@ -258,7 +234,7 @@ static struct escore_api_access es705_api_access[ES705_API_ADDR_MAX] = {
 			       ES705_API_WORD(ES705_SET_ALGO_PARAM, 0x0000) },
 		.write_msg_len = 8,
 		.val_shift = 0,
-		.val_max = 4,
+		.val_max = 7,
 	},
 	[ES705_VOICE_SENSE_TRAINING_MODEL_LENGTH] = {
 		.read_msg = { ES705_API_WORD(ES705_GET_ALGO_PARAM, 0x500A) },
@@ -317,6 +293,48 @@ static struct escore_api_access es705_api_access[ES705_API_ADDR_MAX] = {
 		.write_msg_len = 8,
 		.val_shift = 0,
 		.val_max = 1,
+	},
+	[ES80X_AF_DUO_MODE] = {
+		.read_msg = { ES705_API_WORD(ES705_GET_ALGO_PARAM, 0x2002) },
+		.read_msg_len = 4,
+		.write_msg = { ES705_API_WORD(ES705_SET_ALGO_PARAM_ID, 0x2002),
+			       ES705_API_WORD(ES705_SET_ALGO_PARAM, 0x0000) },
+		.write_msg_len = 8,
+		.val_shift = 0,
+		.val_max = 1,
+	},
+	[ES80X_ENABLE_SDE_MODE] = {
+		.read_msg = { ES705_API_WORD(ES705_GET_ALGO_PARAM, 0x202A) },
+		.read_msg_len = 4,
+		.write_msg = { ES705_API_WORD(ES705_SET_ALGO_PARAM_ID, 0x202A),
+			       ES705_API_WORD(ES705_SET_ALGO_PARAM, 0x0000) },
+		.write_msg_len = 8,
+		.val_shift = 0,
+		.val_max = 1,
+	},
+	[ES80X_SDE_BEARING_VALUE] = {
+		.read_msg = { ES705_API_WORD(ES80X_SDE_PARAMETER, 0x2000) },
+		.read_msg_len = 4,
+		.write_msg = { ES705_API_WORD(0x8000, 0x0000) },
+		.write_msg_len = 4,
+		.val_shift = 0,
+		.val_max = 65535,
+	},
+	[ES80X_SDE_SALIENCE_VALUE] = {
+		.read_msg = { ES705_API_WORD(ES80X_SDE_PARAMETER, 0x2001) },
+		.read_msg_len = 4,
+		.write_msg = { ES705_API_WORD(0x8000, 0x0000) },
+		.write_msg_len = 4,
+		.val_shift = 0,
+		.val_max = 32767,
+	},
+	[ES80X_SDE_RMS_ESTIMATE_VALUE] = {
+		.read_msg = { ES705_API_WORD(ES80X_SDE_PARAMETER, 0x2002) },
+		.read_msg_len = 4,
+		.write_msg = { ES705_API_WORD(0x8000, 0x0000) },
+		.write_msg_len = 4,
+		.val_shift = 0,
+		.val_max = 32767,
 	},
 };
 

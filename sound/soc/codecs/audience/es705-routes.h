@@ -20,6 +20,7 @@ struct esxxx_route_config {
 	const u32 *wb;
 	const u32 *swb;
 	const u32 *fb;
+	u32 algo_type;
 };
 
 enum {
@@ -50,8 +51,8 @@ enum {
 	ROUTE_2CHAN_PLAYBACK,			/* 24 */
 	ROUTE_1CHAN_CAPTURE,			/* 25 */
 	ROUTE_2CHAN_CAPTURE,			/* 26 */
-	ROUTE_AUDIOZOOM_2MIC,			/* 27 */
-	ROUTE_AUDIOZOOM_3MIC,			/* 28 */
+	ROUTE_AUDIOFOCUS_2MIC,			/* 27 */
+	ROUTE_AUDIOFOCUS_3MIC,			/* 28 */
 	ROUTE_2MIC_NS_CT_ANALOG,		/* 29 */
 	ROUTE_2MIC_NS_FT_ANALOG,		/* 30 */
 	ROUTE_2MIC_NS_FO_ANALOG,		/* 31 */
@@ -74,10 +75,13 @@ enum {
 	ROUTE_VOICESENSE_PDM_16K,		/* 48 */
 	ROUTE_TRAINING_KEYWORD_8K,		/* 49 */
 	ROUTE_TRAINING_KEYWORD_16K,		/* 50 */
-	ROUTE_MAX						/* 51 */
+	ROUTE_ASR_3MIC_SLIM_SDE_24K,		/* 51 */
+	ROUTE_ASR_3MIC_SLIM_SDE_48K,		/* 52 */
+	ROUTE_MAX						/* 53 */
 };
 
 enum {
+	RATE_NONE,
 	RATE_NB,
 	RATE_WB,
 	RATE_SWB,
@@ -462,12 +466,12 @@ static const u32 route_2chan_capture[] = {
 	0xffffffff	/* terminate */
 };
 
-static const u32 route_audiozoom_2mic[] = {
+static const u32 route_audiofocus_2mic[] = {
 	0x9031054b,
 	0xffffffff	/* terminate */
 };
 
-static const u32 route_audiozoom_3mic[] = {
+static const u32 route_audiofocus_3mic[] = {
 	0x9031054f,
 	0xffffffff	/* terminate */
 };
@@ -592,6 +596,16 @@ static const u32 route_training_keyword_16k[] = {
 	0xffffffff      /* terminate */
 };
 
+static const u32 route_asr_3mic_slim_sde_24k[] = {
+	0x9031054e, /* 1358 - 24K Route for 3 mic ASR SDE */
+	0xffffffff      /* terminate */
+};
+
+static const u32 route_asr_3mic_slim_sde_48k[] = {
+	0x903105a3, /* 1443 - 48K Route for 3 mic ASR SDE */
+	0xffffffff      /* terminate */
+};
+
 static const struct esxxx_route_config es705_route_config[ROUTE_MAX] = {
 	[ROUTE_OFF] = {
 		.route = route_off,
@@ -601,54 +615,63 @@ static const struct esxxx_route_config es705_route_config[ROUTE_MAX] = {
 		.nb = nb_cs_voice_1mic_ct,
 		.wb = wb_cs_voice_1mic_ct,
 		.swb = swb_cs_voice_1mic_ct,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_CS_VOICE_2MIC_CT] = {
 		.route = route_cs_voice_2mic_ct,
 		.nb = nb_cs_voice_2mic_ct,
 		.wb = wb_cs_voice_2mic_ct,
 		.swb = swb_cs_voice_2mic_ct,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_CS_VOICE_3MIC_CT] = {
 		.route = route_cs_voice_3mic_ct,
 		.nb = nb_cs_voice_3mic_ct,
 		.wb = wb_cs_voice_3mic_ct,
 		.swb = swb_cs_voice_3mic_ct,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_CS_VOICE_1MIC_FT] = {
 		.route = route_cs_voice_1mic_ft,
 		.nb = nb_cs_voice_1mic_ft,
 		.wb = wb_cs_voice_1mic_ft,
 		.swb = swb_cs_voice_1mic_ft,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_CS_VOICE_2MIC_FT] = {
 		.route = route_cs_voice_2mic_ft,
 		.nb = nb_cs_voice_2mic_ft,
 		.wb = wb_cs_voice_2mic_ft,
 		.swb = swb_cs_voice_2mic_ft,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_CS_VOICE_3MIC_FT] = {
 		.route = route_cs_voice_3mic_ft,
 		.nb = nb_cs_voice_3mic_ft,
 		.wb = wb_cs_voice_3mic_ft,
 		.swb = swb_cs_voice_3mic_ft,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_CS_VOICE_HEADSET] = {
 		.route = route_cs_voice_headset,
 		.nb = nb_cs_voice_headset,
 		.wb = wb_cs_voice_headset,
 		.swb = swb_cs_voice_headset,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_CS_VOICE_1MIC_HEADPHONE] = {
 		.route = route_cs_voice_1mic_headphone,
 		.nb = nb_cs_voice_1mic_headphone,
 		.wb = wb_cs_voice_1mic_headphone,
 		.swb = swb_cs_voice_1mic_headphone,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_VOIP_1MIC_CT] = {
 		.route = route_voip_1mic_ct,
 		.nb = nb_voip_1mic_ct,
 		.wb = wb_voip_1mic_ct,
 		.swb = swb_voip_1mic_ct,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_VOIP_2MIC_CT] = {
 		.route = route_voip_2mic_ct,
@@ -656,6 +679,7 @@ static const struct esxxx_route_config es705_route_config[ROUTE_MAX] = {
 		.wb = wb_voip_2mic_ct,
 		.swb = swb_voip_2mic_ct,
 		.fb = fb_voip_2mic_ct,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_VOIP_3MIC_CT] = {
 		.route = route_voip_3mic_ct,
@@ -663,12 +687,14 @@ static const struct esxxx_route_config es705_route_config[ROUTE_MAX] = {
 		.wb = wb_voip_3mic_ct,
 		.swb = swb_voip_3mic_ct,
 		.fb = fb_voip_3mic_ct,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_VOIP_1MIC_FT] = {
 		.route = route_voip_1mic_ft,
 		.nb = nb_voip_1mic_ft,
 		.wb = wb_voip_1mic_ft,
 		.swb = swb_voip_1mic_ft,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_VOIP_2MIC_FT] = {
 		.route = route_voip_2mic_ft,
@@ -676,6 +702,7 @@ static const struct esxxx_route_config es705_route_config[ROUTE_MAX] = {
 		.wb = wb_voip_2mic_ft,
 		.swb = swb_voip_2mic_ft,
 		.fb = fb_voip_2mic_ft,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_VOIP_3MIC_FT] = {
 		.route = route_voip_3mic_ft,
@@ -683,129 +710,174 @@ static const struct esxxx_route_config es705_route_config[ROUTE_MAX] = {
 		.wb = wb_voip_3mic_ft,
 		.swb = swb_voip_3mic_ft,
 		.fb = fb_voip_3mic_ft,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_VOIP_HEADSET] = {
 		.route = route_voip_headset,
 		.nb = nb_voip_headset,
 		.wb = wb_voip_headset,
 		.swb = swb_voip_headset,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_VOIP_1MIC_HEADPHONE] = {
 		.route = route_voip_1mic_headphone,
 		.nb = nb_voip_1mic_headphone,
 		.wb = wb_voip_1mic_headphone,
 		.swb = swb_voip_1mic_headphone,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_VOICE_ASR_1MIC] = {
 		.route = route_voice_asr_1mic,
 		.nb = nb_voice_asr_1mic,
 		.wb = wb_voice_asr_1mic,
 		.swb = swb_voice_asr_1mic,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_VOICE_ASR_2MIC] = {
 		.route = route_voice_asr_2mic,
 		.nb = nb_voice_asr_2mic,
 		.wb = wb_voice_asr_2mic,
 		.swb = swb_voice_asr_2mic,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_VOICE_ASR_3MIC] = {
 		.route = route_voice_asr_3mic,
 		.nb = nb_voice_asr_3mic,
 		.wb = wb_voice_asr_3mic,
 		.swb = swb_voice_asr_3mic,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_VOICESENSE_SBUSRX4] = {
 		.route = route_voicesense_sbusrx4,
+		.algo_type = ES_ALGORITHM_VQ,
 	},
 	[ROUTE_VOICESENSE_SBUSRX0] = {
 		.route = route_voicesense_sbusrx0,
+		.algo_type = ES_ALGORITHM_VQ,
 	},
 	[ROUTE_VOICESENSE_PDM] = {
 		.route = route_voicesense_pdm,
+		.algo_type = ES_ALGORITHM_VQ,
 	},
 	[ROUTE_1CHAN_PLAYBACK] = {
 		.route = route_1chan_playback,
+		.algo_type = ES_ALGORITHM_PT,
 	},
 	[ROUTE_2CHAN_PLAYBACK] = {
 		.route = route_2chan_playback,
+		.algo_type = ES_ALGORITHM_PT,
 	},
 	[ROUTE_1CHAN_CAPTURE] = {
 		.route = route_1chan_capture,
+		.algo_type = ES_ALGORITHM_PT,
 	},
 	[ROUTE_2CHAN_CAPTURE] = {
 		.route = route_2chan_capture,
+		.algo_type = ES_ALGORITHM_PT,
 	},
-	[ROUTE_AUDIOZOOM_2MIC] = {
-		.route = route_audiozoom_2mic,
+	[ROUTE_AUDIOFOCUS_2MIC] = {
+		.route = route_audiofocus_2mic,
+		.algo_type = ES_ALGORITHM_AF,
 	},
-	[ROUTE_AUDIOZOOM_3MIC] = {
-		.route = route_audiozoom_3mic,
+	[ROUTE_AUDIOFOCUS_3MIC] = {
+		.route = route_audiofocus_3mic,
+		.algo_type = ES_ALGORITHM_AF,
 	},
 	[ROUTE_2MIC_NS_CT_ANALOG] = {
 		.route = route_2mic_ns_ct_analog,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_2MIC_NS_FT_ANALOG] = {
 		.route = route_2mic_ns_ft_analog,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_2MIC_NS_FO_ANALOG] = {
 		.route = route_2mic_ns_fo_analog,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_3MIC_NS_CT_ANALOG] = {
 		.route = route_3mic_ns_ct_analog,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_3MIC_NS_FT_ANALOG] = {
 		.route = route_3mic_ns_ft_analog,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_3MIC_NS_FO_ANALOG] = {
 		.route = route_3mic_ns_fo_analog,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_AEC7_2MIC_NS_FT] = {
-	.route = route_aec7_2mic_ns_ft,
+		.route = route_aec7_2mic_ns_ft,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_AEC7_3MIC_NS_FT] = {
-	.route = route_aec7_3mic_ns_ft,
+		.route = route_aec7_3mic_ns_ft,
+		.algo_type = ES_ALGORITHM_VP,
 	},
 	[ROUTE_ASR_2MIC_NS_AF] = {
-	.route = route_asr_2mic_ns_af,
+		.route = route_asr_2mic_ns_af,
+		.algo_type = ES_ALGORITHM_AF,
 	},
 	[ROUTE_ASR_3MIC_NS_AF] = {
 		.route = route_asr_3mic_ns_af,
+		.algo_type = ES_ALGORITHM_AF,
 	},
 	[ROUTE_AZV_2MIC] = {
 		.route = route_azv_2mic,
+		.algo_type = ES_ALGORITHM_AF,
 	},
 	[ROUTE_AZV_3MIC] = {
 		.route = route_azv_3mic,
+		.algo_type = ES_ALGORITHM_AF,
 	},
 	[ROUTE_STEREO_RECORD_48K] = {
 		.route = route_stereo_record_48k,
+		.algo_type = ES_ALGORITHM_MM,
 	},
 	[ROUTE_STEREO_RECORD_96K] = {
 		.route = route_stereo_record_96k,
+		.algo_type = ES_ALGORITHM_MM,
 	},
 	[ROUTE_STEREO_RECORD_192K] = {
 		.route = route_stereo_record_192k,
+		.algo_type = ES_ALGORITHM_MM,
 	},
 	[ROUTE_AVALON_PLAY] = {
 		.route = route_avalon_play,
+		.algo_type = ES_ALGORITHM_MM,
 	},
 	[ROUTE_AVALON_CAPTURE] = {
 		.route = route_avalon_capture,
+		.algo_type = ES_ALGORITHM_MM,
 	},
 	[ROUTE_ASR_1MIC_NS_AF_WB] = {
 		.route = route_asr_1mic_ns_af_wb,
+		.algo_type = ES_ALGORITHM_AF,
 	},
 	[ROUTE_ASR_2MIC_NS_AF_WB] = {
 		.route = route_asr_2mic_ns_af_wb,
+		.algo_type = ES_ALGORITHM_AF,
 	},
 	[ROUTE_VOICESENSE_PDM_16K] = {
 		.route = route_voicesense_pdm_16k,
+		.algo_type = ES_ALGORITHM_VQ,
 	},
 	[ROUTE_TRAINING_KEYWORD_8K] = {
 		.route = route_training_keyword_8k,
+		.algo_type = ES_ALGORITHM_VQ,
 	},
 	[ROUTE_TRAINING_KEYWORD_16K] = {
 		.route = route_training_keyword_16k,
+		.algo_type = ES_ALGORITHM_VQ,
+	},
+	[ROUTE_ASR_3MIC_SLIM_SDE_24K] = {
+		.route = route_asr_3mic_slim_sde_24k,
+		.algo_type = ES_ALGORITHM_AF,
+	},
+	[ROUTE_ASR_3MIC_SLIM_SDE_48K] = {
+		.route = route_asr_3mic_slim_sde_48k,
+		.algo_type = ES_ALGORITHM_AF,
 	},
 };
 

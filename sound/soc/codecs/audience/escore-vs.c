@@ -31,19 +31,12 @@ VS_KCONTROL(put, value)
 VS_KCONTROL(get, enum)
 VS_KCONTROL(put, enum)
 
-inline int escore_is_sleep_aborted(struct escore_priv *escore)
-{
-	if (unlikely(escore->sleep_abort))
-		return -EABORT;
-	else
-		return 0;
-}
-
 static int escore_vs_sleep(struct escore_priv *escore)
 {
 	struct escore_voice_sense *voice_sense =
 			(struct escore_voice_sense *) escore_priv.voice_sense;
 	u32 cmd, rsp;
+	int skip_vs_seq = 0, skip_vs_load = 0;
 	int rc;
 #ifdef CONFIG_SND_SOC_ES_CVQ_TIME_MEASUREMENT
 	struct timespec cvq_sleep_start;
@@ -61,6 +54,22 @@ static int escore_vs_sleep(struct escore_priv *escore)
 
 	es_cvq_profiling(&cvq_sleep_start);
 
+	if (escore->escore_power_state == ES_SET_POWER_STATE_VS_OVERLAY &&
+		escore->es_vs_route_preset == voice_sense->vs_route_preset &&
+		!escore->voice_recognition) {
+		dev_dbg(escore->dev,
+			"%s() No route change. Skipping CVQ sequence\n",
+			__func__);
+		skip_vs_seq = 1;
+		skip_vs_load = 1;
+		goto vs_set_low_power;
+	} else if (escore->escore_power_state == ES_SET_POWER_STATE_VS_OVERLAY) {
+		skip_vs_load = 1;
+		dev_dbg(escore->dev, "%s() already in VS overlay mode\n",
+								__func__);
+		goto vs_set_presets;
+	}
+
 #ifdef CONFIG_SND_SOC_ES_AVOID_REPEAT_FW_DOWNLOAD
 	if (escore_get_vs_download_req(escore) == false) {
 		/*
@@ -69,12 +78,12 @@ static int escore_vs_sleep(struct escore_priv *escore)
 		 * But send the Overlay Power State Command
 		 */
 		cmd = (ES_SET_POWER_STATE << 16) |
-			ES_POWER_STATE_RPT_FW_DWLD;
+			ES_POWER_STATE_VS_OVERLAP;
 	} else {
 		cmd = (ES_SET_POWER_STATE << 16) |
 			ES_SET_POWER_STATE_VS_OVERLAY;
 	}
-	rc = escore->bus.ops.cmd(escore, cmd, &rsp);
+	rc = escore_cmd_nopm(escore, cmd, &rsp);
 	if (rc) {
 		dev_err(escore->dev, "%s(): Set Power State cmd fail %d\n",
 			__func__, rc);
@@ -85,7 +94,7 @@ static int escore_vs_sleep(struct escore_priv *escore)
 #else
 	/* Set smooth mute to 0 */
 	cmd = ES_SET_SMOOTH_MUTE << 16 | ES_SMOOTH_MUTE_ZERO;
-	rc = escore->bus.ops.cmd(escore, cmd, &rsp);
+	rc = escore_cmd_nopm(escore, cmd, &rsp);
 	if (rc) {
 		dev_err(escore->dev, "%s(): Set Smooth Mute cmd fail %d\n",
 			__func__, rc);
@@ -98,12 +107,13 @@ static int escore_vs_sleep(struct escore_priv *escore)
 	msleep(30);
 	/* change power state to OVERLAY */
 	cmd = (ES_SET_POWER_STATE << 16) | ES_SET_POWER_STATE_VS_OVERLAY;
-	rc = escore->bus.ops.cmd(escore, cmd, &rsp);
+	rc = escore_cmd_nopm(escore, cmd, &rsp);
 	if (rc) {
 		dev_err(escore->dev, "%s(): Set Power State cmd fail %d\n",
 			__func__, rc);
 		goto vs_sleep_err;
 	}
+	escore->mode = SBL;
 	msleep(30);
 #endif
 
@@ -125,10 +135,13 @@ static int escore_vs_sleep(struct escore_priv *escore)
 	} else {
 		pr_debug("%s() VS firmware is already downloaded", __func__);
 
-		rc = escore_reconfig_intr(escore);
-		if (rc) {
-			pr_err("%s() config resume failed after VS load rc = %d\n",
-			       __func__, rc);
+		/* Setup the Event response */
+		cmd = (ES_SET_EVENT_RESP << 16) | \
+						escore->pdata->gpio_b_irq_type;
+		rc = escore_cmd_nopm(escore, cmd, &rsp);
+		if (rc < 0) {
+			pr_err("%s(): Error %d in setting event response\n",
+					__func__, rc);
 			goto vs_sleep_err;
 		}
 	}
@@ -146,26 +159,59 @@ static int escore_vs_sleep(struct escore_priv *escore)
 
 	es_cvq_profiling(&vs_load_end);
 
-	rc = escore_is_sleep_aborted(escore);
-	if (rc == -EABORT)
-		goto escore_sleep_aborted;
+	/* Write hotword before CVS / VS preset */
+	if (escore->voice_recognition) {
+		es_cvq_profiling(&wdb_start);
 
-	cmd = ES_SET_PRESET << 16 | escore->es_vs_route_preset;
-	rc = escore->bus.ops.cmd(escore, cmd, &rsp);
+		rc = escore_vs_write_bkg_and_keywords(escore);
+		if (rc) {
+			dev_err(escore->dev,
+				"%s(): datablock write fail rc = %d\n",
+				__func__, rc);
+			goto vs_sleep_err;
+		}
+
+		es_cvq_profiling(&wdb_end);
+	}
+
+vs_set_presets:
+
+	/* BAS-3309: Send CVS tear down preset before set CVQ route */
+	rc = escore_cmd_nopm(escore,
+			     (ES_SET_PRESET << 16 | ES_CVS_TEAR_DOWN_PRESET),
+			     &rsp);
+
 	if (rc) {
-		dev_err(escore->dev, "%s(): Set Preset cmd fail %d\n",
+		dev_err(escore->dev,
+			"%s(): Set CVS tear down Preset fail %d\n",
 			__func__, rc);
+
 		goto vs_sleep_err;
 	}
 
-	voice_sense->cvs_preset = escore->es_cvs_preset;
-	cmd = ES_SET_CVS_PRESET << 16 | escore->es_cvs_preset;
-	rc = escore->bus.ops.cmd(escore, cmd, &rsp);
+	if (!escore->voice_recognition) {
+		cmd = ES_SET_PRESET << 16 | escore->es_vs_route_preset;
+		rc = escore_cmd_nopm(escore, cmd, &rsp);
+		if (rc) {
+			dev_err(escore->dev, "%s(): Set Preset cmd fail %d\n",
+				__func__, rc);
+			goto vs_sleep_err;
+		}
+		voice_sense->vs_route_preset = escore->es_vs_route_preset;
+	}
+	msleep(20);
+
+	if (escore->voice_recognition)
+		cmd = ES_SET_CVS_PRESET << 16 | ES_VS_HOTWORD_PRESET;
+	else
+		cmd = ES_SET_CVS_PRESET << 16 | escore->es_cvs_preset;
+	rc = escore_cmd_nopm(escore, cmd, &rsp);
 	if (rc) {
 		dev_err(escore->dev, "%s(): Set CVS Preset cmd fail %d\n",
 			__func__, rc);
 		goto vs_sleep_err;
 	}
+	voice_sense->cvs_preset = escore->es_cvs_preset;
 
 	rc = escore_is_sleep_aborted(escore);
 	if (rc == -EABORT)
@@ -174,7 +220,7 @@ static int escore_vs_sleep(struct escore_priv *escore)
 	if (voice_sense->es_vs_keyword_length) {
 		cmd = ((ES_SET_VS_KW_LENGTH << 16) |
 				voice_sense->es_vs_keyword_length);
-		rc = escore->bus.ops.cmd(escore, cmd, &rsp);
+		rc = escore_cmd_nopm(escore, cmd, &rsp);
 		if (rc) {
 			dev_err(escore->dev, "%s(): kw length cmd fail %d\n",
 					__func__, rc);
@@ -182,37 +228,56 @@ static int escore_vs_sleep(struct escore_priv *escore)
 		}
 	}
 
-	es_cvq_profiling(&wdb_start);
+	/* Write CVQ model files after CVS / VS preset for Normal CVQ */
+	if (!escore->voice_recognition) {
+		es_cvq_profiling(&wdb_start);
 
-	/* write background model and keywords files */
-	rc = escore_vs_write_bkg_and_keywords(escore);
-	if (rc) {
-		dev_err(escore->dev,
-			"%s(): datablock write fail rc = %d\n",
-			__func__, rc);
-		goto vs_sleep_err;
-	}
+		/* Reconfig API Interrupt mode */
+		rc = escore_reconfig_api_intr(escore);
+		if (rc)
+			goto vs_sleep_err;
 
-	es_cvq_profiling(&wdb_end);
+		/* write background model and keywords files */
+		rc = escore_vs_write_bkg_and_keywords(escore);
+		if (rc) {
+			dev_err(escore->dev,
+				"%s(): datablock write fail rc = %d\n",
+				__func__, rc);
+			goto vs_sleep_err;
+		}
 
-	rc = escore_is_sleep_aborted(escore);
-	if (rc == -EABORT)
-		goto escore_sleep_aborted;
+		es_cvq_profiling(&wdb_end);
 
-	cmd = ES_SET_ALGO_PARAM_ID << 16 | ES_VS_PROCESSING_MOE;
-	rc = escore->bus.ops.cmd(escore, cmd, &rsp);
-	if (rc) {
-		dev_err(escore->dev, "%s(): Set Algo Param ID cmd fail %d\n",
-			__func__, rc);
-		goto vs_sleep_err;
-	}
+		cmd = ES_SET_ALGO_PARAM_ID << 16 | ES_VS_PROCESSING_MOE;
+		rc = escore_cmd_nopm(escore, cmd, &rsp);
+		if (rc) {
+			dev_err(escore->dev,
+				"%s(): Set Algo Param ID cmd fail %d\n",
+				__func__, rc);
+			goto vs_sleep_err;
+		}
 
-	cmd = ES_SET_ALGO_PARAM << 16 | ES_VS_DETECT_KEYWORD;
-	rc = escore->bus.ops.cmd(escore, cmd, &rsp);
-	if (rc) {
-		dev_err(escore->dev, "%s(): Set Algo Param cmd fail %d\n",
-			__func__, rc);
-		goto vs_sleep_err;
+		cmd = ES_SET_ALGO_PARAM << 16 | ES_VS_DETECT_KEYWORD;
+		rc = escore_cmd_nopm(escore, cmd, &rsp);
+		if (rc) {
+			dev_err(escore->dev,
+				"%s(): Set Algo Param cmd fail %d\n",
+				__func__, rc);
+			goto vs_sleep_err;
+		}
+	} else {
+		/* Send route preset after keyword length is set
+		 * for hotword feature */
+		cmd = ES_SET_PRESET << 16 | escore->es_vs_route_preset;
+		rc = escore_cmd_nopm(escore, cmd, &rsp);
+		if (rc) {
+			dev_err(escore->dev, "%s(): Set Preset cmd fail %d\n",
+				__func__, rc);
+			goto vs_sleep_err;
+		}
+		voice_sense->vs_route_preset = escore->es_vs_route_preset;
+
+		msleep(20);
 	}
 
 	rc = escore_is_sleep_aborted(escore);
@@ -225,13 +290,25 @@ static int escore_vs_sleep(struct escore_priv *escore)
 		goto vs_sleep_err;
 	}
 
+vs_set_low_power:
+	/* Set flag to Wait for API Interrupt */
+	escore_set_api_intr_wait(escore);
+
 	cmd = (ES_SET_POWER_STATE << 16) | ES_SET_POWER_STATE_VS_LOWPWR;
-	rc = escore->bus.ops.cmd(escore, cmd, &rsp);
+	rc = escore_cmd_nopm(escore, cmd, &rsp);
 	if (rc) {
 		dev_err(escore->dev, "%s(): Set Power State cmd fail %d\n",
 			__func__, rc);
 		goto vs_sleep_err;
 	}
+
+	/* Wait for API Interrupt to confirm that device is in low power */
+	if (escore->pdata->gpioa_gpio != -1) {
+		rc = escore_api_intr_wait_completion(escore);
+		if (rc)
+			goto vs_sleep_err;
+	}
+
 	escore->escore_power_state = ES_SET_POWER_STATE_VS_LOWPWR;
 
 escore_sleep_aborted:
@@ -240,14 +317,18 @@ vs_sleep_err:
 	es_cvq_profiling(&cvq_sleep_end);
 
 #ifdef CONFIG_SND_SOC_ES_CVQ_TIME_MEASUREMENT
-	vs_load_time = (timespec_sub(vs_load_end, vs_load_start));
-	wdb_time = (timespec_sub(wdb_end, wdb_start));
-	cvq_sleep_time = (timespec_sub(cvq_sleep_end, cvq_sleep_start));
 
-	dev_info(escore->dev, "VS firmware load time = %lu.%03lu sec\n",
-			vs_load_time.tv_sec, (vs_load_time.tv_nsec)/1000000);
-	dev_info(escore->dev, "BKG and KW write time = %lu.%03lu sec\n",
-			wdb_time.tv_sec, (wdb_time.tv_nsec)/1000000);
+	if (!skip_vs_load) {
+		vs_load_time = (timespec_sub(vs_load_end, vs_load_start));
+		dev_info(escore->dev, "VS firmware load time = %lu.%03lu sec\n",
+				vs_load_time.tv_sec, (vs_load_time.tv_nsec)/1000000);
+	}
+	if (!skip_vs_seq) {
+		wdb_time = (timespec_sub(wdb_end, wdb_start));
+		dev_info(escore->dev, "BKG and KW write time = %lu.%03lu sec\n",
+				wdb_time.tv_sec, (wdb_time.tv_nsec)/1000000);
+	}
+	cvq_sleep_time = (timespec_sub(cvq_sleep_end, cvq_sleep_start));
 	dev_info(escore->dev, "Total CVQ sleep time = %lu.%03lu sec\n",
 		cvq_sleep_time.tv_sec, (cvq_sleep_time.tv_nsec)/1000000);
 #endif
@@ -262,51 +343,71 @@ int escore_vs_wakeup(struct escore_priv *escore)
 
 	dev_dbg(escore->dev, "%s()\n", __func__);
 
-	escore->sleep_abort = 1;
-
-	/* If chip is in low power mode and keyword detection happens,
-	 * it switch back to Normal(BOSKO) mode automatically.
-	 */
 	if (escore->escore_power_state == ES_SET_POWER_STATE_NORMAL) {
 		dev_dbg(escore->dev, "%s() Already in normal mode\n", __func__);
-		escore->mode = STANDARD;
-		escore->pm_state = ES_PM_NORMAL;
-		goto vs_wakeup_err;
+		goto out;
 	}
 
-	/* If chip is in low power mode and Jack detection happens,
-	 * it switch back to Overlay command mode and wakeup gpio
-	 * toggling is not required
-	 */
-	if (escore->escore_power_state == ES_SET_POWER_STATE_VS_LOWPWR) {
-		rc = escore_wakeup(escore);
+	rc = escore_wakeup(escore);
+	if (rc) {
+		dev_err(escore->dev, "%s() wakeup failed rc = %d\n",
+				__func__, rc);
+		goto vs_wakeup_err;
+	}
+	escore->escore_power_state = ES_SET_POWER_STATE_VS_OVERLAY;
+
+	if (escore->intr_recvd) {
+		/* Total 60 ms Delay is required for firmware to be ready
+		 * after wakeup */
+		msleep(60 - escore->delay.wakeup_to_vs);
+		dev_dbg(escore->dev,
+			"%s() Keeping chip in CVQ command mode\n", __func__);
+		goto out;
+	} else {
+		/* For BAS-3309, calling CVS tear down preset when switching
+		 * from VS low power mode to Normal mode */
+		rc = escore_cmd_nopm(escore,
+				(ES_SET_PRESET << 16 | ES_CVS_TEAR_DOWN_PRESET),
+				&rsp);
 		if (rc) {
-			dev_err(escore->dev, "%s() wakeup failed rc = %d\n",
-					__func__, rc);
+			dev_err(escore->dev,
+				"%s(): Set CVS tear down Preset fail %d\n",
+				__func__, rc);
 			goto vs_wakeup_err;
 		}
-		escore->escore_power_state = ES_SET_POWER_STATE_VS_OVERLAY;
 	}
+
+	/* Set flag to Wait for API Interrupt */
+	escore_set_api_intr_wait(escore);
 
 	/* change power state to Normal*/
 	cmd = (ES_SET_POWER_STATE << 16) | ES_SET_POWER_STATE_NORMAL;
-	rc = escore->bus.ops.cmd(escore, cmd, &rsp);
+	rc = escore_cmd_nopm(escore, cmd, &rsp);
 	if (rc < 0) {
 		dev_err(escore->dev, "%s() - failed sync cmd resume %d\n",
 			__func__, rc);
-		escore->pm_state = ES_PM_HOSED;
 		goto vs_wakeup_err;
-	} else {
-		/* Time required for switching from VS to NS mode.
-		 * This delay should be replaced with GPIO A event */
-		msleep(50);
-
-		escore->mode = STANDARD;
-		escore->pm_state = ES_PM_NORMAL;
-		escore->escore_power_state = ES_SET_POWER_STATE_NORMAL;
 	}
+
+	if (escore->pdata->gpioa_gpio != -1) {
+		/* Wait for API Interrupt to confirm
+		 * that device is ready to accept commands */
+		rc = escore_api_intr_wait_completion(escore);
+		if (rc)
+			goto vs_wakeup_err;
+
+		/* Reconfig API Interrupt mode */
+		rc = escore_reconfig_api_intr(escore);
+		if (rc)
+			goto vs_wakeup_err;
+	} else
+		msleep(escore->delay.vs_to_normal);
+
+	escore->mode = STANDARD;
+	escore->escore_power_state = ES_SET_POWER_STATE_NORMAL;
+
+out:
 vs_wakeup_err:
-	escore->sleep_abort = 0;
 	return rc;
 }
 
@@ -320,16 +421,75 @@ static int escore_cvq_sleep_thread(void *ptr)
 	if (rc != -EABORT)
 		goto escore_cvq_sleep_thread_exit;
 
-	dev_dbg(escore->dev, "%s() CVQ sleep aborted\n",
-			__func__);
-	/* change power state to Normal*/
-	cmd = (ES_SET_POWER_STATE << 16) | ES_SET_POWER_STATE_NORMAL;
-	rc = escore->bus.ops.cmd(escore, cmd, &rsp);
-	if (rc) {
-		dev_err(escore->dev,
-			"%s() Power State Normal failed rc = %d\n",
-			__func__, rc);
-		goto escore_cvq_sleep_thread_exit;
+	dev_dbg(escore->dev, "%s() CVQ sleep aborted\n", __func__);
+
+	/* Set flag to Wait for API Interrupt */
+	escore_set_api_intr_wait(escore);
+
+	/* Change power state to Normal.
+	 * As per BAS-2581,
+	 *   - Host should use power state command with supress response when
+	 *     firmware is running
+	 *   - Host should use power state command without supress response when
+	 *     chip is in SBL mode.
+	 * This command response may not be received and needs to be ignored.
+	 * Actual firmware transition is verified after checking power state.
+	 */
+	if (escore->mode != VOICESENSE_PENDING) {
+		if (escore->mode == SBL)
+			/* BAS-3232: Change power state to Normal, send
+			 * command with SR bit disable on PRI interface,
+			 * but device won't send any response back */
+			cmd = ES_SET_POWER_STATE_CMD << 16 |
+					ES_SET_POWER_STATE_NORMAL;
+		else
+			/* BAS-3232: Change power state to Normal, send
+			 * command with SR bit enable on PRI interface */
+			cmd = ES_SET_POWER_STATE << 16 |
+					ES_SET_POWER_STATE_NORMAL;
+		/* handle endianness */
+		cmd = escore->bus.ops.cpu_to_bus(escore, cmd);
+		rc = escore->bus.ops.write(escore, &cmd, sizeof(cmd));
+		update_cmd_history(escore->bus.ops.bus_to_cpu(escore,
+							cmd), 0);
+		if (rc) {
+			pr_err("%s() PRI INTF write is failed, rc = %d\n",
+					__func__, rc);
+			goto escore_cvq_sleep_thread_exit;
+		}
+	}
+
+	if (escore->pdata->gpioa_gpio == -1) {
+		if (escore->mode == VOICESENSE)
+			/* BAS-3232: Delay required before reading power
+			 * state in case of VOICESENSE mode:
+			 * es75x: 90 ms
+			 * es70x / es80x: 50 ms */
+			msleep(escore->delay.vs_to_normal);
+		else
+			/* BAS-3232: Total delay required before reading power
+			 * state is 60 ms in case of SBL and VOICESENSE_PENDING
+			 * mode */
+			msleep(60);
+		cmd = ES_GET_POWER_STATE << 16;
+		rc = escore_cmd_nopm(escore, cmd, &rsp);
+		if (rc < 0) {
+			pr_err("%s() Get Power State failed rc = %d\n",
+							__func__, rc);
+			goto escore_cvq_sleep_thread_exit;
+		}
+		if (rsp != ES_PS_NORMAL) {
+			pr_err("%s() Power state is not normal, rsp = %x\n",
+					__func__, rsp);
+			rc = -EINVAL;
+			goto escore_cvq_sleep_thread_exit;
+		}
+	} else {
+		/* Wait for API Interrupt to confirm that
+		 * device is in normal mode */
+		rc = escore_api_intr_wait_completion(escore);
+		if (rc)
+			goto escore_cvq_sleep_thread_exit;
 	}
 	escore_priv.escore_power_state = ES_SET_POWER_STATE_NORMAL;
 
@@ -347,39 +507,98 @@ int escore_put_vs_sleep(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	struct escore_priv *escore = &escore_priv;
-	static struct task_struct *cvq_sleep_thread;
 	unsigned int value;
 	int rc = 0;
 
 	value = ucontrol->value.integer.value[0];
 
+	mutex_lock(&escore->access_lock);
 	if (value) {
 
 		rc = escore_pm_get_sync();
 		if (rc < 0) {
 			pr_err("%s(): pm_get_sync failed :%d\n", __func__, rc);
+			mutex_unlock(&escore->access_lock);
 			return rc;
 		}
 
-		cvq_sleep_thread = kthread_run(escore_cvq_sleep_thread,
-				(void *) escore,
-				"escore CVQ sleep thread");
-		if (IS_ERR_OR_NULL(cvq_sleep_thread)) {
-			pr_err("%s(): can't create CVQ sleep thread = %p\n",
-					__func__, cvq_sleep_thread);
-			rc = -ENOMEM;
-		}
+		rc = escore_cvq_sleep_thread(escore);
 		escore_pm_put_autosuspend();
 
 	} else
 		rc = escore_vs_wakeup(&escore_priv);
 
+	mutex_unlock(&escore->access_lock);
 	return rc;
 }
 
 int escore_get_vs_sleep(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
+	return 0;
+}
+
+int escore_put_voice_recognition_enum(struct snd_kcontrol *kcontrol,
+					struct snd_ctl_elem_value *ucontrol)
+{
+	struct escore_priv *escore = &escore_priv;
+	struct escore_voice_sense *voice_sense =
+			(struct escore_voice_sense *) escore_priv.voice_sense;
+	unsigned int value;
+	int rc = 0;
+	u32 cmd, rsp;
+
+	value = ucontrol->value.enumerated.item[0];
+
+	mutex_lock(&escore->access_lock);
+
+	rc = escore_pm_get_sync();
+	if (rc < 0) {
+		pr_err("%s(): pm_get_sync failed :%d\n", __func__, rc);
+		mutex_unlock(&escore->access_lock);
+		return rc;
+	}
+
+	escore->voice_recognition = value;
+
+	if (escore->voice_recognition) {
+		voice_sense->es_vs_keyword_length = ES_VS_HOTWORD_LENGTH;
+		rc = escore_pm_put_sync_suspend();
+	} else {
+		if (escore->escore_power_state ==
+			ES_POWER_STATE_VS_STREAMING) {
+			/* change power state to OVERLAY */
+			cmd = (ES_SET_POWER_STATE << 16) |
+				ES_SET_POWER_STATE_VS_OVERLAY;
+			rc = escore_cmd_nopm(escore, cmd, &rsp);
+			if (rc) {
+				dev_err(escore->dev,
+					"%s(): Set Power State cmd fail %d\n",
+					__func__, rc);
+				goto voice_recognition_err;
+			}
+			msleep(escore->delay.vs_streaming_to_vs);
+			escore->escore_power_state =
+				ES_SET_POWER_STATE_VS_OVERLAY;
+		}
+		/* Reset Keyword length on reset */
+		voice_sense->es_vs_keyword_length = 0;
+		escore_pm_put_autosuspend();
+	}
+
+voice_recognition_err:
+	mutex_unlock(&escore->access_lock);
+
+	return rc;
+}
+
+int escore_get_voice_recognition_enum(struct snd_kcontrol *kcontrol,
+					struct snd_ctl_elem_value *ucontrol)
+{
+	struct escore_priv *escore = &escore_priv;
+
+	ucontrol->value.enumerated.item[0] = escore->voice_recognition;
+
 	return 0;
 }
 
@@ -434,7 +653,7 @@ int escore_put_vs_keyword_length(struct snd_kcontrol *kcontrol,
 	if (!escore_vs_sleep_enable(&escore_priv)) {
 		cmd = ((ES_SET_VS_KW_LENGTH << 16) |
 				voice_sense->es_vs_keyword_length);
-		rc = escore_cmd(&escore_priv, cmd, &rsp);
+		rc = escore_cmd_locked(&escore_priv, cmd, &rsp);
 		if (rc) {
 			dev_err(escore_priv.dev, "%s(): kw length cmd fail %d\n",
 					__func__, rc);
@@ -461,7 +680,7 @@ int escore_get_keyword_overrun(struct snd_kcontrol *kcontrol,
 	u32 es_get_keyword_overrun = ESCORE_GET_KEYWORD_OVERRUN_ERROR << 16;
 	u32 rspn = 0;
 
-	rc = escore_cmd(&escore_priv, es_get_keyword_overrun,
+	rc = escore_cmd_locked(&escore_priv, es_get_keyword_overrun,
 				&rspn);
 	if (rc < 0) {
 		dev_err(escore_priv.dev, "Failed to set the keyword length %d()",
@@ -480,25 +699,24 @@ int escore_put_vs_activate_keyword(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	struct escore_priv *escore = &escore_priv;
-	struct escore_voice_sense *voice_sense =
-			(struct escore_voice_sense *) escore->voice_sense;
 	unsigned int value;
 	int rc = 0;
 
 	value = ucontrol->value.integer.value[0];
 
+	mutex_lock(&escore->access_lock);
 	rc = escore_pm_get_sync();
 	if (rc < 0) {
 		dev_err(escore->dev, "%s(): pm_get_sync failed :%d\n",
 				__func__, rc);
-		return rc;
+		goto exit;
 	}
 
-	voice_sense->vs_active_keywords = value;
-	rc = escore_vs_request_keywords(escore);
+	rc = escore_vs_request_keywords(escore, value);
 
 	escore_pm_put_autosuspend();
-
+exit:
+	mutex_unlock(&escore->access_lock);
 	return rc;
 }
 
@@ -590,7 +808,7 @@ void escore_vs_release_bkg(struct escore_priv *escore)
 	release_firmware(voice_sense->bkg);
 }
 
-int escore_vs_request_keywords(struct escore_priv *escore)
+int escore_vs_request_keywords(struct escore_priv *escore, unsigned int value)
 {
 	struct escore_voice_sense *voice_sense =
 			(struct escore_voice_sense *) escore->voice_sense;
@@ -599,34 +817,63 @@ int escore_vs_request_keywords(struct escore_priv *escore)
 	char kw_filename[] = "audience-vs-kw-1.bin";
 	int size = sizeof(kw_filename)/sizeof(char);
 
+	/* Keyword number is based on bit positions. For an example, for keyword
+	 * number 3, value is 100B i.e. 4 in decimal. Similarly for keywords 4
+	 * and 5, 4th and 5th bit is set i.e. 11000 i.e. 18 (bit position is
+	 * started from 1 here).
+	 *
+	 * Flow of function:
+	 *	- Release already requested keyword
+	 *	- Request new keyword if it is selected
+	 *	- In case of error, release all keywords
+	 */
+
 	for (i = 0; i < MAX_NO_OF_VS_KW; i++) {
-		if (!(voice_sense->vs_active_keywords & (1 << i)))
+
+		/* Release keyword if it is requested before. This is required
+		 * for kernel 3.10 in which if old keyword is not released,
+		 * keyword data remains unchanged.
+		 */
+		if (voice_sense->vs_active_keywords & BIT(i)) {
+			dev_dbg(escore->dev, "%s(): release kw = %d\n",
+							__func__, i + 1);
+			release_firmware(voice_sense->kw[i]);
+			voice_sense->vs_active_keywords &= (~BIT(i));
+		}
+
+		/* If keyword is not set, do not request it. */
+		if (!(value & BIT(i)))
 			continue;
 
-		if (voice_sense->kw[i]->size)
-			release_firmware(voice_sense->kw[i]);
-
+		/* Request selected keywords */
 		snprintf(kw_filename, size, "audience-vs-kw-%d.bin", i + 1);
 		dev_dbg(escore->dev, "%s(): kw filename = %s\n",
-					__func__, kw_filename);
+				__func__, kw_filename);
 		rc = request_firmware(
-			(const struct firmware **)&(voice_sense->kw[i]),
-			kw_filename, escore->dev);
+				(const struct firmware **)&(voice_sense->kw[i]),
+				kw_filename, escore->dev);
 		if (rc) {
 			dev_err(escore->dev, "%s(): request kw(%d) failed %d\n",
 					__func__, i + 1, rc);
 			goto request_firmware_kw_exit;
 		}
+		voice_sense->vs_active_keywords |= BIT(i);
 	}
 
 	return rc;
 
 request_firmware_kw_exit:
-	while (i-- > 0) {
-		dev_err(escore->dev, "%s(): %d i = %d\n",
-					__func__, __LINE__, i);
-		release_firmware(voice_sense->kw[i]);
+
+	/* In case of failure, release all keywords */
+	for (i = 0; i < MAX_NO_OF_VS_KW; i++) {
+		if (voice_sense->vs_active_keywords & BIT(i)) {
+			dev_dbg(escore->dev, "%s(): release kw %d\n",
+							__func__, i + 1);
+			release_firmware(voice_sense->kw[i]);
+		}
 	}
+	voice_sense->vs_active_keywords = 0;
+
 	return  rc;
 }
 
@@ -644,29 +891,52 @@ int escore_vs_write_bkg_and_keywords(struct escore_priv *escore)
 		goto escore_vs_write_bkg_keywords_exit;
 	}
 
-	rc = escore_datablock_write(escore, voice_sense->bkg->data,
-			voice_sense->bkg->size);
-	if (rc < voice_sense->bkg->size) {
-		dev_err(escore->dev, "%s(): bkg write failed rc = %d\n",
-						__func__, rc);
+	/* Write Hotword datablock received from user space */
+	if (escore->voice_recognition && escore->hotword_buf) {
+		dev_dbg(escore->dev, "%s(): Write hotword, size = %zu\n",
+				__func__, escore->hotword_buf_size);
+		rc = escore_datablock_write(escore, escore->hotword_buf,
+						escore->hotword_buf_size);
+		if ((rc < 0) || (rc < escore->hotword_buf_size)) {
+			dev_err(escore->dev,
+				"%s(): hotword write failed rc = %d\n",
+				__func__, rc);
+			goto escore_vs_write_bkg_keywords_exit;
+		}
+	} else if (voice_sense->vs_active_keywords) {
+		rc = escore_datablock_write(escore, voice_sense->bkg->data,
+				voice_sense->bkg->size);
+		if ((rc < 0) || (rc < voice_sense->bkg->size)) {
+			dev_err(escore->dev, "%s(): bkg write failed rc = %d\n",
+							__func__, rc);
+			goto escore_vs_write_bkg_keywords_exit;
+		}
+
+		for (i = 0; i < MAX_NO_OF_VS_KW; i++) {
+			if (!(voice_sense->vs_active_keywords & (1 << i)))
+				continue;
+			dev_dbg(escore->dev, "%s(): Write kw = %d\n",
+							__func__, i + 1);
+			rc = escore_datablock_write(escore,
+						voice_sense->kw[i]->data,
+						voice_sense->kw[i]->size);
+			if ((rc < 0) || (rc < voice_sense->kw[i]->size)) {
+				dev_err(escore->dev,
+					"%s(): kw %d write failed rc = %d\n",
+					__func__, i + 1, rc);
+				goto escore_vs_write_bkg_keywords_exit;
+			}
+		}
+	} else {
+		dev_err(escore->dev,
+			"%s(): Invalid condition, shouldn't occur\n",
+			__func__);
+		rc = -EINVAL;
 		goto escore_vs_write_bkg_keywords_exit;
 	}
 
-	for (i = 0; i < MAX_NO_OF_VS_KW; i++) {
-		if (!(voice_sense->vs_active_keywords & (1 << i)))
-			continue;
-		dev_dbg(escore->dev, "%s(): Write kw = %d\n", __func__, i + 1);
-		rc = escore_datablock_write(escore, voice_sense->kw[i]->data,
-						voice_sense->kw[i]->size);
-		if (rc < voice_sense->kw[i]->size) {
-			dev_err(escore->dev,
-				"%s(): kw %d write failed rc = %d\n",
-				__func__, i + 1, rc);
-			goto escore_vs_write_bkg_keywords_exit;
-		}
-	}
-
 	escore_datablock_close(escore);
+
 	return 0;
 
 escore_vs_write_bkg_keywords_exit:
@@ -678,15 +948,12 @@ static int escore_vs_isr(struct notifier_block *self, unsigned long action,
 		void *dev)
 {
 	struct escore_priv *escore = (struct escore_priv *)dev;
+	char *def_event[] = { "ACTION=ADNC_KW_DETECT", NULL };
+	char *hotword_event[] = { "ACTION=HOTWORD", NULL };
 	struct escore_voice_sense *voice_sense =
 		(struct escore_voice_sense *) escore->voice_sense;
-#ifndef CONFIG_SND_SOC_ES_CVQ_SINGLE_INTF
-	u32 smooth_mute = ES_SET_SMOOTH_MUTE << 16 | ES_SMOOTH_MUTE_ZERO;
-#endif
-#ifndef CONFIG_SND_SOC_ES_VS_STREAMING
 	u32 es_set_power_level = ES_SET_POWER_LEVEL << 16 | ES_POWER_LEVEL_6;
 	u32 resp;
-#endif
 	int rc = 0;
 
 	dev_dbg(escore->dev, "%s(): Event: 0x%04x\n", __func__, (u32)action);
@@ -699,15 +966,19 @@ static int escore_vs_isr(struct notifier_block *self, unsigned long action,
 	dev_info(escore->dev, "%s(): VS event detected 0x%04x\n",
 				__func__, (u32) action);
 
+	escore->kw_detected_before_streaming = 1;
+
 	if (voice_sense->cvs_preset != 0xFFFF && voice_sense->cvs_preset != 0) {
-#ifdef CONFIG_SND_SOC_ES_VS_STREAMING
-		/* Chip wakes up in VS Streaming mode */
-		escore->escore_power_state = ES_POWER_STATE_VS_STREAMING;
-#else
-		escore->escore_power_state = ES_SET_POWER_STATE_NORMAL;
-#endif
-		escore->mode = STANDARD;
-		escore->pm_state = ES_PM_NORMAL;
+		if (escore->voice_recognition)
+			/* In hotword feature device wakes
+			 * up in VS Streaming mode */
+			escore->escore_power_state =
+				ES_POWER_STATE_VS_STREAMING;
+		else {
+			escore->escore_power_state =
+				ES_SET_POWER_STATE_NORMAL;
+			escore->mode = STANDARD;
+		}
 	}
 
 	mutex_lock(&voice_sense->vs_event_mutex);
@@ -721,36 +992,31 @@ static int escore_vs_isr(struct notifier_block *self, unsigned long action,
 	 */
 	if (voice_sense->cvs_preset != 0xFFFF &&
 			voice_sense->cvs_preset != 0) {
-#ifndef CONFIG_SND_SOC_ES_CVQ_SINGLE_INTF
-		rc = escore_cmd(escore, smooth_mute, &resp);
-		if (rc < 0) {
-			pr_err("%s(): Error setting smooth mute %d\n",
-			       __func__, rc);
-			goto voiceq_isr_exit;
+		if (!escore->voice_recognition) {
+			/* Following command will set the power level to 6,
+			   any subsequent preset will switch the oscillator
+			   to external */
+			rc = escore_cmd_locked(escore,
+						es_set_power_level,
+						&resp);
+			if (rc < 0) {
+				pr_err("%s(): Error setting power level %d\n",
+				       __func__, rc);
+				goto voiceq_isr_exit;
+			}
+			usleep_range(2000, 2005);
 		}
-		usleep_range(2000, 2005);
-#endif
-#ifndef CONFIG_SND_SOC_ES_VS_STREAMING
-		/* Following command will set the power level to 6,
-		   any subsequent preset will switch the oscillator
-		   to external */
-		rc = escore_cmd(escore, es_set_power_level, &resp);
-		if (rc < 0) {
-			pr_err("%s(): Error setting power level %d\n",
-			       __func__, rc);
-			goto voiceq_isr_exit;
-		}
-		usleep_range(2000, 2005);
-#endif
-#if defined(CONFIG_SND_SOC_ES_CVQ_SINGLE_INTF) || \
-				defined(CONFIG_SND_SOC_ES_VS_STREAMING)
 		/* Enable the clock before switching to external oscillator */
 		if (escore->pdata->esxxx_clk_cb)
 			escore->pdata->esxxx_clk_cb(1);
 
 		/* Required only for the UART interface */
 		if (escore->bus.ops.high_bw_calibrate) {
+			mutex_lock(&escore->access_lock);
+			INC_DISABLE_FW_RECOVERY_USE_CNT(escore);
 			rc = escore->bus.ops.high_bw_calibrate(escore);
+			DEC_DISABLE_FW_RECOVERY_USE_CNT(escore);
+			mutex_unlock(&escore->access_lock);
 			if (rc) {
 				dev_err(escore->dev,
 					"%s() error calibrating the interface rc = %d\n",
@@ -758,12 +1024,17 @@ static int escore_vs_isr(struct notifier_block *self, unsigned long action,
 				goto voiceq_isr_exit;
 			}
 		}
-#endif
 		/* Each time earSmart chip comes in BOSKO mode after
 		 * VS detect, CVS mode will be disabled */
 		voice_sense->cvs_preset = 0;
 	}
-	kobject_uevent(&escore->dev->kobj, KOBJ_CHANGE);
+
+	if (escore->voice_recognition) {
+		pr_debug("%s(): Hotword detected", __func__);
+		kobject_uevent_env(&escore->dev->kobj, KOBJ_CHANGE,
+				hotword_event);
+	} else
+		kobject_uevent_env(&escore->dev->kobj, KOBJ_CHANGE, def_event);
 
 	return NOTIFY_OK;
 
@@ -849,24 +1120,37 @@ int escore_vs_load(struct escore_priv *escore)
 			rc = -EIO;
 			goto escore_vs_fw_download_failed;
 		}
+		/* BAS-3232: 5ms delay is required after abort command write */
+		usleep_range(5000, 5050);
 
-		if (escore->high_bw_intf == ES_UART_INTF) {
+		if (escore->high_bw_intf == ES_UART_INTF ||
+					escore->high_bw_intf == ES_SPI_INTF) {
 			if (escore->boot_ops.escore_abort_config)
 				escore->boot_ops.escore_abort_config(escore);
 		}
 
+		/* BAS-3232: Change power state to Normal, send command
+		 * with SR bit disable on HIGH BW interface, but device won't
+		 * send any response back */
 		cmd = ES_SET_POWER_STATE_CMD << 16 | ES_SET_POWER_STATE_NORMAL;
-		rc = escore->bus.ops.high_bw_cmd(escore, cmd , &resp);
+		cmd = escore->bus.ops.cpu_to_high_bw_bus(escore, cmd);
+		rc = escore->bus.ops.high_bw_write(escore, &cmd, sizeof(cmd));
+		update_cmd_history(escore->bus.ops.high_bw_bus_to_cpu(escore,
+								cmd), 0);
 		if (rc) {
-			dev_err(escore->dev, "%s(): power state cmd error %d\n",
-				__func__, rc);
-			rc = -EIO;
+			pr_err("%s() HIGH BW INTF write is failed, rc = %d\n",
+					__func__, rc);
 			goto escore_vs_fw_download_failed;
 		}
+
 		rc = -EABORT;
 		goto escore_sleep_aborted;
 	}
+
 	dev_dbg(escore->dev, "%s(): write vs firmware image\n", __func__);
+
+	/* Set flag to Wait for API Interrupt */
+	escore_set_api_intr_wait(escore);
 
 	rc = escore->bus.ops.high_bw_write(escore,
 		((char *)voice_sense->vs->data) , voice_sense->vs->size);
@@ -877,30 +1161,54 @@ int escore_vs_load(struct escore_priv *escore)
 		goto escore_vs_fw_download_failed;
 	}
 
-	rc = escore_is_sleep_aborted(escore);
-	if (rc == -EABORT)
-		goto escore_sleep_aborted;
-
 	escore->mode = VOICESENSE;
 
 	if (((struct escore_voice_sense *)escore->voice_sense)->vs_irq != true)
 		escore_vs_init_intr(escore);
 
-	rc = escore->boot_ops.finish(escore);
-	if (rc) {
-		dev_err(escore->dev, "%s() vs fw download finish error %d\n",
-			__func__, rc);
-		goto escore_vs_fw_download_failed;
+	/* Wait for API Interrupt to confirm
+	 * that firmware is ready to accept command */
+	if (escore->pdata->gpioa_gpio != -1) {
+		rc = escore_api_intr_wait_completion(escore);
+		if (rc)
+			goto escore_vs_fw_download_failed;
+	} else {
+		/* boot_ops.finish is required only in the case of POLL mode
+		 * command completion*/
+		rc = escore->boot_ops.finish(escore);
+		if (rc) {
+			dev_err(escore->dev,
+				"%s() vs fw download finish error %d\n",
+				__func__, rc);
+			goto escore_vs_fw_download_failed;
+		}
 	}
 
 	rc = escore_is_sleep_aborted(escore);
 	if (rc == -EABORT)
 		goto escore_sleep_aborted;
 
-	rc = escore_reconfig_intr(escore);
+	/* Reconfig API Interrupt mode */
+	rc = escore_reconfig_api_intr(escore);
+	if (rc)
+		goto escore_vs_fw_download_failed;
+
+	/* Setup the Event response */
+	cmd = (ES_SET_EVENT_RESP << 16) | escore->pdata->gpio_b_irq_type;
+	rc = escore_cmd_nopm(escore, cmd, &resp);
+	if (rc < 0) {
+		pr_err("%s(): Error %d in setting event response\n",
+				__func__, rc);
+		goto escore_vs_fw_download_failed;
+	}
+
+	/* BAS-3309: Send CVS tear down preset after VS firmware downloaded */
+	cmd = ES_SET_PRESET << 16 | ES_CVS_TEAR_DOWN_PRESET;
+	rc = escore_cmd_nopm(escore, cmd, &resp);
 	if (rc) {
-		dev_err(escore->dev, "%s() config resume failed after VS load rc = %d\n",
+		pr_err("%s(): Set CVS tear down Preset fail %d\n",
 			__func__, rc);
+
 		goto escore_vs_fw_download_failed;
 	}
 
@@ -932,17 +1240,21 @@ void escore_vs_exit(struct escore_priv *escore)
 	struct escore_voice_sense *voice_sense =
 			(struct escore_voice_sense *) escore->voice_sense;
 	int i;
-	kfree(voice_sense->bkg);
-	for (i = 0; i < MAX_NO_OF_VS_KW; i++)
-		kfree(voice_sense->kw[i]);
-	kfree(voice_sense->vs);
+	for (i = 0; i < MAX_NO_OF_VS_KW; i++) {
+		if (voice_sense->vs_active_keywords & BIT(i)) {
+			dev_dbg(escore->dev, "%s(): release kw = %d\n",
+							__func__, i + 1);
+			release_firmware(voice_sense->kw[i]);
+		}
+	}
 	kfree(voice_sense);
+	escore_vs_release_firmware(escore);
+	escore_vs_release_bkg(escore);
 }
 
 int escore_vs_init(struct escore_priv *escore)
 {
 	int rc = 0;
-	int i;
 
 	struct escore_voice_sense *voice_sense;
 	voice_sense = (struct escore_voice_sense *)
@@ -959,30 +1271,6 @@ int escore_vs_init(struct escore_priv *escore)
 	voice_sense->vs_active_keywords = 0;
 	voice_sense->es_vs_keyword_length = 0;
 
-	voice_sense->vs = (struct firmware *)
-			kmalloc(sizeof(struct firmware), GFP_KERNEL);
-	if (!voice_sense->vs) {
-		rc = -ENOMEM;
-		goto vs_alloc_err;
-	}
-
-	voice_sense->bkg = (struct firmware *)
-			kmalloc(sizeof(struct firmware), GFP_KERNEL);
-	if (!voice_sense->bkg) {
-		rc = -ENOMEM;
-		goto bkg_alloc_err;
-	}
-
-	for (i = 0; i < MAX_NO_OF_VS_KW; i++) {
-		voice_sense->kw[i] = (struct firmware *)
-			kmalloc(sizeof(struct firmware), GFP_KERNEL);
-		if (!voice_sense->kw[i]) {
-			rc = -ENOMEM;
-			goto kw_alloc_err;
-		}
-		voice_sense->kw[i]->size = 0;
-	}
-
 	mutex_init(&voice_sense->vs_event_mutex);
 
 	rc = escore_vs_init_sysfs(escore);
@@ -997,16 +1285,26 @@ int escore_vs_init(struct escore_priv *escore)
 	escore->vs_ops.escore_voicesense_sleep = escore_voicesense_sleep;
 	escore->vs_ops.escore_voicesense_wakeup = escore_vs_wakeup;
 
-	return rc;
+	rc = escore_vs_request_firmware(escore, escore->vs_filename);
+	if (rc) {
+		dev_err(escore_priv.dev,
+			"%s(): request_firmware(%s) failed %d\n",
+			__func__, escore->vs_filename, rc);
+		goto request_vs_firmware_error;
+	}
 
-kw_alloc_err:
-	kfree(voice_sense->bkg);
-	while (i--)
-		kfree(voice_sense->kw[i]);
-bkg_alloc_err:
+	rc = escore_vs_request_bkg(escore, escore->bkg_filename);
+	if (rc) {
+		dev_err(escore_priv.dev,
+			"%s(): request_firmware of bkg failed %d\n",
+			__func__, rc);
+		goto vs_request_bkg_err;
+	}
+	return rc;
+vs_request_bkg_err:
+	escore_vs_release_firmware(escore);
+request_vs_firmware_error:
 sysfs_init_err:
-	kfree(voice_sense->vs);
-vs_alloc_err:
 	kfree(voice_sense);
 voice_sense_alloc_err:
 	return rc;
