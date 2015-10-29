@@ -257,6 +257,14 @@ static void msm_restart_prepare(const char *cmd)
 			qpnp_pon_set_restart_reason(
 				PON_RESTART_REASON_RTC);
 			__raw_writel(0x77665503, restart_reason);
+#ifdef CONFIG_ZTE_BOOT_MODE
+                /*ZTE_BOOT 20151030 ---->*/
+                } else if (!strcmp(cmd, "ftmmode")) {
+                        qpnp_pon_set_restart_reason(
+                                PON_RESTART_REASON_FTMMODE);
+                        __raw_writel(0x776655ee, restart_reason);
+                /*ZTE_BOOT 20151030 <----*/
+#endif
 		} else if (!strncmp(cmd, "oem-", 4)) {
 			unsigned long code;
 			int ret;
@@ -266,7 +274,7 @@ static void msm_restart_prepare(const char *cmd)
 					     restart_reason);
 		} else if (!strncmp(cmd, "edl", 3)) {
 			enable_emergency_dload_mode();
-		} else {
+                } else {
 			__raw_writel(0x77665501, restart_reason);
 		}
 	}
