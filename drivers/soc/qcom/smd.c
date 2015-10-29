@@ -2454,8 +2454,7 @@ static void smem_zte_set_nv_bootmode(int bootmode)
 
     smem_bootmode = (int *)smem_alloc(SMEM_ID_VENDOR0, sizeof(int), 0, SMEM_ANY_HOST_FLAG);
 
-    if (!smem_bootmode)
-    {
+    if (!smem_bootmode) {
         pr_err("%s: alloc smem failed!\n", __func__);
         return;
     }
