@@ -503,6 +503,13 @@ out:
 	return rc;
 }
 
+#define SHIP_MODE_REG 0x40  //ZTE
+int smb_set_shipmode(void)
+{
+	u8 val;
+	val = 0;
+	return smbchg_sec_masked_write(zte_chip,zte_chip->bat_if_base + SHIP_MODE_REG,0xFF,val);
+}
 static void smbchg_stay_awake(struct smbchg_chip *chip, int reason)
 {
 	int reasons;
@@ -4443,11 +4450,12 @@ void update_usb_status(struct smbchg_chip *chip, bool usb_present, bool force)
 			: handle_usb_removal(chip);
 		goto unlock;
 	}
+	wake_lock_timeout(&chip->charger_wake_lock, 5 * HZ);    //zte add
+
 	if (!chip->usb_present && usb_present) {
 		chip->usb_present = usb_present;
 		handle_usb_insertion(chip);
 	} else if (chip->usb_present && !usb_present) {
-		wake_lock_timeout(&chip->charger_wake_lock, 5 * HZ);    //zte add
 		chip->usb_present = usb_present;
 		handle_usb_removal(chip);
 	}
@@ -7448,8 +7456,7 @@ static int set_heartbeat_ms(const char *val, struct kernel_param *kp)
 module_param_call(heartbeat_ms, set_heartbeat_ms, param_get_uint,
 					&heartbeat_ms, 0644);
 
-//extern int  offcharging_flag = 1;  //For OFFCHARGING  flag
-int  offcharging_flag = 1;  //For OFFCHARGING  flag
+extern int  offcharging_flag;  //For OFFCHARGING  flag
 
 #define LOW_SOC_HEARTBEAT_MS	20000
 #define HEARTBEAT_MS	60000
