@@ -494,7 +494,7 @@ static int msm_isp_get_clk_rates(struct vfe_device *vfe_dev,
 {
 	struct device_node *of_node;
 	int32_t  rc = 0;
-	uint32_t nominal = 0, turbo = 0;
+	uint32_t svs = 0, nominal = 0, turbo = 0;
 	if (!vfe_dev || !rates) {
 		pr_err("%s:%d failed: vfe_dev %p rates %p\n", __func__,
 			__LINE__, vfe_dev, rates);
@@ -514,6 +514,16 @@ static int msm_isp_get_clk_rates(struct vfe_device *vfe_dev,
 		 __LINE__, of_node);
 		return -EINVAL;
 	}
+
+	/*
+	 * Many older targets dont define svs.
+	 * return svs=0 for older targets.
+	 */
+	rc = of_property_read_u32(of_node, "max-clk-svs",
+		&svs);
+	if (rc < 0)
+		svs = 0;
+
 	rc = of_property_read_u32(of_node, "max-clk-nominal",
 		&nominal);
 	if (rc < 0 || !nominal) {
@@ -527,6 +537,7 @@ static int msm_isp_get_clk_rates(struct vfe_device *vfe_dev,
 		pr_err("%s: turbo rate error\n", __func__);
 			return -EINVAL;
 	}
+	rates->svs_rate = svs;
 	rates->nominal_rate = nominal;
 	rates->high_rate = turbo;
 	return 0;
@@ -1424,6 +1435,7 @@ static int msm_isp_send_hw_cmd(struct vfe_device *vfe_dev,
 			pr_err("%s:%d failed: rc %d\n", __func__, __LINE__, rc);
 			return -EINVAL;
 		}
+		user_data->svs_rate = rates.svs_rate;
 		user_data->nominal_rate = rates.nominal_rate;
 		user_data->high_rate = rates.high_rate;
 		break;
@@ -1877,19 +1889,12 @@ static void msm_isp_process_overflow_irq(
 void msm_isp_reset_burst_count_and_frame_drop(
 	struct vfe_device *vfe_dev, struct msm_vfe_axi_stream *stream_info)
 {
-	uint32_t framedrop_period = 0;
 	if (stream_info->state != ACTIVE ||
 		stream_info->stream_type != BURST_STREAM) {
 		return;
 	}
 	if (stream_info->stream_type == BURST_STREAM &&
 		stream_info->num_burst_capture != 0) {
-		framedrop_period = msm_isp_get_framedrop_period(
-		   stream_info->frame_skip_pattern);
-		stream_info->burst_frame_count =
-			stream_info->init_frame_drop +
-			(stream_info->num_burst_capture - 1) *
-			framedrop_period + 1;
 		msm_isp_reset_framedrop(vfe_dev, stream_info);
 	}
 }
@@ -2243,17 +2248,24 @@ void msm_isp_flush_tasklet(struct vfe_device *vfe_dev)
 	return;
 }
 
-void msm_isp_save_framedrop_values(struct vfe_device *vfe_dev)
+void msm_isp_save_framedrop_values(struct vfe_device *vfe_dev,
+				enum msm_vfe_input_src frame_src)
 {
 	struct msm_vfe_axi_stream *stream_info = NULL;
 	uint32_t j = 0;
+	unsigned long flags;
 
 	for (j = 0; j < VFE_AXI_SRC_MAX; j++) {
+		stream_info = &vfe_dev->axi_data.stream_info[j];
+		if (stream_info->state != ACTIVE)
+			continue;
+		if (frame_src != SRC_TO_INTF(stream_info->stream_src))
+			continue;
+
 		stream_info =
 			&vfe_dev->axi_data.stream_info[j];
-		stream_info->prev_framedrop_pattern =
-			stream_info->framedrop_pattern;
-		stream_info->prev_framedrop_period =
-			stream_info->framedrop_period;
+		spin_lock_irqsave(&stream_info->lock, flags);
+		stream_info->prev_framedrop_period &= ~0x80000000;
+		spin_unlock_irqrestore(&stream_info->lock, flags);
 	}
 }

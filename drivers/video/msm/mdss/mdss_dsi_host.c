@@ -114,7 +114,8 @@ void mdss_dsi_ctrl_init(struct device *ctrl_dev,
 	mdss_dsi_buf_alloc(ctrl_dev, &ctrl->rx_buf, SZ_4K);
 	mdss_dsi_buf_alloc(ctrl_dev, &ctrl->status_buf, SZ_4K);
 	ctrl->cmdlist_commit = mdss_dsi_cmdlist_commit;
-
+	ctrl->err_cont.err_time_delta = 100;
+	ctrl->err_cont.max_err_index = MAX_ERR_INDEX;
 
 	if (dsi_event.inited == 0) {
 		kthread_run(dsi_event_thread, (void *)&dsi_event,
@@ -275,6 +276,9 @@ void mdss_dsi_read_hw_revision(struct mdss_dsi_ctrl_pdata *ctrl)
 
 void mdss_dsi_get_hw_revision(struct mdss_dsi_ctrl_pdata *ctrl)
 {
+	if (ctrl->shared_data->hw_rev)
+		return;
+
 	mdss_dsi_clk_ctrl(ctrl, ctrl->dsi_clk_handle, MDSS_DSI_CORE_CLK,
 			  MDSS_DSI_CLK_ON);
 	ctrl->shared_data->hw_rev = MIPI_INP(ctrl->ctrl_base);
@@ -1315,7 +1319,7 @@ static int mdss_dsi_cmd_dma_tpg_tx(struct mdss_dsi_ctrl_pdata *ctrl,
 					struct dsi_buf *tp)
 {
 	int len, i, ret = 0, data = 0;
-	u32 *bp, ctrl_rev;
+	u32 *bp;
 	struct mdss_dsi_ctrl_pdata *mctrl = NULL;
 
 	if (tp->len > DMA_TPG_FIFO_LEN) {
@@ -1323,9 +1327,9 @@ static int mdss_dsi_cmd_dma_tpg_tx(struct mdss_dsi_ctrl_pdata *ctrl,
 		return -EINVAL;
 	}
 
-	ctrl_rev = MIPI_INP(ctrl->ctrl_base);
+	mdss_dsi_get_hw_revision(ctrl);
 
-	if (ctrl_rev < MDSS_DSI_HW_REV_103) {
+	if (ctrl->shared_data->hw_rev < MDSS_DSI_HW_REV_103) {
 		pr_err("CMD DMA TPG not supported for this DSI version\n");
 		return -EINVAL;
 	}
@@ -2219,8 +2223,8 @@ void mdss_dsi_cmd_mdp_busy(struct mdss_dsi_ctrl_pdata *ctrl)
 				pr_err("%s: timeout error\n", __func__);
 				MDSS_XLOG_TOUT_HANDLER("mdp", "dsi0_ctrl",
 					"dsi0_phy", "dsi1_ctrl", "dsi1_phy",
-					"vbif", "dbg_bus", "vbif_dbg_bus",
-					"panic");
+					"vbif", "vbif_nrt", "dbg_bus",
+					"vbif_dbg_bus", "panic");
 			}
 		}
 	}
@@ -2279,7 +2283,6 @@ int mdss_dsi_cmdlist_commit(struct mdss_dsi_ctrl_pdata *ctrl, int from_mdp)
 	int ret = -EINVAL;
 	int rc = 0;
 	bool hs_req = false;
-	u32 ctrl_rev;
 
 	if (mdss_get_sd_client_cnt())
 		return -EPERM;
@@ -2302,10 +2305,10 @@ int mdss_dsi_cmdlist_commit(struct mdss_dsi_ctrl_pdata *ctrl, int from_mdp)
 	/* make sure dsi_cmd_mdp is idle */
 	mdss_dsi_cmd_mdp_busy(ctrl);
 
-	ctrl_rev = MIPI_INP(ctrl->ctrl_base);
+	mdss_dsi_get_hw_revision(ctrl);
 
 	/* For DSI versions less than 1.3.0, CMD DMA TPG is not supported */
-	if (req && (ctrl_rev < MDSS_DSI_HW_REV_103))
+	if (req && (ctrl->shared_data->hw_rev < MDSS_DSI_HW_REV_103))
 		req->flags &= ~CMD_REQ_DMA_TPG;
 
 	pr_debug("%s: ctrl=%d from_mdp=%d pid=%d\n", __func__,
@@ -2486,8 +2489,8 @@ static int dsi_event_thread(void *data)
 			}
 			mutex_unlock(&ctrl->mutex);
 			MDSS_XLOG_TOUT_HANDLER("mdp", "dsi0_ctrl",
-				"dsi0_phy", "dsi1_ctrl", "dsi1_phy",
-				"vbif", "dbg_bus", "vbif_dbg_bus", "panic");
+				"dsi0_phy", "dsi1_ctrl", "dsi1_phy", "vbif",
+				"vbif_nrt", "dbg_bus", "vbif_dbg_bus", "panic");
 		}
 
 		if (todo & DSI_EV_DSI_FIFO_EMPTY)
@@ -2633,6 +2636,7 @@ void mdss_dsi_dln0_phy_err(struct mdss_dsi_ctrl_pdata *ctrl)
 	if (status & 0x011111) {
 		MIPI_OUTP(base + 0x00b4, status);
 		pr_err("%s: status=%x\n", __func__, status);
+		ctrl->err_cont.phy_err_cnt++;
 	}
 }
 
@@ -2658,6 +2662,7 @@ void mdss_dsi_fifo_status(struct mdss_dsi_ctrl_pdata *ctrl)
 			dsi_send_events(ctrl, DSI_EV_MDP_FIFO_UNDERFLOW, 0);
 		if (status & 0x11110000) /* DLN_FIFO_EMPTY */
 			dsi_send_events(ctrl, DSI_EV_DSI_FIFO_EMPTY, 0);
+		ctrl->err_cont.fifo_err_cnt++;
 	}
 }
 
@@ -2691,6 +2696,27 @@ void mdss_dsi_clk_status(struct mdss_dsi_ctrl_pdata *ctrl)
 	}
 }
 
+static void __dsi_error_counter(struct dsi_err_container *err_container)
+{
+	s64 prev_time, curr_time;
+	int prev_index;
+
+	err_container->err_cnt++;
+
+	err_container->index = (err_container->index + 1) %
+		err_container->max_err_index;
+	curr_time = ktime_to_ms(ktime_get());
+	err_container->err_time[err_container->index] = curr_time;
+
+	prev_index = (err_container->index + 1) % err_container->max_err_index;
+	prev_time = err_container->err_time[prev_index];
+
+	if (prev_time &&
+		((curr_time - prev_time) < err_container->err_time_delta))
+		MDSS_XLOG_TOUT_HANDLER("mdp", "dsi0_ctrl", "dsi0_phy",
+			"dsi1_ctrl", "dsi1_phy", "panic");
+}
+
 void mdss_dsi_error(struct mdss_dsi_ctrl_pdata *ctrl)
 {
 	u32 intr;
@@ -2712,6 +2738,7 @@ void mdss_dsi_error(struct mdss_dsi_ctrl_pdata *ctrl)
 	intr |= DSI_INTR_ERROR;
 	MIPI_OUTP(ctrl->ctrl_base + 0x0110, intr);
 
+	__dsi_error_counter(&ctrl->err_cont);
 	dsi_send_events(ctrl, DSI_EV_MDP_BUSY_RELEASE, 0);
 }
 

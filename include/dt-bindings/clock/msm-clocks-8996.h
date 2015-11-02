@@ -196,7 +196,6 @@
 #define clk_gcc_gp2_clk			0x9bf83ffd
 #define clk_gcc_gp3_clk			0xec6539ee
 #define clk_gcc_hmss_rbcpr_clk		0x699183be
-#define clk_gcc_mmss_sys_noc_axi_clk	0x4467b15b
 #define clk_gcc_mmss_noc_cfg_ahb_clk	0xb41a9d99
 #define clk_gcc_pcie_0_aux_clk		0x3d2e3ece
 #define clk_gcc_pcie_0_cfg_ahb_clk	0x4dd325c3
@@ -289,6 +288,7 @@
 #define clk_gpll0_out_msscc		0x7d794829
 #define clk_gcc_debug_mux_v2		0xf7e749f0
 #define clk_gcc_dcc_ahb_clk		0xfa14a88c
+#define clk_gcc_aggre0_noc_mpu_cfg_ahb_clk	0x5c1bb8e2
 
 /* clock_mmss controlled clocks */
 #define clk_mmsscc_xo			0x05e63704

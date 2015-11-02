@@ -58,6 +58,7 @@
 #define CORE_VERSION_MAJOR_MASK		0xF0000000
 #define CORE_VERSION_MAJOR_SHIFT	28
 #define CORE_VERSION_TARGET_MASK	0x000000FF
+#define SDHCI_MSM_VER_420               0x49
 
 #define CORE_GENERICS			0x70
 #define SWITCHABLE_SIGNALLING_VOL	(1 << 29)
@@ -151,6 +152,10 @@
 
 #define CORE_CDC_ERROR_CODE_MASK	0x7000000
 
+#define CQ_CMD_DBG_RAM	                0x110
+#define CQ_CMD_DBG_RAM_WA               0x150
+#define CQ_CMD_DBG_RAM_OL               0x154
+
 #define CORE_CSR_CDC_GEN_CFG		0x178
 #define CORE_CDC_SWITCH_BYPASS_OFF	(1 << 0)
 #define CORE_CDC_SWITCH_RC_EN		(1 << 1)
@@ -206,6 +211,9 @@ static const u32 tuning_block_128[] = {
 	0xDDFFFFFF, 0xDDFFFFFF, 0xFFFFFFDD, 0xFFFFFFBB,
 	0xFFFFBBBB, 0xFFFF77FF, 0xFF7777FF, 0xEEDDBB77
 };
+
+/* global to hold each slot instance for debug */
+static struct sdhci_msm_host *sdhci_slot[2];
 
 static int disable_slots;
 /* root can write, others read */
@@ -2944,6 +2952,28 @@ static void sdhci_msm_set_uhs_signaling(struct sdhci_host *host,
 }
 
 #define MAX_TEST_BUS 60
+#define DRV_NAME "cmdq-host"
+static void sdhci_msm_cmdq_dump_debug_ram(struct sdhci_msm_host *msm_host)
+{
+	int i = 0;
+	struct cmdq_host *cq_host = mmc_cmdq_private(msm_host->mmc);
+	u32 version = readl_relaxed(msm_host->core_mem + CORE_MCI_VERSION);
+	u16 minor = version & CORE_VERSION_TARGET_MASK;
+	/* registers offset changed starting from 4.2.0 */
+	int offset = minor >= SDHCI_MSM_VER_420 ? 0 : 0x48;
+
+	pr_err("---- Debug RAM dump ----\n");
+	pr_err(DRV_NAME ": Debug RAM wrap-around: 0x%08x | Debug RAM overlap: 0x%08x\n",
+	       cmdq_readl(cq_host, CQ_CMD_DBG_RAM_WA + offset),
+	       cmdq_readl(cq_host, CQ_CMD_DBG_RAM_OL + offset));
+
+	while (i < 16) {
+		pr_err(DRV_NAME ": Debug RAM dump [%d]: 0x%08x\n", i,
+		       cmdq_readl(cq_host, CQ_CMD_DBG_RAM + offset + (4 * i)));
+		i++;
+	}
+	pr_err("-------------------------\n");
+}
 
 void sdhci_msm_dump_vendor_regs(struct sdhci_host *host)
 {
@@ -2956,6 +2986,9 @@ void sdhci_msm_dump_vendor_regs(struct sdhci_host *host)
 	u32 sts = 0;
 
 	pr_info("----------- VENDOR REGISTER DUMP -----------\n");
+	if (host->cq_host)
+		sdhci_msm_cmdq_dump_debug_ram(msm_host);
+
 	pr_info("Data cnt: 0x%08x | Fifo cnt: 0x%08x | Int sts: 0x%08x\n",
 		readl_relaxed(msm_host->core_mem + CORE_MCI_DATA_CNT),
 		readl_relaxed(msm_host->core_mem + CORE_MCI_FIFO_CNT),
@@ -3185,11 +3218,13 @@ void sdhci_msm_pm_qos_irq_unvote(struct sdhci_host *host, bool async)
 	if (!msm_host->pm_qos_irq.enabled)
 		return;
 
-	counter = atomic_dec_return(&msm_host->pm_qos_irq.counter);
-	if (counter < 0) {
-		pr_err("%s: counter=%d\n", __func__, counter);
-		BUG();
+	if (atomic_read(&msm_host->pm_qos_irq.counter)) {
+		counter = atomic_dec_return(&msm_host->pm_qos_irq.counter);
+	} else {
+		WARN(1, "attempt to decrement pm_qos_irq.counter when it's 0");
+		return;
 	}
+
 	if (counter)
 		return;
 
@@ -3710,11 +3745,13 @@ static void sdhci_msm_cmdq_init(struct sdhci_host *host,
 	struct sdhci_msm_host *msm_host = pltfm_host->priv;
 
 	host->cq_host = cmdq_pltfm_init(pdev);
-	if (IS_ERR(host->cq_host))
+	if (IS_ERR(host->cq_host)) {
 		dev_dbg(&pdev->dev, "cmdq-pltfm init: failed: %ld\n",
 			PTR_ERR(host->cq_host));
-	else
+		host->cq_host = NULL;
+	} else {
 		msm_host->mmc->caps2 |= MMC_CAP2_CMD_QUEUE;
+	}
 }
 #else
 static void sdhci_msm_cmdq_init(struct sdhci_host *host,
@@ -3822,6 +3859,9 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 			ret = -ENODEV;
 			goto pltfm_free;
 		}
+
+		if (ret <= 2)
+			sdhci_slot[ret-1] = msm_host;
 
 		msm_host->pdata = sdhci_msm_populate_pdata(&pdev->dev,
 							   msm_host);
@@ -4003,7 +4043,6 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	host->quirks |= SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN;
 	host->quirks |= SDHCI_QUIRK_NO_ENDATTR_IN_NOPDESC;
 	host->quirks2 |= SDHCI_QUIRK2_ALWAYS_USE_BASE_CLOCK;
-	host->quirks2 |= SDHCI_QUIRK2_USE_MAX_DISCARD_SIZE;
 	host->quirks2 |= SDHCI_QUIRK2_IGNORE_DATATOUT_FOR_R1BCMD;
 	host->quirks2 |= SDHCI_QUIRK2_BROKEN_PRESET_VALUE;
 	host->quirks2 |= SDHCI_QUIRK2_USE_RESERVED_MAX_TIMEOUT;
@@ -4066,6 +4105,8 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	msm_host->mmc->caps2 |= MMC_CAP2_HS400_POST_TUNING;
 	msm_host->mmc->caps2 |= MMC_CAP2_CLK_SCALE;
 	msm_host->mmc->caps2 |= MMC_CAP2_SANITIZE;
+	msm_host->mmc->caps2 |= MMC_CAP2_MAX_DISCARD_SIZE;
+	msm_host->mmc->caps2 |= MMC_CAP2_SLEEP_AWAKE;
 
 	if (msm_host->pdata->nonremovable)
 		msm_host->mmc->caps |= MMC_CAP_NONREMOVABLE;

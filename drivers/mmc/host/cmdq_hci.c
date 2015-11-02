@@ -132,23 +132,6 @@ static void cmdq_clear_set_irqs(struct cmdq_host *cq_host, u32 clear, u32 set)
 
 #define DRV_NAME "cmdq-host"
 
-static void cmdq_dump_debug_ram(struct cmdq_host *cq_host)
-{
-	int i = 0;
-
-	pr_err("---- Debug RAM dump ----\n");
-	pr_err(DRV_NAME ": Debug RAM wrap-around: 0x%08x | Debug RAM overlap: 0x%08x\n",
-	       cmdq_readl(cq_host, CQ_CMD_DBG_RAM_WA),
-	       cmdq_readl(cq_host, CQ_CMD_DBG_RAM_OL));
-
-	while (i < 16) {
-		pr_err(DRV_NAME ": Debug RAM dump [%d]: 0x%08x\n", i,
-		       cmdq_readl(cq_host, CQ_CMD_DBG_RAM + (0x4 * i)));
-		i++;
-	}
-	pr_err("-------------------------\n");
-}
-
 static void cmdq_dumpregs(struct cmdq_host *cq_host)
 {
 	struct mmc_host *mmc = cq_host->mmc;
@@ -193,7 +176,6 @@ static void cmdq_dumpregs(struct cmdq_host *cq_host)
 	       cmdq_readl(cq_host, CQ_VENDOR_CFG));
 	pr_err(DRV_NAME ": ===========================================\n");
 
-	cmdq_dump_debug_ram(cq_host);
 	if (cq_host->ops->dump_vendor_regs)
 		cq_host->ops->dump_vendor_regs(mmc);
 }
@@ -682,7 +664,7 @@ static void cmdq_finish_data(struct mmc_host *mmc, unsigned int tag)
 
 	if (mrq->cmdq_req->cmdq_req_flags & DCMD)
 		cmdq_writel(cq_host, cmdq_readl(cq_host, CQ_VENDOR_CFG) |
-			    CMDQ_SEND_STATUS_TRIGGER, CQCTL);
+			    CMDQ_SEND_STATUS_TRIGGER, CQ_VENDOR_CFG);
 
 	cmdq_runtime_pm_put(cq_host);
 	if (cq_host->ops->crypto_cfg_reset)
@@ -796,17 +778,27 @@ static int cmdq_halt(struct mmc_host *mmc, bool halt)
 {
 	struct cmdq_host *cq_host = (struct cmdq_host *)mmc_cmdq_private(mmc);
 	u32 ret = 0;
+	int retries = 3;
 
 	cmdq_runtime_pm_get(cq_host);
 	if (halt) {
-		cmdq_writel(cq_host, cmdq_readl(cq_host, CQCTL) | HALT,
-			    CQCTL);
-		ret = wait_for_completion_timeout(&cq_host->halt_comp,
+		while (retries) {
+			cmdq_writel(cq_host, cmdq_readl(cq_host, CQCTL) | HALT,
+				    CQCTL);
+			ret = wait_for_completion_timeout(&cq_host->halt_comp,
 					  msecs_to_jiffies(HALT_TIMEOUT_MS));
-		/* halt done: re-enable legacy interrupts */
-		if (cq_host->ops->clear_set_irqs)
-			cq_host->ops->clear_set_irqs(mmc, false);
-		ret = ret ? 0 : -ETIMEDOUT;
+			if (!ret && !(cmdq_readl(cq_host, CQCTL) & HALT)) {
+				retries--;
+				continue;
+			} else {
+				/* halt done: re-enable legacy interrupts */
+				if (cq_host->ops->clear_set_irqs)
+					cq_host->ops->clear_set_irqs(mmc,
+								false);
+				break;
+			}
+		}
+		ret = retries ? 0 : -ETIMEDOUT;
 	} else {
 		if (cq_host->ops->set_data_timeout)
 			cq_host->ops->set_data_timeout(mmc, 0xf);

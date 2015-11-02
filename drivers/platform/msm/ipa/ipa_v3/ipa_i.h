@@ -46,6 +46,8 @@
 #define IPA_NUM_DESC_PER_SW_TX (3)
 #define IPA_GENERIC_RX_POOL_SZ 192
 
+#define IPA_MAX_STATUS_STAT_NUM 30
+
 #define IPADBG(fmt, args...) \
 	pr_debug(DRV_NAME " %s:%d " fmt, __func__, __LINE__, ## args)
 #define IPAERR(fmt, args...) \
@@ -534,6 +536,11 @@ struct ipa_gsi_ep_mem_info {
 	void *chan_ring_base_vaddr;
 };
 
+struct ipa3_status_stats {
+	struct ipa3_hw_pkt_status status[IPA_MAX_STATUS_STAT_NUM];
+	int curr;
+};
+
 /**
  * struct ipa3_ep_context - IPA end point context
  * @valid: flag indicating id EP context is valid
@@ -560,6 +567,9 @@ struct ipa_gsi_ep_mem_info {
  * @skip_ep_cfg: boolean field that determines if EP should be configured
  *  by IPA driver
  * @keep_ipa_awake: when true, IPA will not be clock gated
+ * @disconnect_in_progress: Indicates client disconnect in progress.
+ * @qmi_request_sent: Indicates whether QMI request to enable clear data path
+ *					request is sent or not.
  */
 struct ipa3_ep_context {
 	int valid;
@@ -594,6 +604,8 @@ struct ipa3_ep_context {
 	bool keep_ipa_awake;
 	struct ipa3_wlan_stats wstats;
 	u32 wdi_state;
+	bool disconnect_in_progress;
+	u32 qmi_request_sent;
 
 	/* sys MUST be the last element of this struct */
 	struct ipa3_sys_context *sys;
@@ -684,6 +696,7 @@ struct ipa3_sys_context {
 	spinlock_t spinlock;
 	struct workqueue_struct *wq;
 	struct workqueue_struct *repl_wq;
+	struct ipa3_status_stats *status_stat;
 	/* ordering is important - other immutable fields go below */
 };
 
@@ -731,6 +744,28 @@ struct ipa3_tx_pkt_wrapper {
 	u32 cnt;
 	void *bounce;
 	bool no_unmap_dma;
+};
+
+/**
+ * struct ipa3_dma_xfer_wrapper - IPADMA transfer descr wrapper
+ * @phys_addr_src: physical address of the source data to copy
+ * @phys_addr_dest: physical address to store the copied data
+ * @len: len in bytes to copy
+ * @link: linked to the wrappers list on the proper(sync/async) cons pipe
+ * @xfer_done: completion object for sync_memcpy completion
+ * @callback: IPADMA client provided completion callback
+ * @user1: cookie1 for above callback
+ *
+ * This struct can wrap both sync and async memcpy transfers descriptors.
+ */
+struct ipa3_dma_xfer_wrapper {
+	u64 phys_addr_src;
+	u64 phys_addr_dest;
+	u16 len;
+	struct list_head link;
+	struct completion xfer_done;
+	void (*callback)(void *user1);
+	void *user1;
 };
 
 /**
@@ -871,6 +906,28 @@ struct ipa3_active_clients {
 struct ipa3_tag_completion {
 	struct completion comp;
 	atomic_t cnt;
+};
+
+/**
+ * struct ipa3_debugfs_rt_entry - IPA routing table entry for debugfs
+ * @eq_attrib: equation attributes for the rule
+ * @retain_hdr: retain header when hit this rule
+ * @prio: rule 10bit priority which defines the order of the rule
+ * @rule_id: rule 10bit ID to be returned in packet status
+ * @dst: destination endpoint
+ * @hdr_ofset: header offset to be added
+ * @system: rule resides in system memory
+ * @is_proc_ctx: indicates whether the rules points to proc_ctx or header
+ */
+struct ipa3_debugfs_rt_entry {
+	struct ipa_ipfltri_rule_eq eq_attrib;
+	uint8_t retain_hdr;
+	u16 prio;
+	u16 rule_id;
+	u8 dst;
+	u8 hdr_ofset;
+	u8 system;
+	u8 is_proc_ctx;
 };
 
 struct ipa3_controller;
@@ -1155,7 +1212,7 @@ struct ipa3_transport_pm {
 	spinlock_t lock;
 	bool res_granted;
 	bool res_rel_in_prog;
-	bool dec_clients;
+	atomic_t dec_clients;
 	atomic_t eot_activity;
 };
 
@@ -1247,7 +1304,7 @@ struct ipa3_hash_tuple {
  * @tag_process_before_gating: indicates whether to start tag process before
  *  gating IPA clocks
  * @transport_pm: transport power management related information
- * @lan_rx_clnt_notify_lock: protects LAN_CONS packet receive notification CB
+ * @disconnect_lock: protects LAN_CONS packet receive notification CB
  * @pipe_mem_pool: pipe memory pool
  * @dma_pool: special purpose DMA pool
  * @ipa3_active_clients: structure for reference counting connected IPA clients
@@ -1332,7 +1389,7 @@ struct ipa3_context {
 	u32 clnt_hdl_cmd;
 	u32 clnt_hdl_data_in;
 	u32 clnt_hdl_data_out;
-	spinlock_t lan_rx_clnt_notify_lock;
+	spinlock_t disconnect_lock;
 	u8 a5_pipe_index;
 	struct list_head intf_list;
 	struct list_head msg_list;
@@ -1380,6 +1437,7 @@ struct ipa3_context {
 	bool ipa_client_apps_wan_cons_agg_gro;
 	/* M-release support to know client pipes */
 	struct ipa3cm_client_info ipacm_client[IPA3_MAX_NUM_PIPES];
+	bool tethered_flow_control;
 };
 
 /**
@@ -1434,6 +1492,7 @@ struct ipa3_plat_drv_res {
 	bool skip_uc_pipe_reset;
 	enum ipa_transport_type transport_prototype;
 	bool apply_rg10_wa;
+	bool tethered_flow_control;
 };
 
 struct ipa3_mem_partition {
@@ -1593,9 +1652,7 @@ int ipa3_reset_gsi_event_ring(u32 clnt_hdl);
 int ipa3_set_usb_max_packet_size(
 	enum ipa_usb_max_usb_packet_size usb_max_packet_size);
 
-int ipa3_xdci_connect(u32 clnt_hdl, u8 xferrscidx, bool xferrscidx_valid,
-	void (*client_notify)(void *priv, enum ipa_dp_evt_type evt,
-	unsigned long data));
+int ipa3_xdci_connect(u32 clnt_hdl, u8 xferrscidx, bool xferrscidx_valid);
 
 int ipa3_xdci_disconnect(u32 clnt_hdl, bool should_force_clear, u32 qmi_req_id);
 
@@ -1615,16 +1672,14 @@ int ipa3_usb_init_teth_prot(enum ipa_usb_teth_prot teth_prot,
 			   void *),
 			   void *user_data);
 
-int ipa3_usb_request_xdci_channel(struct ipa_usb_xdci_chan_params *params,
-				   struct ipa_req_chan_out_params *out_params);
-
-int ipa3_usb_xdci_connect(struct ipa_usb_xdci_connect_params *params);
+int ipa3_usb_xdci_connect(struct ipa_usb_xdci_chan_params *ul_chan_params,
+			 struct ipa_usb_xdci_chan_params *dl_chan_params,
+			 struct ipa_req_chan_out_params *ul_out_params,
+			 struct ipa_req_chan_out_params *dl_out_params,
+			 struct ipa_usb_xdci_connect_params *connect_params);
 
 int ipa3_usb_xdci_disconnect(u32 ul_clnt_hdl, u32 dl_clnt_hdl,
 			     enum ipa_usb_teth_prot teth_prot);
-
-int ipa3_usb_release_xdci_channel(u32 clnt_hdl,
-				  enum ipa_usb_teth_prot teth_prot);
 
 int ipa3_usb_deinit_teth_prot(enum ipa_usb_teth_prot teth_prot);
 
@@ -1637,6 +1692,11 @@ int ipa3_usb_xdci_resume(u32 ul_clnt_hdl, u32 dl_clnt_hdl);
  * Resume / Suspend
  */
 int ipa3_reset_endpoint(u32 clnt_hdl);
+
+/*
+ * Remove ep delay
+ */
+int ipa3_clear_endpoint_delay(u32 clnt_hdl);
 
 /*
  * Configuration
@@ -1904,9 +1964,9 @@ int ipa3_dma_enable(void);
 
 int ipa3_dma_disable(void);
 
-int ipa3_dma_sync_memcpy(phys_addr_t dest, phys_addr_t src, int len);
+int ipa3_dma_sync_memcpy(u64 dest, u64 src, int len);
 
-int ipa3_dma_async_memcpy(phys_addr_t dest, phys_addr_t src, int len,
+int ipa3_dma_async_memcpy(u64 dest, u64 src, int len,
 			void (*user_cb)(void *user1), void *user_param);
 
 int ipa3_dma_uc_memcpy(phys_addr_t dest, phys_addr_t src, int len);
@@ -2035,6 +2095,10 @@ int _ipa_read_dbg_cnt_v3_0(char *buf, int max_len);
 void _ipa_enable_clks_v3_0(void);
 void _ipa_disable_clks_v3_0(void);
 struct device *ipa3_get_dma_dev(void);
+void ipa3_suspend_active_aggr_wa(u32 clnt_hdl);
+void ipa3_suspend_handler(enum ipa_irq_type interrupt,
+				void *private_data,
+				void *interrupt_data);
 
 
 static inline u32 ipa_read_reg(void *base, u32 offset)
@@ -2131,6 +2195,7 @@ int ipa3_mhi_handle_ipa_config_req(struct ipa_config_req_msg_v01 *config_req);
 int ipa3_uc_interface_init(void);
 int ipa3_uc_reset_pipe(enum ipa_client_type ipa_client);
 int ipa3_uc_state_check(void);
+int ipa3_uc_loaded_check(void);
 void ipa3_uc_load_notify(void);
 int ipa3_uc_send_cmd(u32 cmd, u32 opcode, u32 expected_status,
 		    bool polling_mode, unsigned long timeout_jiffies);
@@ -2179,4 +2244,20 @@ void ipa3_set_resorce_groups_min_max_limits(void);
 void ipa3_suspend_apps_pipes(bool suspend);
 void ipa3_flow_control(enum ipa_client_type ipa_client, bool enable,
 			uint32_t qmap_id);
+int ipa3_generate_eq_from_hw_rule(
+	struct ipa_ipfltri_rule_eq *attrib, u8 *buf, u8 *rule_size);
+int ipa3_flt_read_tbl_from_hw(u32 pipe_idx,
+	enum ipa_ip_type ip_type,
+	bool hashable,
+	struct ipa3_flt_entry entry[],
+	int *num_entry);
+int ipa3_rt_read_tbl_from_hw(u32 tbl_idx,
+	enum ipa_ip_type ip_type,
+	bool hashable,
+	struct ipa3_debugfs_rt_entry entry[],
+	int *num_entry);
+
+int ipa3_calc_extra_wrd_bytes(const struct ipa_ipfltri_rule_eq *attrib);
+int ipa3_restore_suspend_handler(void);
+
 #endif /* _IPA3_I_H_ */

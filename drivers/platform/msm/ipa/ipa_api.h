@@ -21,6 +21,8 @@ struct ipa_api_controller {
 
 	int (*ipa_reset_endpoint)(u32 clnt_hdl);
 
+	int (*ipa_clear_endpoint_delay)(u32 clnt_hdl);
+
 	int (*ipa_cfg_ep)(u32 clnt_hdl, const struct ipa_ep_cfg *ipa_ep_cfg);
 
 	int (*ipa_cfg_ep_nat)(u32 clnt_hdl,
@@ -249,9 +251,9 @@ struct ipa_api_controller {
 
 	int (*ipa_dma_disable)(void);
 
-	int (*ipa_dma_sync_memcpy)(phys_addr_t dest, phys_addr_t src, int len);
+	int (*ipa_dma_sync_memcpy)(u64 dest, u64 src, int len);
 
-	int (*ipa_dma_async_memcpy)(phys_addr_t dest, phys_addr_t src, int len,
+	int (*ipa_dma_async_memcpy)(u64 dest, u64 src, int len,
 		void (*user_cb)(void *user1), void *user_param);
 
 	int (*ipa_dma_uc_memcpy)(phys_addr_t dest, phys_addr_t src, int len);
@@ -281,6 +283,8 @@ struct ipa_api_controller {
 		void *private_data);
 
 	int (*ipa_remove_interrupt_handler)(enum ipa_irq_type interrupt);
+
+	int (*ipa_restore_suspend_handler)(void);
 
 	void (*ipa_bam_reg_dump)(void);
 
@@ -332,17 +336,14 @@ struct ipa_api_controller {
 		int (*ipa_usb_notify_cb)(enum ipa_usb_notify_event, void*),
 		void *user_data);
 
-	int (*ipa_usb_request_xdci_channel)(
-		struct ipa_usb_xdci_chan_params *params,
-		struct ipa_req_chan_out_params *out_params);
-
 	int (*ipa_usb_xdci_connect)(
-		struct ipa_usb_xdci_connect_params *params);
+		struct ipa_usb_xdci_chan_params *ul_chan_params,
+		struct ipa_usb_xdci_chan_params *dl_chan_params,
+		struct ipa_req_chan_out_params *ul_out_params,
+		struct ipa_req_chan_out_params *dl_out_params,
+		struct ipa_usb_xdci_connect_params *connect_params);
 
 	int (*ipa_usb_xdci_disconnect)(u32 ul_clnt_hdl, u32 dl_clnt_hdl,
-		enum ipa_usb_teth_prot teth_prot);
-
-	int (*ipa_usb_release_xdci_channel)(u32 clnt_hdl,
 		enum ipa_usb_teth_prot teth_prot);
 
 	int (*ipa_usb_deinit_teth_prot)(enum ipa_usb_teth_prot teth_prot);

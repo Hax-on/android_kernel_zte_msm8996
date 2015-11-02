@@ -32,7 +32,6 @@
 #include <linux/of.h>
 #include <linux/pm.h>
 #include <linux/jiffies.h>
-#include <linux/blkdev.h>
 
 #include <trace/events/mmc.h>
 
@@ -680,7 +679,7 @@ int mmc_init_clk_scaling(struct mmc_host *host)
 	host->clk_scaling.ondemand_gov_data.upthreshold =
 		host->clk_scaling.upthreshold;
 	host->clk_scaling.ondemand_gov_data.downdifferential =
-		host->clk_scaling.downthreshold;
+		host->clk_scaling.upthreshold - host->clk_scaling.downthreshold;
 
 	err = mmc_devfreq_create_freq_table(host);
 	if (err) {
@@ -1483,8 +1482,7 @@ int mmc_cmdq_halt(struct mmc_host *host, bool halt)
 			mmc_host_set_halt(host);
 		else if (!err && !halt) {
 			mmc_host_clr_halt(host);
-			if (host->cmdq_ctx.q)
-				blk_run_queue(host->cmdq_ctx.q);
+			wake_up(&host->cmdq_ctx.wait);
 		}
 	} else {
 		err = -ENOSYS;
@@ -1607,8 +1605,7 @@ struct mmc_async_req *mmc_start_req(struct mmc_host *host,
 	if (host->areq)
 		mmc_post_req(host, host->areq->mrq, 0);
 
-	 /* Cancel a prepared request if it was not started. */
-	if ((err || start_err) && areq)
+	if (err && areq)
 		mmc_post_req(host, areq->mrq, -EINVAL);
 
 	if (err)
@@ -3449,7 +3446,8 @@ unsigned int mmc_calc_max_discard(struct mmc_card *card)
 	struct mmc_host *host = card->host;
 	unsigned int max_discard, max_trim;
 
-	if (!host->max_busy_timeout)
+	if (!host->max_busy_timeout ||
+			(host->caps2 & MMC_CAP2_MAX_DISCARD_SIZE))
 		return UINT_MAX;
 
 	/*

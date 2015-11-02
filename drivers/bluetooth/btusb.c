@@ -23,9 +23,12 @@
 #include <linux/module.h>
 #include <linux/usb.h>
 #include <linux/firmware.h>
+#include <linux/suspend.h>
 
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
+
+#include "ath3k.h"
 
 #define VERSION "0.6"
 
@@ -163,14 +166,13 @@ static const struct usb_device_id blacklist_table[] = {
 	{ USB_DEVICE(0x03f0, 0x311d), .driver_info = BTUSB_IGNORE },
 
 	/* Atheros 3012 with sflash firmware */
-	{ USB_DEVICE(0x0489, 0xe04d), .driver_info = BTUSB_ATH3012 },
-	{ USB_DEVICE(0x0489, 0xe04e), .driver_info = BTUSB_ATH3012 },
-	{ USB_DEVICE(0x0489, 0xe056), .driver_info = BTUSB_ATH3012 },
-	{ USB_DEVICE(0x0489, 0xe057), .driver_info = BTUSB_ATH3012 },
-	{ USB_DEVICE(0x0489, 0xe05f), .driver_info = BTUSB_ATH3012 },
-	{ USB_DEVICE(0x0489, 0xe076), .driver_info = BTUSB_ATH3012 },
-	{ USB_DEVICE(0x0489, 0xe078), .driver_info = BTUSB_ATH3012 },
-	{ USB_DEVICE(0x04c5, 0x1330), .driver_info = BTUSB_ATH3012 },
+	{ USB_DEVICE(0x0cf3, 0x0036), .driver_info = BTUSB_ATH3012 },
+	{ USB_DEVICE(0x0cf3, 0x3004), .driver_info = BTUSB_ATH3012 },
+	{ USB_DEVICE(0x0cf3, 0x3008), .driver_info = BTUSB_ATH3012 },
+	{ USB_DEVICE(0x0cf3, 0x311d), .driver_info = BTUSB_ATH3012 },
+	{ USB_DEVICE(0x0cf3, 0x817a), .driver_info = BTUSB_ATH3012 },
+	{ USB_DEVICE(0x0cf3, 0xe500), .driver_info = BTUSB_ATH3012 },
+	{ USB_DEVICE(0x13d3, 0x3375), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x04ca, 0x3004), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x04ca, 0x3005), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x04ca, 0x3006), .driver_info = BTUSB_ATH3012 },
@@ -1964,7 +1966,8 @@ static int btusb_probe(struct usb_interface *intf,
 	struct usb_endpoint_descriptor *ep_desc;
 	struct btusb_data *data;
 	struct hci_dev *hdev;
-	int i, version, err;
+	int i, err;
+	struct ath3k_version version;
 
 	BT_DBG("intf %p id %p", intf, id);
 
@@ -1985,18 +1988,24 @@ static int btusb_probe(struct usb_interface *intf,
 
 	if (id->driver_info & BTUSB_ATH3012) {
 		struct usb_device *udev = interface_to_usbdev(intf);
-
-		version = get_rome_version(udev);
-		BT_INFO("Rome Version: 0x%x",  version);
 		/* Old firmware would otherwise let ath3k driver load
 		 * patch and sysconfig files */
-		if (version)
-			rome_download(udev);
-		else if (le16_to_cpu(udev->descriptor.bcdDevice) <= 0x0001) {
-			BT_INFO("FW for ar3k is yet to be downloaded");
+		err = get_rome_version(udev, &version);
+		if (err < 0) {
+			if (le16_to_cpu(udev->descriptor.bcdDevice) <= 0x0001)
+				BT_INFO("FW for ar3k is yet to be downloaded");
+			else
+				BT_ERR("Failed to get ROME USB version");
+			return -ENODEV;
+		}
+		BT_INFO("Rome Version: 0x%x", version.rom_version);
+		err = rome_download(udev, &version);
+		if (err < 0) {
+			BT_ERR("Failed to download ROME firmware");
 			return -ENODEV;
 		}
 	}
+
 	data = devm_kzalloc(&intf->dev, sizeof(*data), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
@@ -2286,6 +2295,29 @@ done:
 }
 #endif
 
+static unsigned long btusb_pm_flags;
+#define BTUSB_PM_SUSPEND	(1)
+static int btusb_pm_notify(struct notifier_block *b,
+				unsigned long event, void *p)
+{
+	switch (event) {
+	case PM_SUSPEND_PREPARE:
+		set_bit(BTUSB_PM_SUSPEND, &btusb_pm_flags);
+		down_write(&btusb_pm_sem);
+		break;
+	case PM_POST_SUSPEND:
+		up_write(&btusb_pm_sem);
+		clear_bit(BTUSB_PM_SUSPEND, &btusb_pm_flags);
+		break;
+	}
+
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block btusb_pm_notifier = {
+	.notifier_call = btusb_pm_notify,
+};
+
 static struct usb_driver btusb_driver = {
 	.name		= "btusb",
 	.probe		= btusb_probe,
@@ -2299,7 +2331,31 @@ static struct usb_driver btusb_driver = {
 	.disable_hub_initiated_lpm = 1,
 };
 
-module_usb_driver(btusb_driver);
+static int __init btusb_driver_init(void)
+{
+	int ret = 0;
+
+	ret = usb_register(&btusb_driver);
+	/* ignore return value */
+	register_pm_notifier(&btusb_pm_notifier);
+	return ret;
+}
+module_init(btusb_driver_init);
+
+static void __exit btusb_driver_exit(void)
+{
+	unregister_pm_notifier(&btusb_pm_notifier);
+	/*
+	 * If unregister gets called before resume notification, we need to
+	 * release the semaphore to avoid deadlock.
+	 */
+	if (test_bit(BTUSB_PM_SUSPEND, &btusb_pm_flags)) {
+		up_write(&btusb_pm_sem);
+		clear_bit(BTUSB_PM_SUSPEND, &btusb_pm_flags);
+	}
+	usb_deregister(&btusb_driver);
+}
+module_exit(btusb_driver_exit);
 
 module_param(disable_scofix, bool, 0644);
 MODULE_PARM_DESC(disable_scofix, "Disable fixup of wrong SCO buffer size");

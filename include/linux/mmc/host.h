@@ -178,6 +178,7 @@ struct mmc_host_ops {
 	int	(*notify_load)(struct mmc_host *, enum mmc_load);
 	void	(*notify_halt)(struct mmc_host *mmc, bool halt);
 	void	(*detect)(struct mmc_host *host, bool detected);
+	void	(*force_err_irq)(struct mmc_host *host, u64 errmask);
 };
 
 struct mmc_card;
@@ -241,11 +242,12 @@ struct mmc_slot {
  * @active_reqs		requests being processed
  * @data_active_reqs	data requests being processed
  * @curr_state		state of cmdq engine
- * @req_starved		completion should invoke the request_fn since
- *			no tags were available
  * @cmdq_ctx_lock	acquire this before accessing this structure
  * @queue_empty_wq	workqueue for waiting for all
  *			the outstanding requests to be completed
+ * @wait		waiting for all conditions described in
+ *			mmc_cmdq_ready_wait to be satisified before
+ *			issuing the new request to LLD.
  */
 struct mmc_cmdq_context_info {
 	unsigned long	active_reqs; /* in-flight requests */
@@ -254,10 +256,8 @@ struct mmc_cmdq_context_info {
 #define	CMDQ_STATE_ERR 0
 #define	CMDQ_STATE_DCMD_ACTIVE 1
 #define	CMDQ_STATE_HALT 2
-	/* no free tag available */
-	unsigned long	req_starved;
 	wait_queue_head_t	queue_empty_wq;
-	struct request_queue *q;
+	wait_queue_head_t	wait;
 };
 
 /**
@@ -436,6 +436,8 @@ struct mmc_host {
 #define MMC_CAP2_CMD_QUEUE	(1 << 26)	/* support eMMC command queue */
 #define MMC_CAP2_SANITIZE       (1 << 27)               /* Support Sanitize */
 #define MMC_CAP2_SLEEP_AWAKE	(1 << 28)	/* Use Sleep/Awake (CMD5) */
+/* use max discard ignoring max_busy_timeout parameter */
+#define MMC_CAP2_MAX_DISCARD_SIZE	(1 << 29)
 
 	mmc_pm_flag_t		pm_caps;	/* supported pm features */
 

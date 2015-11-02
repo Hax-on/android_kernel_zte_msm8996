@@ -717,8 +717,8 @@
 		qcom,wsa-max-devs = <2>;
 		qcom,wsa-devs = <&wsa881x_211>, <&wsa881x_212>,
 				<&wsa881x_213>, <&wsa881x_214>;
-		qcom,wsa-aux-dev-prefix = "SpkrRight", "SpkrLeft",
-					  "SpkrRight", "SpkrLeft";
+		qcom,wsa-aux-dev-prefix = "SpkrLeft", "SpkrRight",
+					  "SpkrLeft", "SpkrRight";
 	};
 #endif
 
@@ -852,6 +852,13 @@
 
 &blsp1_uart2 {
 	status = "ok";
+};
+
+&i2c_6 {
+	at24@51 {
+		compatible = "atmel,24c32";
+		reg = <0x51>;
+	};
 };
 
 &i2c_7 {

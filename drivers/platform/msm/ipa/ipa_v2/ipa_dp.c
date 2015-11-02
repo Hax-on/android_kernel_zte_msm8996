@@ -1064,6 +1064,16 @@ int ipa2_setup_sys_pipe(struct ipa_sys_connect_params *sys_in, u32 *clnt_hdl)
 	atomic_set(&ep->avail_fifo_desc,
 		((sys_in->desc_fifo_sz/sizeof(struct sps_iovec))-1));
 
+	if (ep->status.status_en && IPA_CLIENT_IS_CONS(ep->client) &&
+	    ep->sys->status_stat == NULL) {
+		ep->sys->status_stat =
+			kzalloc(sizeof(struct ipa_status_stats), GFP_KERNEL);
+		if (!ep->sys->status_stat) {
+			IPAERR("no memory\n");
+			goto fail_gen2;
+		}
+	}
+
 	result = ipa_enable_data_path(ipa_ep_idx);
 	if (result) {
 		IPAERR("enable data path failed res=%d clnt=%d.\n", result,
@@ -1992,6 +2002,13 @@ begin:
 		IPADBG("STATUS opcode=%d src=%d dst=%d len=%d\n",
 				status->status_opcode, status->endp_src_idx,
 				status->endp_dest_idx, status->pkt_len);
+		if (sys->status_stat) {
+			sys->status_stat->status[sys->status_stat->curr] =
+				*status;
+			sys->status_stat->curr++;
+			if (sys->status_stat->curr == IPA_MAX_STATUS_STAT_NUM)
+				sys->status_stat->curr = 0;
+		}
 
 		if (status->status_opcode !=
 			IPA_HW_STATUS_OPCODE_DROPPED_PACKET &&
@@ -2240,6 +2257,15 @@ static int ipa_wan_rx_pyld_hdlr(struct sk_buff *skb,
 		IPADBG("STATUS opcode=%d src=%d dst=%d len=%d\n",
 				status->status_opcode, status->endp_src_idx,
 				status->endp_dest_idx, status->pkt_len);
+
+		if (sys->status_stat) {
+			sys->status_stat->status[sys->status_stat->curr] =
+				*status;
+			sys->status_stat->curr++;
+			if (sys->status_stat->curr == IPA_MAX_STATUS_STAT_NUM)
+				sys->status_stat->curr = 0;
+		}
+
 		if (status->status_opcode !=
 			IPA_HW_STATUS_OPCODE_DROPPED_PACKET &&
 			status->status_opcode !=
@@ -2372,13 +2398,13 @@ static int ipa_rx_pyld_hdlr(struct sk_buff *rx_skb, struct ipa_sys_context *sys)
 		src_pipe = WLAN_PROD_TX_EP;
 
 	ep = &ipa_ctx->ep[src_pipe];
-	spin_lock(&ipa_ctx->lan_rx_clnt_notify_lock);
+	spin_lock(&ipa_ctx->disconnect_lock);
 	if (unlikely(src_pipe >= ipa_ctx->ipa_num_pipes ||
 		!ep->valid || !ep->client_notify)) {
 		IPAERR("drop pipe=%d ep_valid=%d client_notify=%p\n",
 		  src_pipe, ep->valid, ep->client_notify);
 		dev_kfree_skb_any(rx_skb);
-		spin_unlock(&ipa_ctx->lan_rx_clnt_notify_lock);
+		spin_unlock(&ipa_ctx->disconnect_lock);
 		return 0;
 	}
 
@@ -2397,7 +2423,7 @@ static int ipa_rx_pyld_hdlr(struct sk_buff *rx_skb, struct ipa_sys_context *sys)
 	skb_pull(rx_skb, pull_len);
 	ep->client_notify(ep->priv, IPA_RECEIVE,
 			(unsigned long)(rx_skb));
-	spin_unlock(&ipa_ctx->lan_rx_clnt_notify_lock);
+	spin_unlock(&ipa_ctx->disconnect_lock);
 	return 0;
 }
 

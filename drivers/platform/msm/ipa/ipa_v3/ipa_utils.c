@@ -57,7 +57,7 @@
 /* configure IPA spare register 1 in order to have correct IPA version
  * set bits 0,2,3 and 4. see SpareBits documentation.xlsx
  */
-#define IPA_SPARE_REG_1_VAL (0xE000081D)
+#define IPA_SPARE_REG_1_VAL (0x0000081D)
 
 
 /* HPS, DPS sequencers Types*/
@@ -121,27 +121,27 @@ static const struct rsrc_min_max ipa3_rsrc_src_grp_config
 			[IPA_RSRC_GRP_TYPE_SRC_MAX][IPA_GROUP_MAX] = {
 		/*UL	DL	DIAG	DMA	Q6zip	uC Rx*/
 	[IPA_RSRC_GRP_TYPE_SRC_PKT_CONTEXTS] = {
-		{3, 255}, {3, 255}, {1, 255}, {1, 255}, {3, 255}, {1, 255} },
+		{3, 255}, {3, 255}, {1, 255}, {1, 255}, {1, 255}, {2, 255} },
 	[IPA_RSRC_GRP_TYPE_SRC_HDR_SECTORS] = {
 		{0, 255}, {0, 255}, {0, 255}, {0, 255}, {0, 255}, {0, 255} },
 	[IPA_RSRC_GRP_TYPE_SRC_HDRI1_BUFFER] = {
 		{0, 255}, {0, 255}, {0, 255}, {0, 255}, {0, 255}, {0, 255} },
 	[IPA_RSRC_GRP_TYPE_SRS_DESCRIPTOR_LISTS] = {
-		{12, 12}, {12, 12}, {5, 5}, {5, 5},  {8, 8}, {6, 6} },
+		{14, 14}, {16, 16}, {5, 5}, {5, 5},  {0, 0}, {8, 8} },
 	[IPA_RSRC_GRP_TYPE_SRC_DESCRIPTOR_BUFF] = {
-		{19, 19}, {20, 20}, {5, 5}, {5, 5}, {8, 8}, {6, 6} },
+		{19, 19}, {26, 26}, {5, 5}, {5, 5}, {0, 0}, {8, 8} },
 	[IPA_RSRC_GRP_TYPE_SRC_HDRI2_BUFFERS] = {
 		{0, 255}, {0, 255}, {0, 255}, {0, 255}, {0, 255}, {0, 255} },
 	[IPA_RSRC_GRP_TYPE_SRC_HPS_DMARS] = {
-		{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1} },
+		{0, 255}, {0, 255}, {0, 255}, {0, 255}, {0, 255}, {0, 255} },
 	[IPA_RSRC_GRP_TYPE_SRC_ACK_ENTRIES] = {
-		{12, 12},   {12, 12}, {5, 5}, {5, 5}, {8, 8}, {6, 6} },
+		{14, 14}, {16, 16}, {5, 5}, {5, 5}, {0, 0}, {8, 8} },
 };
 static const struct rsrc_min_max ipa3_rsrc_dst_grp_config
 			[IPA_RSRC_GRP_TYPE_DST_MAX][IPA_GROUP_MAX] = {
 		/*UL	DL	DIAG	DMA  Q6zip_gen Q6zip_eng*/
 	[IPA_RSRC_GRP_TYPE_DST_DATA_SECTORS] = {
-		{3, 3}, {3, 3}, {1, 1}, {2, 2}, {2, 2}, {2, 2} },
+		{2, 2}, {3, 3}, {1, 1}, {1, 1}, {3, 3}, {3, 3} },
 	[IPA_RSRC_GRP_TYPE_DST_DATA_SECTOR_LISTS] = {
 		{0, 255}, {0, 255}, {0, 255}, {0, 255}, {0, 255}, {0, 255} },
 	[IPA_RSRC_GRP_TYPE_DST_DPS_DMARS] = {
@@ -770,9 +770,6 @@ int ipa3_init_hw(void)
 	/* using old BCR configuration(IPAv2.6)*/
 	ipa_write_reg(ipa3_ctx->mmio, IPA_BCR_OFST, IPA_BCR_REG_VAL);
 
-	ipa_write_reg(ipa3_ctx->mmio,
-			IPA_SPARE_REG_1_OFST,
-			IPA_SPARE_REG_1_VAL);
 	return 0;
 }
 
@@ -2997,8 +2994,11 @@ int ipa3_cfg_ep_ctrl(u32 clnt_hdl, const struct ipa_ep_cfg_ctrl *ep_ctrl)
 	ipa_write_reg(ipa3_ctx->mmio,
 		IPA_ENDP_INIT_CTRL_N_OFST(clnt_hdl), reg_val);
 
-	return 0;
+	if (ep_ctrl->ipa_ep_suspend == true &&
+			IPA_CLIENT_IS_CONS(ipa3_ctx->ep[clnt_hdl].client))
+		ipa3_suspend_active_aggr_wa(clnt_hdl);
 
+	return 0;
 }
 
 /**
@@ -4659,6 +4659,7 @@ int ipa3_bind_api_controller(enum ipa_hw_type ipa_hw_type,
 	api_ctrl->ipa_connect = ipa3_connect;
 	api_ctrl->ipa_disconnect = ipa3_disconnect;
 	api_ctrl->ipa_reset_endpoint = ipa3_reset_endpoint;
+	api_ctrl->ipa_clear_endpoint_delay = ipa3_clear_endpoint_delay;
 	api_ctrl->ipa_cfg_ep = ipa3_cfg_ep;
 	api_ctrl->ipa_cfg_ep_nat = ipa3_cfg_ep_nat;
 	api_ctrl->ipa_cfg_ep_hdr = ipa3_cfg_ep_hdr;
@@ -4771,6 +4772,7 @@ int ipa3_bind_api_controller(enum ipa_hw_type ipa_hw_type,
 	api_ctrl->ipa_write_qmap_id = ipa3_write_qmap_id;
 	api_ctrl->ipa_add_interrupt_handler = ipa3_add_interrupt_handler;
 	api_ctrl->ipa_remove_interrupt_handler = ipa3_remove_interrupt_handler;
+	api_ctrl->ipa_restore_suspend_handler = ipa3_restore_suspend_handler;
 	api_ctrl->ipa_bam_reg_dump = ipa3_bam_reg_dump;
 	api_ctrl->ipa_get_ep_mapping = ipa3_get_ep_mapping;
 	api_ctrl->ipa_is_ready = ipa3_is_ready;
@@ -4794,10 +4796,8 @@ int ipa3_bind_api_controller(enum ipa_hw_type ipa_hw_type,
 	api_ctrl->ipa_get_gsi_ep_info = ipa3_get_gsi_ep_info;
 	api_ctrl->ipa_stop_gsi_channel = ipa3_stop_gsi_channel;
 	api_ctrl->ipa_usb_init_teth_prot = ipa3_usb_init_teth_prot;
-	api_ctrl->ipa_usb_request_xdci_channel = ipa3_usb_request_xdci_channel;
 	api_ctrl->ipa_usb_xdci_connect = ipa3_usb_xdci_connect;
 	api_ctrl->ipa_usb_xdci_disconnect = ipa3_usb_xdci_disconnect;
-	api_ctrl->ipa_usb_release_xdci_channel = ipa3_usb_release_xdci_channel;
 	api_ctrl->ipa_usb_deinit_teth_prot = ipa3_usb_deinit_teth_prot;
 	api_ctrl->ipa_usb_xdci_suspend = ipa3_usb_xdci_suspend;
 	api_ctrl->ipa_usb_xdci_resume = ipa3_usb_xdci_resume;
@@ -5048,4 +5048,248 @@ bail:
 		dma_free_coherent(ipa3_ctx->pdev, mem.size, mem.base,
 			mem.phys_base);
 	return res;
+}
+
+/**
+ * ipa3_calc_extra_wrd_bytes()- Calculate the number of extra words for eq
+ * @attrib: equation attribute
+ *
+ * Return value: 0 on success, negative otherwise
+ */
+int ipa3_calc_extra_wrd_bytes(const struct ipa_ipfltri_rule_eq *attrib)
+{
+	int num = 0;
+
+	if (attrib->tos_eq_present)
+		num++;
+	if (attrib->protocol_eq_present)
+		num++;
+	if (attrib->tc_eq_present)
+		num++;
+	num += attrib->num_offset_meq_128;
+	num += attrib->num_offset_meq_32;
+	num += attrib->num_ihl_offset_meq_32;
+	num += attrib->num_ihl_offset_range_16;
+	if (attrib->ihl_offset_eq_32_present)
+		num++;
+	if (attrib->ihl_offset_eq_16_present)
+		num++;
+
+	IPADBG("extra bytes number %d\n", num);
+
+	return num;
+}
+
+/**
+ * ipa3_calc_extra_wrd_bytes()- generate an equation from rule read from IPA HW
+ * @attrib: equation attribute
+ * @buf: raw rule in IPA SRAM
+ * @rule_size: size of the rule pointed by buf
+ *
+ * Return value: 0 on success, negative otherwise
+ */
+int ipa3_generate_eq_from_hw_rule(
+	struct ipa_ipfltri_rule_eq *attrib, u8 *buf, u8 *rule_size)
+{
+	int num_offset_meq_32;
+	int num_ihl_offset_range_16;
+	int num_ihl_offset_meq_32;
+	int num_offset_meq_128;
+	int extra_bytes;
+	u8 *extra;
+	u8 *rest;
+	int i;
+
+	IPADBG("rule_eq_bitmap=0x%x\n", attrib->rule_eq_bitmap);
+	if (attrib->rule_eq_bitmap & IPA_TOS_EQ)
+		attrib->tos_eq_present = true;
+	if (attrib->rule_eq_bitmap & IPA_PROTOCOL_EQ)
+		attrib->protocol_eq_present = true;
+	if (attrib->rule_eq_bitmap & IPA_OFFSET_MEQ32_0)
+		attrib->num_offset_meq_32++;
+	if (attrib->rule_eq_bitmap & IPA_OFFSET_MEQ32_1)
+		attrib->num_offset_meq_32++;
+	if (attrib->rule_eq_bitmap & IPA_IHL_OFFSET_RANGE16_0)
+		attrib->num_ihl_offset_range_16++;
+	if (attrib->rule_eq_bitmap & IPA_IHL_OFFSET_RANGE16_1)
+		attrib->num_ihl_offset_range_16++;
+	if (attrib->rule_eq_bitmap & IPA_IHL_OFFSET_EQ_16)
+		attrib->ihl_offset_eq_16_present = true;
+	if (attrib->rule_eq_bitmap & IPA_IHL_OFFSET_EQ_32)
+		attrib->ihl_offset_eq_32_present = true;
+	if (attrib->rule_eq_bitmap & IPA_IHL_OFFSET_MEQ32_0)
+		attrib->num_ihl_offset_meq_32++;
+	if (attrib->rule_eq_bitmap & IPA_OFFSET_MEQ128_0)
+		attrib->num_offset_meq_128++;
+	if (attrib->rule_eq_bitmap & IPA_OFFSET_MEQ128_1)
+		attrib->num_offset_meq_128++;
+	if (attrib->rule_eq_bitmap & IPA_TC_EQ)
+		attrib->tc_eq_present = true;
+	if (attrib->rule_eq_bitmap & IPA_FL_EQ)
+		attrib->fl_eq_present = true;
+	if (attrib->rule_eq_bitmap & IPA_PROTOCOL_EQ)
+		attrib->protocol_eq_present = true;
+	if (attrib->rule_eq_bitmap & IPA_IHL_OFFSET_MEQ32_1)
+		attrib->num_ihl_offset_meq_32++;
+	if (attrib->rule_eq_bitmap & IPA_METADATA_COMPARE)
+		attrib->metadata_meq32_present = true;
+	if (attrib->rule_eq_bitmap & IPA_IS_FRAG)
+		attrib->ipv4_frag_eq_present = true;
+
+	extra_bytes = ipa3_calc_extra_wrd_bytes(attrib);
+	/*
+	 * only 3 eq does not have extra word param, 13 out of 16 is the number
+	 * of equations that needs extra word param
+	 */
+	if (extra_bytes > 13) {
+		IPAERR("too much extra bytes\n");
+		return -EPERM;
+	} else if (extra_bytes > IPA_HW_TBL_HDR_WIDTH) {
+		/* two extra words */
+		extra = buf;
+		rest = buf + IPA_HW_TBL_HDR_WIDTH * 2;
+	} else if (extra_bytes > 0) {
+		/* single exra word */
+		extra = buf;
+		rest = buf + IPA_HW_TBL_HDR_WIDTH;
+	} else {
+		/* no extra words */
+		extra = NULL;
+		rest = buf;
+	}
+	IPADBG("buf=0x%p extra=0x%p rest=0x%p\n", buf, extra, rest);
+
+	num_offset_meq_32 = attrib->num_offset_meq_32;
+	num_ihl_offset_range_16 = attrib->num_ihl_offset_range_16;
+	num_ihl_offset_meq_32 = attrib->num_ihl_offset_meq_32;
+	num_offset_meq_128 = attrib->num_offset_meq_128;
+
+	if (attrib->tos_eq_present)
+		attrib->tos_eq = *extra++;
+
+	if (attrib->protocol_eq_present)
+		attrib->protocol_eq = *extra++;
+
+	if (attrib->tc_eq_present)
+		attrib->tc_eq = *extra++;
+
+	if (num_offset_meq_128) {
+		attrib->offset_meq_128[0].offset = *extra++;
+		for (i = 0; i < 8; i++)
+			attrib->offset_meq_128[0].mask[i] = *rest++;
+		for (i = 0; i < 8; i++)
+			attrib->offset_meq_128[0].value[i] = *rest++;
+		for (i = 8; i < 16; i++)
+			attrib->offset_meq_128[0].mask[i] = *rest++;
+		for (i = 8; i < 16; i++)
+			attrib->offset_meq_128[0].value[i] = *rest++;
+		num_offset_meq_128--;
+	}
+
+	if (num_offset_meq_128) {
+		attrib->offset_meq_128[1].offset = *extra++;
+		for (i = 0; i < 8; i++)
+			attrib->offset_meq_128[1].mask[i] = *rest++;
+		for (i = 0; i < 8; i++)
+			attrib->offset_meq_128[1].value[i] = *rest++;
+		for (i = 8; i < 16; i++)
+			attrib->offset_meq_128[1].mask[i] = *rest++;
+		for (i = 8; i < 16; i++)
+			attrib->offset_meq_128[1].value[i] = *rest++;
+		num_offset_meq_128--;
+	}
+
+	if (num_offset_meq_32) {
+		attrib->offset_meq_32[0].offset = *extra++;
+		attrib->offset_meq_32[0].mask = *((u32 *)rest);
+		rest += 4;
+		attrib->offset_meq_32[0].value = *((u32 *)rest);
+		rest += 4;
+		num_offset_meq_32--;
+	}
+	IPADBG("buf=0x%p extra=0x%p rest=0x%p\n", buf, extra, rest);
+
+	if (num_offset_meq_32) {
+		attrib->offset_meq_32[1].offset = *extra++;
+		attrib->offset_meq_32[1].mask = *((u32 *)rest);
+		rest += 4;
+		attrib->offset_meq_32[1].value = *((u32 *)rest);
+		rest += 4;
+		num_offset_meq_32--;
+	}
+	IPADBG("buf=0x%p extra=0x%p rest=0x%p\n", buf, extra, rest);
+
+	if (num_ihl_offset_meq_32) {
+		attrib->ihl_offset_meq_32[0].offset = *extra++;
+		attrib->ihl_offset_meq_32[0].mask = *((u32 *)rest);
+		rest += 4;
+		attrib->ihl_offset_meq_32[0].value = *((u32 *)rest);
+		rest += 4;
+		num_ihl_offset_meq_32--;
+	}
+
+	if (num_ihl_offset_meq_32) {
+		attrib->ihl_offset_meq_32[1].offset = *extra++;
+		attrib->ihl_offset_meq_32[1].mask = *((u32 *)rest);
+		rest += 4;
+		attrib->ihl_offset_meq_32[1].value = *((u32 *)rest);
+		rest += 4;
+		num_ihl_offset_meq_32--;
+	}
+
+	if (attrib->metadata_meq32_present) {
+		attrib->metadata_meq32.mask = *((u32 *)rest);
+		rest += 4;
+		attrib->metadata_meq32.value = *((u32 *)rest);
+		rest += 4;
+	}
+
+	if (num_ihl_offset_range_16) {
+		attrib->ihl_offset_range_16[0].offset = *extra++;
+		attrib->ihl_offset_range_16[0].range_high = *((u16 *)rest);
+		rest += 2;
+		attrib->ihl_offset_range_16[0].range_low = *((u16 *)rest);
+		rest += 2;
+		num_ihl_offset_range_16--;
+	}
+	if (num_ihl_offset_range_16) {
+		attrib->ihl_offset_range_16[1].offset = *extra++;
+		attrib->ihl_offset_range_16[1].range_high = *((u16 *)rest);
+		rest += 2;
+		attrib->ihl_offset_range_16[1].range_low = *((u16 *)rest);
+		rest += 2;
+		num_ihl_offset_range_16--;
+	}
+
+	if (attrib->ihl_offset_eq_32_present) {
+		attrib->ihl_offset_eq_32.offset = *extra++;
+		attrib->ihl_offset_eq_32.value = *((u32 *)rest);
+		rest += 4;
+	}
+
+	if (attrib->ihl_offset_eq_16_present) {
+		attrib->ihl_offset_eq_16.offset = *extra++;
+		attrib->ihl_offset_eq_16.value = *((u16 *)rest);
+		rest += 4;
+	}
+
+	if (attrib->fl_eq_present) {
+		attrib->fl_eq = *((u32 *)rest);
+		rest += 4;
+	}
+
+	IPADBG("before align buf=0x%p extra=0x%p rest=0x%p\n",
+		buf, extra, rest);
+	/* align to 64 bit */
+	rest = (u8 *)(((u32)rest + IPA_HW_RULE_START_ALIGNMENT) &
+		~IPA_HW_RULE_START_ALIGNMENT);
+
+	IPADBG("after align buf=0x%p extra=0x%p rest=0x%p\n",
+		buf, extra, rest);
+	IPADBG("rest - buf=0x%x\n", rest - buf);
+
+	*rule_size = rest - buf;
+	IPADBG("*rule_size=0x%x\n", *rule_size);
+
+	return 0;
 }

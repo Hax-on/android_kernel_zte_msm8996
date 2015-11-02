@@ -14,7 +14,6 @@
 #include <media/v4l2-subdev.h>
 #include <media/msmb_isp.h>
 #include "msm_isp_util.h"
-#include "msm_isp_axi_util.h"
 #include "msm_isp_stats_util.h"
 
 static int msm_isp_stats_cfg_ping_pong_address(struct vfe_device *vfe_dev,
@@ -44,10 +43,6 @@ static int msm_isp_stats_cfg_ping_pong_address(struct vfe_device *vfe_dev,
 	pingpong_bit = (~(pingpong_status >> stats_pingpong_offset) & 0x1);
 	rc = vfe_dev->buf_mgr->ops->get_buf(vfe_dev->buf_mgr,
 			vfe_dev->pdev->id, bufq_handle, &buf, &buf_cnt);
-	if (rc == -EFAULT) {
-		msm_isp_halt_send_error(vfe_dev);
-		return rc;
-	}
 	if (rc < 0) {
 		vfe_dev->error_info.stats_framedrop_count[stats_idx]++;
 		return rc;
@@ -139,8 +134,8 @@ static int32_t msm_isp_stats_buf_divert(struct vfe_device *vfe_dev,
 		}
 	}
 
-	rc = vfe_dev->buf_mgr->ops->update_put_buf_cnt(
-		vfe_dev->buf_mgr, vfe_dev->pdev->id, done_buf->bufq_handle,
+	rc = vfe_dev->buf_mgr->ops->buf_divert(
+		vfe_dev->buf_mgr, done_buf->bufq_handle,
 		done_buf->buf_idx, &ts->buf_time,
 		frame_id);
 	if (rc != 0) {
@@ -156,14 +151,10 @@ static int32_t msm_isp_stats_buf_divert(struct vfe_device *vfe_dev,
 	}
 
 	if (drop_buffer) {
-		rc = vfe_dev->buf_mgr->ops->buf_done(
+		vfe_dev->buf_mgr->ops->put_buf(
 			vfe_dev->buf_mgr,
 			done_buf->bufq_handle,
-			done_buf->buf_idx, &ts->buf_time, frame_id, 0);
-		if (rc == -EFAULT) {
-			msm_isp_halt_send_error(vfe_dev);
-			return rc;
-		}
+			done_buf->buf_idx);
 		return rc;
 	}
 	stats_event->stats_buf_idxs
@@ -464,6 +455,20 @@ static int msm_isp_init_stats_ping_pong_reg(
 	return rc;
 }
 
+static void msm_isp_deinit_stats_ping_pong_reg(
+	struct vfe_device *vfe_dev,
+	struct msm_vfe_stats_stream *stream_info)
+{
+	int i;
+	struct msm_isp_buffer *buf;
+	for (i = 0; i < 2; i++) {
+		buf = stream_info->buf[i];
+		if (buf)
+			vfe_dev->buf_mgr->ops->put_buf(vfe_dev->buf_mgr,
+				buf->bufq_handle, buf->buf_idx);
+	}
+}
+
 void msm_isp_update_stats_framedrop_reg(struct vfe_device *vfe_dev)
 {
 	int i;
@@ -564,29 +569,33 @@ static int msm_isp_stats_update_cgc_override(struct vfe_device *vfe_dev,
 
 int msm_isp_stats_reset(struct vfe_device *vfe_dev)
 {
-	int i = 0, rc = 0;
+	int i = 0;
 	struct msm_vfe_stats_stream *stream_info = NULL;
 	struct msm_vfe_stats_shared_data *stats_data = &vfe_dev->stats_data;
-	struct msm_isp_timestamp timestamp;
-
-	msm_isp_get_timestamp(&timestamp);
+	struct msm_isp_bufq *bufq = NULL;
 
 	for (i = 0; i < MSM_ISP_STATS_MAX; i++) {
 		stream_info = &stats_data->stream_info[i];
 		if (stream_info->state != STATS_ACTIVE)
 			continue;
 
-		rc = vfe_dev->buf_mgr->ops->flush_buf(vfe_dev->buf_mgr,
-			vfe_dev->pdev->id, stream_info->bufq_handle,
-			MSM_ISP_BUFFER_FLUSH_ALL, &timestamp.buf_time,
-			vfe_dev->axi_data.src_info[VFE_PIX_0].frame_id);
-		if (rc == -EFAULT) {
-			msm_isp_halt_send_error(vfe_dev);
-			return rc;
+		bufq = vfe_dev->buf_mgr->ops->get_bufq(vfe_dev->buf_mgr,
+			stream_info->bufq_handle);
+		if (!bufq) {
+			pr_err("%s Error! bufq is NULL\n", __func__);
+			continue;
 		}
+
+		if (bufq->buf_type != ISP_SHARE_BUF)
+			msm_isp_deinit_stats_ping_pong_reg(vfe_dev,
+				stream_info);
+		else
+			vfe_dev->buf_mgr->ops->flush_buf(vfe_dev->buf_mgr,
+				stream_info->bufq_handle,
+				MSM_ISP_BUFFER_FLUSH_ALL);
 	}
 
-	return rc;
+	return 0;
 }
 
 int msm_isp_stats_restart(struct vfe_device *vfe_dev)
@@ -690,10 +699,6 @@ static int msm_isp_stop_stats_stream(struct vfe_device *vfe_dev,
 	uint32_t num_stats_comp_mask = 0;
 	struct msm_vfe_stats_stream *stream_info;
 	struct msm_vfe_stats_shared_data *stats_data = &vfe_dev->stats_data;
-	struct msm_isp_timestamp timestamp;
-
-	msm_isp_get_timestamp(&timestamp);
-
 	num_stats_comp_mask =
 		vfe_dev->hw_info->stats_hw_info->num_stats_comp_mask;
 
@@ -759,14 +764,7 @@ static int msm_isp_stop_stats_stream(struct vfe_device *vfe_dev,
 		}
 
 		stream_info = &stats_data->stream_info[idx];
-		rc = vfe_dev->buf_mgr->ops->flush_buf(vfe_dev->buf_mgr,
-			vfe_dev->pdev->id, stream_info->bufq_handle,
-			MSM_ISP_BUFFER_FLUSH_ALL, &timestamp.buf_time,
-			vfe_dev->axi_data.src_info[VFE_PIX_0].frame_id);
-		if (rc == -EFAULT) {
-			msm_isp_halt_send_error(vfe_dev);
-			return rc;
-		}
+		msm_isp_deinit_stats_ping_pong_reg(vfe_dev, stream_info);
 	}
 	return rc;
 }

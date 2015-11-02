@@ -19,7 +19,8 @@
 / {
 	model = "Qualcomm Technologies, Inc. MDM FERMIUM";
 	compatible = "qcom,mdmfermium";
-	qcom,msm-id = <290 0x10000>;
+	qcom,msm-id = <290 0x10000>, <296 0x10000>, <297 0x10000>,
+		      <298 0x10000>, <299 0x10000>;
 	interrupt-parent = <&intc>;
 
 	aliases {
@@ -35,6 +36,12 @@
 			compatible = "removed-dma-pool";
 			no-map;
 			reg = <0x82a00000 0x5000000>;
+		};
+
+		cnss_debug_mem: cnss_debug_region@0 {
+			compatible = "removed-dma-pool";
+			no-map;
+			reg = <0x87a00000 0x200000>;
 		};
 
 		external_image_mem: external_image_region@0 {
@@ -267,8 +274,8 @@
 		clock-names = "clk-1", "clk-5";
 		qcom,speed0-bin-v0 =
 				<          0 0>,
-				<  400000000 4>,
-				<  800000000 5>,
+				<  400000000 1>,
+				<  800000000 2>,
 				< 1305600000 7>;
 		#clock-cells = <1>;
 	};
@@ -360,9 +367,9 @@
 		clocks = <&clock_gcc clk_gcc_blsp1_ahb_clk>,
 			<&clock_gcc clk_gcc_blsp1_qup4_i2c_apps_clk>;
 
-		pinctrl-names = "i2c_default", "i2c_sleep";
-		pinctrl-0 = <&i2c4_default>;
-		pinctrl-1 = <&i2c4_sleep>;
+		pinctrl-names = "i2c_active", "i2c_sleep";
+		pinctrl-0 = <&i2c_4_active>;
+		pinctrl-1 = <&i2c_4_sleep>;
 		qcom,noise-rjct-scl = <0>;
 		qcom,noise-rjct-sda = <0>;
 		qcom,master-id = <86>;
@@ -412,6 +419,10 @@
 		compatible = "qcom,hsusb-otg";
 		reg = <0x78d9000 0x400>, <0x6c000 0x200>;
 		reg-names = "core", "phy_csr";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
 		interrupts = <0 134 0>,<0 139 0>;
 		interrupt-names = "core_irq", "async_irq";
 
@@ -432,6 +443,7 @@
 		qcom,axi-prefetch-enable;
 		qcom,hsusb-otg-mpm-dpsehv-int = <49>;
 		qcom,hsusb-otg-mpm-dmsehv-int = <58>;
+		qcom,hsusb-otg-delay-lpm;
 
 		qcom,msm-bus,name = "usb2";
 		qcom,msm-bus,num-cases = <3>;
@@ -646,7 +658,6 @@
 		compatible = "qcom,rpm-smd";
 		rpm-channel-name = "rpm_requests";
 		rpm-channel-type = <15>; /* SMD_APPS_RPM */
-		rpm-standalone;
 	};
 
 	qcom,smdtty {
@@ -821,6 +832,7 @@
 		qcom,gpio-err-ready = <&smp2pgpio_ssr_smp2p_1_in 1 0>;
 		qcom,gpio-proxy-unvote = <&smp2pgpio_ssr_smp2p_1_in 2 0>;
 		qcom,gpio-stop-ack = <&smp2pgpio_ssr_smp2p_1_in 3 0>;
+		qcom,gpio-shutdown-ack = <&smp2pgpio_ssr_smp2p_1_in 7 0>;
 
 		/* GPIO output to mss */
 		qcom,gpio-force-stop = <&smp2pgpio_ssr_smp2p_1_out 0 0>;

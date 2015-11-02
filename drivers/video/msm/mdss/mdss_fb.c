@@ -1917,6 +1917,7 @@ void mdss_fb_free_fb_ion_memory(struct msm_fb_data_type *mfd)
 
 	ion_free(mfd->fb_ion_client, mfd->fb_ion_handle);
 	mfd->fb_ion_handle = NULL;
+	mfd->fbmem_buf = NULL;
 }
 
 int mdss_fb_alloc_fb_ion_memory(struct msm_fb_data_type *mfd, size_t fb_size)
@@ -2609,11 +2610,10 @@ static int mdss_fb_release_all(struct fb_info *info, bool release_all)
 		if (mfd->mdp.release_fnc)
 			mfd->mdp.release_fnc(mfd, NULL);
 
-		if (mfd->mdp.ad_shutdown_cleanup) {
-			ret = (*mfd->mdp.ad_shutdown_cleanup)(mfd);
+		if (mfd->mdp.pp_release_fnc) {
+			ret = (*mfd->mdp.pp_release_fnc)(mfd);
 			if (ret)
-				pr_err("AD shutdown cleanup failed ret %d\n",
-				       ret);
+				pr_err("PP release failed ret %d\n", ret);
 		}
 
 		ret = mdss_fb_blank_sub(FB_BLANK_POWERDOWN, info,
@@ -2906,8 +2906,8 @@ static int mdss_fb_pan_idle(struct msm_fb_data_type *mfd)
 		pr_err("%pS: wait for idle timeout commits=%d\n",
 				__builtin_return_address(0),
 				atomic_read(&mfd->commits_pending));
-		MDSS_XLOG_TOUT_HANDLER("mdp", "vbif", "dbg_bus",
-			"vbif_dbg_bus");
+		MDSS_XLOG_TOUT_HANDLER("mdp", "vbif", "vbif_nrt",
+			"dbg_bus", "vbif_dbg_bus");
 		ret = -ETIMEDOUT;
 	} else if (mfd->shutdown_pending) {
 		pr_debug("Shutdown signalled\n");
@@ -2935,8 +2935,8 @@ static int mdss_fb_wait_for_kickoff(struct msm_fb_data_type *mfd)
 				__builtin_return_address(0),
 				atomic_read(&mfd->kickoff_pending),
 				atomic_read(&mfd->commits_pending));
-		MDSS_XLOG_TOUT_HANDLER("mdp", "vbif", "dbg_bus",
-			"vbif_dbg_bus");
+		MDSS_XLOG_TOUT_HANDLER("mdp", "vbif", "vbif_nrt",
+			"dbg_bus", "vbif_dbg_bus");
 		ret = -ETIMEDOUT;
 	} else if (mfd->shutdown_pending) {
 		pr_debug("Shutdown signalled\n");

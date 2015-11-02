@@ -290,37 +290,49 @@ void ipa3_flow_control(enum ipa_client_type ipa_client,
 	int ep_idx;
 	struct ipa3_ep_context *ep;
 
+	/* Check if tethered flow control is needed or not.*/
+	if (!ipa3_ctx->tethered_flow_control) {
+		IPADBG("Apps flow control is not needed\n");
+		return;
+	}
+
 	/* Check if ep is valid. */
 	ep_idx = ipa3_get_ep_mapping(ipa_client);
 	if (ep_idx == -1) {
-		IPAERR("Invalid IPA client\n");
+		IPADBG("Invalid IPA client\n");
 		return;
 	}
 
 	ep = &ipa3_ctx->ep[ep_idx];
-	if (!ep->valid) {
-		IPAERR("EP not valid.\n");
+	if (!ep->valid || (ep->client != IPA_CLIENT_USB_PROD)) {
+		IPADBG("EP not valid/Not applicable for client.\n");
 		return;
 	}
 
+	spin_lock(&ipa3_ctx->disconnect_lock);
 	/* Check if the QMAP_ID matches. */
 	if (ep->cfg.meta.qmap_id != qmap_id) {
-		IPADBG("Flow control indication not for the same flow: %u %u\n",
+		IPADBG("Flow control ind not for same flow: %u %u\n",
 			ep->cfg.meta.qmap_id, qmap_id);
+		spin_unlock(&ipa3_ctx->disconnect_lock);
 		return;
 	}
-
-	if (enable) {
-		IPADBG("Enabling Flow\n");
-		ep_ctrl.ipa_ep_delay = false;
-		IPA_STATS_INC_CNT(ipa3_ctx->stats.flow_enable);
+	if (!ep->disconnect_in_progress) {
+		if (enable) {
+			IPADBG("Enabling Flow\n");
+			ep_ctrl.ipa_ep_delay = false;
+			IPA_STATS_INC_CNT(ipa3_ctx->stats.flow_enable);
+		} else {
+			IPADBG("Disabling Flow\n");
+			ep_ctrl.ipa_ep_delay = true;
+			IPA_STATS_INC_CNT(ipa3_ctx->stats.flow_disable);
+		}
+		ep_ctrl.ipa_ep_suspend = false;
+		ipa3_cfg_ep_ctrl(ep_idx, &ep_ctrl);
 	} else {
-		IPADBG("Disabling Flow\n");
-		ep_ctrl.ipa_ep_delay = true;
-		IPA_STATS_INC_CNT(ipa3_ctx->stats.flow_disable);
+		IPADBG("EP disconnect is in progress\n");
 	}
-	ep_ctrl.ipa_ep_suspend = false;
-	ipa3_cfg_ep_ctrl(ep_idx, &ep_ctrl);
+	spin_unlock(&ipa3_ctx->disconnect_lock);
 }
 
 static void ipa3_wan_msg_free_cb(void *buff, u32 len, u32 type)
@@ -1863,14 +1875,10 @@ int ipa3_q6_pipe_reset(void)
 {
 	int client_idx;
 	int res;
-	/*
-	 * Q6 relies on the AP to reset all Q6 IPA pipes.
-	 * In case the uC is not loaded, or upon any failure in the
-	 * pipe reset sequence, we have to assert.
-	 */
+
 	if (!ipa3_ctx->uc_ctx.uc_loaded) {
-		IPAERR("uC is not loaded, can't reset Q6 pipes\n");
-		BUG();
+		IPAERR("uC is not loaded, won't reset Q6 pipes\n");
+		return 0;
 	}
 
 	for (client_idx = 0; client_idx < IPA_CLIENT_MAX; client_idx++)
@@ -2453,7 +2461,7 @@ static int ipa3_setup_apps_pipes(void)
 	 * thread may nullify it - e.g. on EP disconnect.
 	 * This lock intended to protect the access to the source EP call-back
 	 */
-	spin_lock_init(&ipa3_ctx->lan_rx_clnt_notify_lock);
+	spin_lock_init(&ipa3_ctx->disconnect_lock);
 	if (ipa3_setup_sys_pipe(&sys_in, &ipa3_ctx->clnt_hdl_data_in)) {
 		IPAERR(":setup sys pipe failed.\n");
 		result = -EPERM;
@@ -2979,9 +2987,15 @@ void ipa3_suspend_handler(enum ipa_irq_type interrupt,
 				 * pipe will be unsuspended as part of
 				 * enabling IPA clocks
 				 */
-				ipa3_inc_client_enable_clks();
-				ipa3_ctx->transport_pm.dec_clients = true;
-				ipa3_sps_process_irq_schedule_rel();
+				if (!atomic_read(
+					&ipa3_ctx->transport_pm.dec_clients)
+					) {
+					ipa3_inc_client_enable_clks();
+					atomic_set(
+					&ipa3_ctx->transport_pm.dec_clients,
+					1);
+					ipa3_sps_process_irq_schedule_rel();
+				}
 			} else {
 				resource = ipa3_get_rm_resource_from_ep(i);
 				res =
@@ -3003,6 +3017,35 @@ void ipa3_suspend_handler(enum ipa_irq_type interrupt,
 	}
 }
 
+/**
+* ipa3_restore_suspend_handler() - restores the original suspend IRQ handler
+* as it was registered in the IPA init sequence.
+* Return codes:
+* 0: success
+* -EPERM: failed to remove current handler or failed to add original handler
+* */
+int ipa3_restore_suspend_handler(void)
+{
+	int result = 0;
+
+	result  = ipa3_remove_interrupt_handler(IPA_TX_SUSPEND_IRQ);
+	if (result) {
+		IPAERR("remove handler for suspend interrupt failed\n");
+		return -EPERM;
+	}
+
+	result = ipa3_add_interrupt_handler(IPA_TX_SUSPEND_IRQ,
+			ipa3_suspend_handler, true, NULL);
+	if (result) {
+		IPAERR("register handler for suspend interrupt failed\n");
+		result = -EPERM;
+	}
+
+	IPADBG("suspend handler successfully restored\n");
+
+	return result;
+}
+
 static int ipa3_apps_cons_release_resource(void)
 {
 	return 0;
@@ -3016,11 +3059,12 @@ static int ipa3_apps_cons_request_resource(void)
 static void ipa3_sps_release_resource(struct work_struct *work)
 {
 	/* check whether still need to decrease client usage */
-	if (ipa3_ctx->transport_pm.dec_clients) {
+	if (atomic_read(&ipa3_ctx->transport_pm.dec_clients)) {
 		if (atomic_read(&ipa3_ctx->transport_pm.eot_activity)) {
+			IPADBG("EOT pending Re-scheduling\n");
 			ipa3_sps_process_irq_schedule_rel();
 		} else {
-			ipa3_ctx->transport_pm.dec_clients = false;
+			atomic_set(&ipa3_ctx->transport_pm.dec_clients, 0);
 			ipa3_dec_client_disable_clks();
 		}
 	}
@@ -3176,6 +3220,7 @@ static int ipa3_init(const struct ipa3_plat_drv_res *resource_p,
 	ipa3_ctx->modem_cfg_emb_pipe_flt = resource_p->modem_cfg_emb_pipe_flt;
 	ipa3_ctx->wan_rx_ring_size = resource_p->wan_rx_ring_size;
 	ipa3_ctx->skip_uc_pipe_reset = resource_p->skip_uc_pipe_reset;
+	ipa3_ctx->tethered_flow_control = resource_p->tethered_flow_control;
 	ipa3_ctx->transport_prototype = resource_p->transport_prototype;
 	ipa3_ctx->ee = resource_p->ee;
 	ipa3_ctx->apply_rg10_wa = resource_p->apply_rg10_wa;
@@ -3797,6 +3842,13 @@ static int get_ipa_dts_configuration(struct platform_device *pdev,
 		"qcom,skip-uc-pipe-reset");
 	IPADBG(": skip uC pipe reset = %s\n",
 		ipa_drv_res->skip_uc_pipe_reset
+		? "True" : "False");
+
+	ipa_drv_res->tethered_flow_control =
+		of_property_read_bool(pdev->dev.of_node,
+		"qcom,tethered-flow-control");
+	IPADBG(": Use apps based flow control = %s\n",
+		ipa_drv_res->tethered_flow_control
 		? "True" : "False");
 
 	if (of_property_read_bool(pdev->dev.of_node,

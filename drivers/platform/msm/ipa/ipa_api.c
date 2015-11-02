@@ -110,6 +110,24 @@ int ipa_disconnect(u32 clnt_hdl)
 EXPORT_SYMBOL(ipa_disconnect);
 
 /**
+* ipa_clear_endpoint_delay() - Clear ep_delay.
+* @clnt_hdl:	[in] IPA client handle
+*
+* Returns:	0 on success, negative on failure
+*
+* Note:		Should not be called from atomic context
+*/
+int ipa_clear_endpoint_delay(u32 clnt_hdl)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_clear_endpoint_delay, clnt_hdl);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_clear_endpoint_delay);
+
+/**
 * ipa_reset_endpoint() - reset an endpoint from BAM perspective
 * @clnt_hdl:	[in] IPA client handle
 *
@@ -126,6 +144,7 @@ int ipa_reset_endpoint(u32 clnt_hdl)
 	return ret;
 }
 EXPORT_SYMBOL(ipa_reset_endpoint);
+
 
 /**
  * ipa_cfg_ep - IPA end-point configuration
@@ -1994,7 +2013,7 @@ EXPORT_SYMBOL(ipa_dma_disable);
  *		-SPS_ERROR: on sps faliures
  *		-EFAULT: other
  */
-int ipa_dma_sync_memcpy(phys_addr_t dest, phys_addr_t src, int len)
+int ipa_dma_sync_memcpy(u64 dest, u64 src, int len)
 {
 	int ret;
 
@@ -2020,7 +2039,7 @@ EXPORT_SYMBOL(ipa_dma_sync_memcpy);
  *		-SPS_ERROR: on sps faliures
  *		-EFAULT: descr fifo is full.
  */
-int ipa_dma_async_memcpy(phys_addr_t dest, phys_addr_t src, int len,
+int ipa_dma_async_memcpy(u64 dest, u64 src, int len,
 		void (*user_cb)(void *user1), void *user_param)
 {
 	int ret;
@@ -2287,6 +2306,23 @@ int ipa_remove_interrupt_handler(enum ipa_irq_type interrupt)
 	return ret;
 }
 EXPORT_SYMBOL(ipa_remove_interrupt_handler);
+
+/**
+* ipa_restore_suspend_handler() - restores the original suspend IRQ handler
+* as it was registered in the IPA init sequence.
+* Return codes:
+* 0: success
+* -EPERM: failed to remove current handler or failed to add original handler
+* */
+int ipa_restore_suspend_handler(void)
+{
+	int ret;
+
+	IPA_API_DISPATCH_RETURN(ipa_restore_suspend_handler);
+
+	return ret;
+}
+EXPORT_SYMBOL(ipa_restore_suspend_handler);
 
 /**
  * ipa_bam_reg_dump() - Dump selected BAM registers for IPA and DMA-BAM
@@ -2675,23 +2711,16 @@ int ipa_usb_init_teth_prot(enum ipa_usb_teth_prot teth_prot,
 }
 EXPORT_SYMBOL(ipa_usb_init_teth_prot);
 
-int ipa_usb_request_xdci_channel(struct ipa_usb_xdci_chan_params *params,
-	struct ipa_req_chan_out_params *out_params)
+int ipa_usb_xdci_connect(struct ipa_usb_xdci_chan_params *ul_chan_params,
+	struct ipa_usb_xdci_chan_params *dl_chan_params,
+	struct ipa_req_chan_out_params *ul_out_params,
+	struct ipa_req_chan_out_params *dl_out_params,
+	struct ipa_usb_xdci_connect_params *connect_params)
 {
 	int ret;
 
-	IPA_API_DISPATCH_RETURN(ipa_usb_request_xdci_channel, params,
-		out_params);
-
-	return ret;
-}
-EXPORT_SYMBOL(ipa_usb_request_xdci_channel);
-
-int ipa_usb_xdci_connect(struct ipa_usb_xdci_connect_params *params)
-{
-	int ret;
-
-	IPA_API_DISPATCH_RETURN(ipa_usb_xdci_connect, params);
+	IPA_API_DISPATCH_RETURN(ipa_usb_xdci_connect, ul_chan_params,
+		dl_chan_params, ul_out_params, dl_out_params, connect_params);
 
 	return ret;
 }
@@ -2708,18 +2737,6 @@ int ipa_usb_xdci_disconnect(u32 ul_clnt_hdl, u32 dl_clnt_hdl,
 	return ret;
 }
 EXPORT_SYMBOL(ipa_usb_xdci_disconnect);
-
-int ipa_usb_release_xdci_channel(u32 clnt_hdl,
-	enum ipa_usb_teth_prot teth_prot)
-{
-	int ret;
-
-	IPA_API_DISPATCH_RETURN(ipa_usb_release_xdci_channel, clnt_hdl,
-		teth_prot);
-
-	return ret;
-}
-EXPORT_SYMBOL(ipa_usb_release_xdci_channel);
 
 int ipa_usb_deinit_teth_prot(enum ipa_usb_teth_prot teth_prot)
 {

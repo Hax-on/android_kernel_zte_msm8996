@@ -84,6 +84,7 @@ enum ngd_status {
 static void ngd_slim_rx(struct msm_slim_ctrl *dev, u8 *buf);
 static int ngd_slim_runtime_resume(struct device *device);
 static int ngd_slim_power_up(struct msm_slim_ctrl *dev, bool mdm_restart);
+static void ngd_adsp_down(struct msm_slim_ctrl *dev);
 
 static irqreturn_t ngd_slim_interrupt(int irq, void *d)
 {
@@ -184,15 +185,8 @@ static int dsp_ssr_notify_cb(struct notifier_block *n, unsigned long code,
 		/* make sure autosuspend is not called until ADSP comes up*/
 		pm_runtime_get_noresume(dev->dev);
 		dev->state = MSM_CTRL_DOWN;
-		/* Reset ctrl_up completion */
-		init_completion(&dev->ctrl_up);
-		/* disconnect BAM pipes */
-		if (dev->use_rx_msgqs == MSM_MSGQ_ENABLED)
-			dev->use_rx_msgqs = MSM_MSGQ_DOWN;
-		if (dev->use_tx_msgqs == MSM_MSGQ_ENABLED)
-			dev->use_tx_msgqs = MSM_MSGQ_DOWN;
 		msm_slim_sps_exit(dev, false);
-		schedule_work(&dev->qmi.ssr_down);
+		ngd_adsp_down(dev);
 		mutex_unlock(&dev->tx_lock);
 		break;
 	default:
@@ -576,15 +570,15 @@ static int ngd_xfer_msg(struct slim_controller *ctrl, struct slim_msg_txn *txn)
 							i, *(pbuf + i));
 			if (idx < MSM_TX_BUFS)
 				dev->wr_comp[idx] = NULL;
-			/* print BAM debug info for TX pipe */
-			sps_get_bam_debug_info(dev->bam.hdl, 93,
-						SPS_BAM_PIPE(4), 0, 2);
 			/*
 			 * disconnect/recoonect pipe so that subsequent
 			 * transactions don't timeout due to unavailable
 			 * descriptors
 			 */
 			if (dev->state != MSM_CTRL_DOWN) {
+				/* print BAM debug info for TX pipe */
+				sps_get_bam_debug_info(dev->bam.hdl, 93,
+							SPS_BAM_PIPE(4), 0, 2);
 				msm_slim_disconnect_endp(dev, &dev->tx_msgq,
 							&dev->use_tx_msgqs);
 				msm_slim_connect_endp(dev, &dev->tx_msgq);
@@ -718,9 +712,19 @@ static int ngd_bulk_wr(struct slim_controller *ctrl, u8 la, u8 mt, u8 mc,
 	u32 *header;
 	DECLARE_COMPLETION_ONSTACK(done);
 
-	msm_slim_get_ctrl(dev);
+	ret = msm_slim_get_ctrl(dev);
 	mutex_lock(&dev->tx_lock);
-	if (dev->state == MSM_CTRL_ASLEEP) {
+
+	if ((pm_runtime_enabled(dev->dev) && ret < 0) ||
+			dev->state == MSM_CTRL_DOWN) {
+		SLIM_WARN(dev, "vote failed/SSR in-progress ret:%d, state:%d",
+				ret, dev->state);
+		pm_runtime_set_suspended(dev->dev);
+		mutex_unlock(&dev->tx_lock);
+		msm_slim_put_ctrl(dev);
+		return -EREMOTEIO;
+	}
+	if (!pm_runtime_enabled(dev->dev) && dev->state == MSM_CTRL_ASLEEP) {
 		mutex_unlock(&dev->tx_lock);
 		ret = ngd_slim_runtime_resume(dev->dev);
 
@@ -1041,6 +1045,15 @@ static void ngd_slim_setup(struct msm_slim_ctrl *dev)
 	u32 cfg = readl_relaxed(dev->base +
 				 NGD_BASE(dev->ctrl.nr, dev->ver));
 	if (dev->state == MSM_CTRL_DOWN) {
+		/* if called after SSR, cleanup and re-assign */
+		if (dev->use_tx_msgqs != MSM_MSGQ_RESET)
+			msm_slim_deinit_ep(dev, &dev->tx_msgq,
+					   &dev->use_tx_msgqs);
+
+		if (dev->use_rx_msgqs != MSM_MSGQ_RESET)
+			msm_slim_deinit_ep(dev, &dev->rx_msgq,
+					   &dev->use_rx_msgqs);
+
 		msm_slim_sps_init(dev, dev->bam_mem,
 			NGD_BASE(dev->ctrl.nr,
 			dev->ver) + NGD_STATUS, true);
@@ -1411,12 +1424,8 @@ static int ngd_notify_slaves(void *data)
 	return 0;
 }
 
-static void ngd_adsp_down(struct work_struct *work)
+static void ngd_adsp_down(struct msm_slim_ctrl *dev)
 {
-	struct msm_slim_qmi *qmi =
-		container_of(work, struct msm_slim_qmi, ssr_down);
-	struct msm_slim_ctrl *dev =
-		container_of(qmi, struct msm_slim_ctrl, qmi);
 	struct slim_controller *ctrl = &dev->ctrl;
 	struct slim_device *sbdev;
 
@@ -1667,7 +1676,6 @@ static int ngd_slim_probe(struct platform_device *pdev)
 				dev->ext_mdm.ssr);
 	}
 
-	INIT_WORK(&dev->qmi.ssr_down, ngd_adsp_down);
 	INIT_WORK(&dev->qmi.ssr_up, ngd_adsp_up);
 	dev->qmi.nb.notifier_call = ngd_qmi_available;
 	pm_runtime_get_noresume(dev->dev);

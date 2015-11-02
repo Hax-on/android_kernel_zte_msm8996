@@ -242,6 +242,7 @@
 			<52 212>,   /* qmp_usb3_lfps_rxterm_irq */
 			<87 358>,   /* ee0_krait_hlos_spmi_periph_irq */
 			<0xff 16>,  /* APCj_qgicdrCpu0HwFaultIrptReq */
+			<0xff 23>,  /* APCj_qgicdrCpu0PerfMonIrptReq */
 			<0xff 27>,  /* APCj_qgicdrCpu0QTmrVirtIrptReq */
 			<0xff 32>,  /* APCj_qgicdrL2PerfMonIrptReq */
 			<0xff 33>,  /* APCC_qgicL2PerfMonIrptReq */
@@ -286,6 +287,7 @@
 			<0xff 115>, /* mdss_irq */
 			<0xff 126>, /* bam_irq[0] */
 			<0xff 127>, /* blsp1_qup_irq(0) */
+			<0xff 132>, /* blsp1_qup_irq(5) */
 			<0xff 133>, /* blsp2_qup_irq(0) */
 			<0xff 134>, /* blsp2_qup_irq(1) */
 			<0xff 138>, /* blsp2_qup_irq(5) */
@@ -505,5 +507,17 @@
 			<0x29000c 0x4>;
 		reg-names = "phys_addr_base",
 			    "offset_addr";
+	};
+
+	qcom,rpm-log@200000 {
+		compatible = "qcom,rpm-log";
+		reg = <0x200000 0x4000>,
+			<0x290018 0x4>;
+		qcom,rpm-addr-phys = <0x200000>;
+		qcom,offset-version = <4>;
+		qcom,offset-page-buffer-addr = <36>;
+		qcom,offset-log-len = <40>;
+		qcom,offset-log-len-mask = <44>;
+		qcom,offset-page-indices = <56>;
 	};
 };

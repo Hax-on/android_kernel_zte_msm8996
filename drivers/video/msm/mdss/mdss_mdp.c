@@ -578,6 +578,29 @@ void mdss_mdp_irq_disable(u32 intr_type, u32 intf_num)
 	spin_unlock_irqrestore(&mdp_lock, irq_flags);
 }
 
+/*
+ * This function is used to check and clear the status of
+ * INTR and does not handle INTR2 and HIST_INTR
+ */
+void mdss_mdp_intr_check_and_clear(u32 intr_type, u32 intf_num)
+{
+	u32 status, irq;
+	unsigned long irq_flags;
+	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
+
+	irq = mdss_mdp_irq_mask(intr_type, intf_num);
+
+	spin_lock_irqsave(&mdp_lock, irq_flags);
+	status = irq & readl_relaxed(mdata->mdp_base +
+			MDSS_MDP_REG_INTR_STATUS);
+	if (status) {
+		pr_debug("clearing irq: intr_type:%d, intf_num:%d\n",
+				intr_type, intf_num);
+		writel_relaxed(irq, mdata->mdp_base + MDSS_MDP_REG_INTR_CLEAR);
+	}
+	spin_unlock_irqrestore(&mdp_lock, irq_flags);
+}
+
 void mdss_mdp_hist_irq_disable(u32 irq)
 {
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
@@ -888,7 +911,8 @@ void mdss_bus_bandwidth_ctrl(int enable)
 		}
 	}
 
-	pr_debug("bw_cnt=%d changed=%d enable=%d\n",
+	pr_debug("%pS: task:%s bw_cnt=%d changed=%d enable=%d\n",
+		__builtin_return_address(0), current->group_leader->comm,
 		mdata->bus_ref_cnt, changed, enable);
 
 	if (changed) {
@@ -938,9 +962,9 @@ void mdss_mdp_clk_ctrl(int enable)
 	if (changed)
 		MDSS_XLOG(mdp_clk_cnt, enable, current->pid);
 
-	pr_debug("%pS: clk_cnt=%d changed=%d enable=%d\n",
-			__builtin_return_address(0), mdp_clk_cnt,
-			changed, enable);
+	pr_debug("%pS: task:%s clk_cnt=%d changed=%d enable=%d\n",
+		__builtin_return_address(0), current->group_leader->comm,
+		mdata->bus_ref_cnt, changed, enable);
 
 	if (changed) {
 		if (enable) {

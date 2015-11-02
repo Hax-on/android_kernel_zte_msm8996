@@ -58,6 +58,9 @@
 #define HCI_IBS_WAKE_IND	0xFD
 #define HCI_IBS_WAKE_ACK	0xFC
 
+/* TX idle time out value */
+#define TX_IDLE_TO		1000
+
 /* HCI_IBS receiver States */
 #define HCI_IBS_W4_PACKET_TYPE	0
 #define HCI_IBS_W4_EVENT_HDR	1
@@ -249,13 +252,14 @@ static void ibs_wq_awake_device(struct work_struct *work)
 	struct ibs_struct *ibs = container_of(work, struct ibs_struct,
 					ws_awake_device);
 	struct hci_uart *hu = (struct hci_uart *)ibs->ibs_hu;
+	unsigned long flags;
 
 	BT_DBG(" %p ", hu);
 
 	/* Vote for serial clock */
 	ibs_msm_serial_clock_vote(HCI_IBS_TX_VOTE_CLOCK_ON, hu);
 
-	spin_lock(&ibs->hci_ibs_lock);
+	spin_lock_irqsave(&ibs->hci_ibs_lock, flags);
 
 	/* send wake indication to device */
 	if (send_hci_ibs_cmd(HCI_IBS_WAKE_IND, hu) < 0)
@@ -264,9 +268,10 @@ static void ibs_wq_awake_device(struct work_struct *work)
 	ibs->ibs_sent_wakes++; /* debug */
 
 	/* start retransmit timer */
-	mod_timer(&ibs->wake_retrans_timer, jiffies + wake_retrans);
+	mod_timer(&ibs->wake_retrans_timer, jiffies + msecs_to_jiffies(10));
 
-	spin_unlock(&ibs->hci_ibs_lock);
+	spin_unlock_irqrestore(&ibs->hci_ibs_lock, flags);
+
 }
 
 static void ibs_wq_awake_rx(struct work_struct *work)
@@ -274,12 +279,14 @@ static void ibs_wq_awake_rx(struct work_struct *work)
 	struct ibs_struct *ibs = container_of(work, struct ibs_struct,
 					ws_awake_rx);
 	struct hci_uart *hu = (struct hci_uart *)ibs->ibs_hu;
+	unsigned long flags;
 
 	BT_DBG(" %p ", hu);
 
 	ibs_msm_serial_clock_vote(HCI_IBS_RX_VOTE_CLOCK_ON, hu);
 
-	spin_lock(&ibs->hci_ibs_lock);
+	spin_lock_irqsave(&ibs->hci_ibs_lock, flags);
+
 	ibs->rx_ibs_state = HCI_IBS_RX_AWAKE;
 	/* Always acknowledge device wake up,
 	 * sending IBS message doesn't count as TX ON
@@ -289,7 +296,8 @@ static void ibs_wq_awake_rx(struct work_struct *work)
 
 	ibs->ibs_sent_wacks++; /* debug */
 
-	spin_unlock(&ibs->hci_ibs_lock);
+	spin_unlock_irqrestore(&ibs->hci_ibs_lock, flags);
+
 	/* actually send the packets */
 	hci_uart_tx_wakeup(hu);
 
@@ -646,7 +654,8 @@ static void ibs_device_woke_up(struct hci_uart *hu)
 			skb_queue_tail(&ibs->txq, skb);
 		/* switch timers and change state to HCI_IBS_TX_AWAKE */
 		del_timer(&ibs->wake_retrans_timer);
-		mod_timer(&ibs->tx_idle_timer, jiffies + tx_idle_delay);
+		mod_timer(&ibs->tx_idle_timer, jiffies +
+			msecs_to_jiffies(TX_IDLE_TO));
 		ibs->tx_ibs_state = HCI_IBS_TX_AWAKE;
 	}
 
@@ -676,7 +685,8 @@ static int ibs_enqueue(struct hci_uart *hu, struct sk_buff *skb)
 	case HCI_IBS_TX_AWAKE:
 		BT_DBG("device awake, sending normally");
 		skb_queue_tail(&ibs->txq, skb);
-		mod_timer(&ibs->tx_idle_timer, jiffies + tx_idle_delay);
+		mod_timer(&ibs->tx_idle_timer, jiffies +
+			msecs_to_jiffies(TX_IDLE_TO));
 		break;
 
 	case HCI_IBS_TX_ASLEEP:
@@ -707,14 +717,15 @@ static int ibs_enqueue(struct hci_uart *hu, struct sk_buff *skb)
 	return 0;
 }
 
-static inline int ibs_check_data_len(struct ibs_struct *ibs, int len)
+static inline int ibs_check_data_len(struct hci_dev *hdev,
+					struct ibs_struct *ibs, int len)
 {
 	register int room = skb_tailroom(ibs->rx_skb);
 
 	BT_DBG("len %d room %d", len, room);
 
 	if (!len) {
-		hci_recv_frame(ibs->rx_skb);
+		hci_recv_frame(hdev, ibs->rx_skb);
 	} else if (len > room) {
 		BT_ERR("Data length is too large");
 		kfree_skb(ibs->rx_skb);
@@ -757,7 +768,7 @@ static int ibs_recv(struct hci_uart *hu, void *data, int count)
 			switch (ibs->rx_state) {
 			case HCI_IBS_W4_DATA:
 				BT_DBG("Complete data");
-				hci_recv_frame(ibs->rx_skb);
+				hci_recv_frame(hu->hdev, ibs->rx_skb);
 
 				ibs->rx_state = HCI_IBS_W4_PACKET_TYPE;
 				ibs->rx_skb = NULL;
@@ -769,7 +780,7 @@ static int ibs_recv(struct hci_uart *hu, void *data, int count)
 				BT_DBG("Event header: evt 0x%2.2x plen %d",
 					eh->evt, eh->plen);
 
-				ibs_check_data_len(ibs, eh->plen);
+				ibs_check_data_len(hu->hdev, ibs, eh->plen);
 				continue;
 
 			case HCI_IBS_W4_ACL_HDR:
@@ -778,7 +789,7 @@ static int ibs_recv(struct hci_uart *hu, void *data, int count)
 
 				BT_DBG("ACL header: dlen %d", dlen);
 
-				ibs_check_data_len(ibs, dlen);
+				ibs_check_data_len(hu->hdev, ibs, dlen);
 				continue;
 
 			case HCI_IBS_W4_SCO_HDR:
@@ -786,7 +797,7 @@ static int ibs_recv(struct hci_uart *hu, void *data, int count)
 
 				BT_DBG("SCO header: dlen %d", sh->dlen);
 
-				ibs_check_data_len(ibs, sh->dlen);
+				ibs_check_data_len(hu->hdev, ibs, sh->dlen);
 				continue;
 			}
 		}

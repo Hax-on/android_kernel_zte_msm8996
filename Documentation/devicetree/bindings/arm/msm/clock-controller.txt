@@ -22,6 +22,8 @@ Required properties:
 			"qcom,gcc-8996"
 			"qcom,gcc-8996-v2"
 			"qcom,gcc-8996-v3"
+			"qcom,gcc-thorium"
+			"qcom,gcc-titanium"
 			"qcom,rpmcc-8994"
 			"qcom,rpmcc-8992"
 			"qcom,rpmcc-8916"
@@ -33,14 +35,18 @@ Required properties:
 			"qcom,cc-debug-8992"
 			"qcom,cc-debug-8994"
 			"qcom,cc-debug-8952"
+			"qcom,cc-debug-titanium"
 			"qcom,cc-debug-fsm9010"
 			"qcom,cc-debug-8996"
 			"qcom,cc-debug-8996-v2"
 			"qcom,cc-debug-8996-v3"
+			"qcom,cc-debug-thorium"
 			"qcom,gcc-mdss-8936"
 			"qcom,gcc-mdss-8909"
 			"qcom,gcc-mdss-8916"
 			"qcom,gcc-mdss-8952"
+			"qcom,gcc-mdss-thorium"
+			"qcom,gcc-mdss-titanium"
 			"qcom,mmsscc-8994v2"
 			"qcom,mmsscc-8994"
 			"qcom,mmsscc-8992"
@@ -51,6 +57,7 @@ Required properties:
 			"qcom,gpucc-8996-v2"
 			"qcom,gpucc-8996-v3"
 			"qcom,gpucc-8996-v3.0"
+			"qcom,gcc-gfx-titanium"
 			"qcom,gcc-californium"
 			"qcom,cc-debug-californium"
 			"qcom,gcc-mdmfermium"
@@ -81,6 +88,13 @@ Optional properties:
 			    operate at. Drivers can use the OPP library API to
 			    operate on the list of OPPs registered using these
 			    values.
+- qcom,<clk>-speedbinX: A table of frequency (Hz) to voltage (corner) mapping
+			that represents the max frequency possible for each
+			supported voltage level for the clock.
+			'X' is the speed bin into which the device falls into -
+			a bin will have unique frequency-voltage relationships.
+			The value 'X' is read from efuse registers, and the right
+			table is picked from multiple possible tables.
 - qcom,<clock-name>-opp-handle: phandle references to the devices for which OPP
 			table is filled with the clock frequency and voltage
 			values.

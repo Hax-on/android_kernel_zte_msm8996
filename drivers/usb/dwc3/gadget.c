@@ -1491,11 +1491,6 @@ int __dwc3_gadget_ep_set_halt(struct dwc3_ep *dep, int value, int protocol)
 	struct dwc3				*dwc = dep->dwc;
 	int					ret;
 
-	if (usb_endpoint_xfer_isoc(dep->endpoint.desc)) {
-		dev_err(dwc->dev, "%s is of Isochronous type\n", dep->name);
-		return -EINVAL;
-	}
-
 	memset(&params, 0x00, sizeof(params));
 
 	if (value) {
@@ -1543,7 +1538,14 @@ static int dwc3_gadget_ep_set_halt(struct usb_ep *ep, int value)
 
 	spin_lock_irqsave(&dwc->lock, flags);
 	dbg_event(dep->number, "HALT", value);
+	if (usb_endpoint_xfer_isoc(dep->endpoint.desc)) {
+		dev_err(dwc->dev, "%s is of Isochronous type\n", dep->name);
+		ret = -EINVAL;
+		goto out;
+	}
+
 	ret = __dwc3_gadget_ep_set_halt(dep, value, false);
+out:
 	spin_unlock_irqrestore(&dwc->lock, flags);
 
 	return ret;
@@ -1875,6 +1877,10 @@ static int dwc3_gadget_run_stop(struct dwc3 *dwc, int is_on, int suspend)
 
 		dwc->pullups_connected = true;
 	} else {
+		dwc3_gadget_disable_irq(dwc);
+		__dwc3_gadget_ep_disable(dwc->eps[0]);
+		__dwc3_gadget_ep_disable(dwc->eps[1]);
+
 		reg &= ~DWC3_DCTL_RUN_STOP;
 
 		if (dwc->has_hibernation && !suspend)
@@ -3351,6 +3357,12 @@ static void dwc3_process_event_entry(struct dwc3 *dwc,
 		return;
 	}
 
+	/* If run/stop is cleared don't process any more events */
+	if (!dwc->pullups_connected) {
+		dbg_print_reg("SKIP_EVT_PULLUP", event->raw);
+		return;
+	}
+
 	/* Endpoint IRQ, handle it and return early */
 	if (event->type.is_devspec == 0) {
 		/* depevt */
@@ -3443,7 +3455,7 @@ static irqreturn_t dwc3_thread_interrupt(int irq, void *_dwc)
 	spin_lock_irqsave(&dwc->lock, flags);
 	dwc->bh_handled_evt_cnt[dwc->bh_dbg_index] = 0;
 
-	for (i = 0; i < dwc->num_event_buffers; i++)
+	for (i = 0; i < dwc->num_normal_event_buffers; i++)
 		ret |= dwc3_process_event_buf(dwc, i);
 
 	spin_unlock_irqrestore(&dwc->lock, flags);
@@ -3468,6 +3480,11 @@ static irqreturn_t dwc3_check_event_buf(struct dwc3 *dwc, u32 buf)
 	count &= DWC3_GEVNTCOUNT_MASK;
 	if (!count)
 		return IRQ_NONE;
+
+	if (count > evt->length) {
+		dev_warn(dwc->dev, "%s: ev_count is huge: %d", __func__, count);
+		return IRQ_NONE;
+	}
 
 	evt->count = count;
 	evt->flags |= DWC3_EVENT_PENDING;
@@ -3499,7 +3516,7 @@ static irqreturn_t dwc3_interrupt(int irq, void *_dwc)
 		return IRQ_HANDLED;
 	}
 
-	for (i = 0; i < dwc->num_event_buffers; i++) {
+	for (i = 0; i < dwc->num_normal_event_buffers; i++) {
 		irqreturn_t status;
 
 		status = dwc3_check_event_buf(dwc, i);

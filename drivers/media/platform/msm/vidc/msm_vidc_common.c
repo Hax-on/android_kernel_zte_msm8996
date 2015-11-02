@@ -916,8 +916,6 @@ static void handle_event_change(enum hal_command_response cmd, void *data)
 		inst->in_reconfig = true;
 	} else {
 		dprintk(VIDC_DBG, "V4L2_EVENT_SEQ_CHANGED_SUFFICIENT\n");
-		if (msm_comm_get_stream_output_mode(inst) !=
-				HAL_VIDEO_DECODER_SECONDARY) {
 			dprintk(VIDC_DBG,
 					"event_notify->height = %d event_notify->width = %d\n",
 					event_notify->height,
@@ -926,7 +924,6 @@ static void handle_event_change(enum hal_command_response cmd, void *data)
 			inst->prop.width[CAPTURE_PORT] = event_notify->width;
 			inst->prop.height[OUTPUT_PORT] = event_notify->height;
 			inst->prop.width[OUTPUT_PORT] = event_notify->width;
-		}
 	}
 
 	if (inst->session_type == MSM_VIDC_DECODER)
@@ -1489,6 +1486,9 @@ int buf_ref_get(struct msm_vidc_inst *inst, struct buffer_info *binfo)
 		dprintk(VIDC_DBG, "%s: invalid ref_cnt: %d\n", __func__, cnt);
 		cnt = -EINVAL;
 	}
+	if (cnt == 2)
+		inst->buffers_held_in_driver++;
+
 	dprintk(VIDC_DBG, "REF_GET[%d] fd[0] = %d\n", cnt, binfo->fd[0]);
 
 	return cnt;
@@ -1536,6 +1536,7 @@ int buf_ref_put(struct msm_vidc_inst *inst, struct buffer_info *binfo)
 			binfo->fd[0]);
 		binfo->pending_deletion = true;
 	} else if (qbuf_again) {
+		inst->buffers_held_in_driver--;
 		rc = qbuf_dynamic_buf(inst, binfo);
 		if (!rc)
 			return rc;
@@ -3040,40 +3041,6 @@ exit:
 	return rc;
 }
 
-void msm_comm_cleanup_internal_buffers(struct msm_vidc_inst *inst)
-{
-	struct internal_buf *buf, *dummy;
-
-	dprintk(VIDC_DBG,
-		"Inst %p is in bad state. Cleaning internal buffers\n", inst);
-
-	mutex_lock(&inst->scratchbufs.lock);
-	list_for_each_entry_safe(buf, dummy, &inst->scratchbufs.list, list) {
-		if (!buf->handle) {
-			dprintk(VIDC_ERR, "%s - buf->handle NULL\n", __func__);
-			continue;
-		}
-		list_del(&buf->list);
-		msm_comm_smem_free(inst, buf->handle);
-		kfree(buf);
-	}
-	mutex_unlock(&inst->scratchbufs.lock);
-
-	mutex_lock(&inst->persistbufs.lock);
-	list_for_each_entry_safe(buf, dummy, &inst->persistbufs.list, list) {
-		if (!buf->handle) {
-			dprintk(VIDC_ERR, "%s - buf->handle NULL\n", __func__);
-			continue;
-		}
-		list_del(&buf->list);
-		msm_comm_smem_free(inst, buf->handle);
-		kfree(buf);
-	}
-	mutex_unlock(&inst->persistbufs.lock);
-
-	return;
-}
-
 int msm_vidc_comm_cmd(void *instance, union msm_v4l2_cmd *cmd)
 {
 	struct msm_vidc_inst *inst = instance;
@@ -3114,51 +3081,11 @@ int msm_vidc_comm_cmd(void *instance, union msm_v4l2_cmd *cmd)
 				"Failed to flush buffers: %d\n", rc);
 		}
 		break;
-	case V4L2_ENC_CMD_STOP:
-		/* V4L2_DEC_CMD_STOP has the same value as V4L2_ENC_CMD_STOP */
-		rc = msm_vidc_release_buffers(inst,
-				V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
-		if (rc)
-			dprintk(VIDC_ERR,
-				"Failed to release Capture buffers\n");
-
-		if (core->state != VIDC_CORE_INVALID &&
-				inst->state ==  MSM_VIDC_CORE_INVALID) {
-			rc = msm_comm_kill_session(inst);
-			if (rc)
-				dprintk(VIDC_ERR,
-					"Failed to clean session: %d\n",
-					rc);
-			msm_comm_cleanup_internal_buffers(inst);
-			msm_vidc_queue_v4l2_event(inst,
-				V4L2_EVENT_MSM_VIDC_CLOSE_DONE);
-			goto exit;
-		}
-
-		rc = msm_comm_release_scratch_buffers(inst, false);
-		if (rc)
-			dprintk(VIDC_ERR,
-				"Failed to release scratch buffers: %d\n", rc);
-		rc = msm_comm_release_persist_buffers(inst);
-		if (rc)
-			dprintk(VIDC_ERR,
-				"Failed to release persist buffers: %d\n", rc);
-		rc = msm_comm_try_state(inst, MSM_VIDC_CLOSE_DONE);
-
-		/*
-		 * Clients rely on this event for joining poll thread.
-		 * This event should be returned even if firmware has
-		 * failed to respond.
-		 */
-
-		msm_vidc_queue_v4l2_event(inst, V4L2_EVENT_MSM_VIDC_CLOSE_DONE);
-		break;
 	default:
 		dprintk(VIDC_ERR, "Unknown Command %d\n", which_cmd);
 		rc = -ENOTSUPP;
 		break;
 	}
-exit:
 	return rc;
 }
 

@@ -675,6 +675,11 @@ ssize_t glink_pkt_write(struct file *file,
 
 	devp = file->private_data;
 
+	if (!count) {
+		GLINK_PKT_ERR("%s: data count is zero\n", __func__);
+		return -EINVAL;
+	}
+
 	if (!devp) {
 		GLINK_PKT_ERR("%s on NULL glink_pkt_dev\n", __func__);
 		return -EINVAL;
@@ -733,10 +738,8 @@ static unsigned int glink_pkt_poll(struct file *file, poll_table *wait)
 		GLINK_PKT_ERR("%s: Invalid device handle\n", __func__);
 		return POLLERR;
 	}
-	if (devp->in_reset) {
-		mutex_unlock(&devp->ch_lock);
+	if (devp->in_reset)
 		return POLLHUP;
-	}
 
 	devp->poll_mode = 1;
 	poll_wait(file, &devp->ch_read_wait_queue, wait);

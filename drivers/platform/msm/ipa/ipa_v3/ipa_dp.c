@@ -604,6 +604,7 @@ int ipa3_send(struct ipa3_sys_context *sys,
 			IPAERR("GSI xfer failed.\n");
 			goto failure;
 		}
+		kfree(gsi_xfer_elem_array);
 	} else {
 		result = sps_transfer(sys->ep->ep_hdl, &transfer);
 		if (result) {
@@ -1114,6 +1115,16 @@ int ipa3_setup_sys_pipe(struct ipa_sys_connect_params *sys_in, u32 *clnt_hdl)
 	ep->keep_ipa_awake = sys_in->keep_ipa_awake;
 	atomic_set(&ep->avail_fifo_desc,
 		((sys_in->desc_fifo_sz/sizeof(struct sps_iovec))-1));
+
+	if (ep->status.status_en && IPA_CLIENT_IS_CONS(ep->client) &&
+	    ep->sys->status_stat == NULL) {
+		ep->sys->status_stat =
+			kzalloc(sizeof(struct ipa3_status_stats), GFP_KERNEL);
+		if (!ep->sys->status_stat) {
+			IPAERR("no memory\n");
+			goto fail_gen2;
+		}
+	}
 
 	result = ipa3_enable_data_path(ipa_ep_idx);
 	if (result) {
@@ -1752,7 +1763,7 @@ static void ipa3_cleanup_wlan_rx_common_cache(void)
 		&ipa3_ctx->wc_memb.wlan_comm_desc_list, link) {
 		list_del(&rx_pkt->link);
 		dma_unmap_single(ipa3_ctx->pdev, rx_pkt->data.dma_addr,
-			IPA_WLAN_COMM_RX_POOL_LOW, DMA_FROM_DEVICE);
+				IPA_WLAN_COMM_RX_POOL_LOW, DMA_FROM_DEVICE);
 		dev_kfree_skb_any(rx_pkt->data.skb);
 		kmem_cache_free(ipa3_ctx->rx_pkt_wrapper_cache, rx_pkt);
 		ipa3_ctx->wc_memb.wlan_comm_free_cnt--;
@@ -2140,6 +2151,13 @@ begin:
 		IPADBG("STATUS opcode=%d src=%d dst=%d len=%d\n",
 				status->status_opcode, status->endp_src_idx,
 				status->endp_dest_idx, status->pkt_len);
+		if (sys->status_stat) {
+			sys->status_stat->status[sys->status_stat->curr] =
+				*status;
+			sys->status_stat->curr++;
+			if (sys->status_stat->curr == IPA_MAX_STATUS_STAT_NUM)
+				sys->status_stat->curr = 0;
+		}
 
 		if ((status->status_opcode &
 		    (IPA_HW_STATUS_OPCODE_DROPPED_PACKET |
@@ -2382,6 +2400,15 @@ static int ipa3_wan_rx_pyld_hdlr(struct sk_buff *skb,
 		IPADBG("STATUS opcode=%d src=%d dst=%d len=%d\n",
 				status->status_opcode, status->endp_src_idx,
 				status->endp_dest_idx, status->pkt_len);
+
+		if (sys->status_stat) {
+			sys->status_stat->status[sys->status_stat->curr] =
+				*status;
+			sys->status_stat->curr++;
+			if (sys->status_stat->curr == IPA_MAX_STATUS_STAT_NUM)
+				sys->status_stat->curr = 0;
+		}
+
 		if ((status->status_opcode &
 		    (IPA_HW_STATUS_OPCODE_DROPPED_PACKET |
 		    IPA_HW_STATUS_OPCODE_PACKET |
@@ -3274,6 +3301,52 @@ static void ipa_gsi_irq_rx_notify_cb(struct gsi_chan_xfer_notify *notify)
 	}
 }
 
+static void ipa_dma_gsi_irq_rx_notify_cb(struct gsi_chan_xfer_notify *notify)
+{
+	struct ipa3_sys_context *sys;
+	struct ipa3_dma_xfer_wrapper *rx_pkt_expected, *rx_pkt_rcvd;
+
+	if (!notify) {
+		IPAERR("gsi notify is NULL.\n");
+		return;
+	}
+	IPADBG("event %d notified\n", notify->evt_id);
+
+	sys = (struct ipa3_sys_context *)notify->chan_user_data;
+	if (sys->ep->client == IPA_CLIENT_MEMCPY_DMA_SYNC_CONS) {
+		IPAERR("IRQ_RX Callback was called for DMA_SYNC_CONS.\n");
+		return;
+	}
+	rx_pkt_expected = list_first_entry(&sys->head_desc_list,
+	struct ipa3_dma_xfer_wrapper, link);
+		rx_pkt_rcvd = (struct ipa3_dma_xfer_wrapper *)notify
+			->xfer_user_data;
+	if (rx_pkt_expected != rx_pkt_rcvd) {
+		IPAERR("Pkt was not filled in head of rx buffer.\n");
+		WARN_ON(1);
+		return;
+	}
+
+	sys->ep->bytes_xfered_valid = true;
+	sys->ep->bytes_xfered = notify->bytes_xfered;
+	sys->ep->phys_base = rx_pkt_rcvd->phys_addr_dest;
+
+	switch (notify->evt_id) {
+	case GSI_CHAN_EVT_EOT:
+		if (!atomic_read(&sys->curr_polling_state)) {
+			/* put the gsi channel into polling mode */
+			gsi_config_channel_mode(sys->ep->gsi_chan_hdl,
+				GSI_CHAN_MODE_POLL);
+			atomic_set(&sys->curr_polling_state, 1);
+			queue_work(sys->wq, &sys->work);
+		}
+		break;
+	default:
+		IPAERR("received unexpected event id %d\n", notify->evt_id);
+	}
+}
+
+
 static int ipa_gsi_setup_channel(struct ipa3_ep_context *ep)
 {
 	struct gsi_evt_ring_props gsi_evt_ring_props;
@@ -3288,7 +3361,8 @@ static int ipa_gsi_setup_channel(struct ipa3_ep_context *ep)
 	}
 
 	ep->gsi_evt_ring_hdl = ~0;
-	if (ep->client != IPA_CLIENT_APPS_LAN_WAN_PROD) {
+	if (ep->client != IPA_CLIENT_APPS_LAN_WAN_PROD
+			&& !IPA_CLIENT_IS_MEMCPY_DMA_PROD(ep->client)) {
 		memset(&gsi_evt_ring_props, 0, sizeof(gsi_evt_ring_props));
 		gsi_evt_ring_props.intf = GSI_EVT_CHTYPE_GPI_EV;
 		gsi_evt_ring_props.intr = GSI_INTR_IRQ;
@@ -3364,7 +3438,8 @@ static int ipa_gsi_setup_channel(struct ipa3_ep_context *ep)
 		gsi_channel_props.xfer_cb = ipa_gsi_irq_tx_notify_cb;
 	else
 		gsi_channel_props.xfer_cb = ipa_gsi_irq_rx_notify_cb;
-
+	if (IPA_CLIENT_IS_MEMCPY_DMA_CONS(ep->client))
+		gsi_channel_props.xfer_cb = ipa_dma_gsi_irq_rx_notify_cb;
 	result = gsi_alloc_channel(&gsi_channel_props, ipa3_ctx->gsi_dev_hdl,
 		&ep->gsi_chan_hdl);
 	if (result != GSI_STATUS_SUCCESS)
@@ -3373,7 +3448,9 @@ static int ipa_gsi_setup_channel(struct ipa3_ep_context *ep)
 	result = gsi_start_channel(ep->gsi_chan_hdl);
 	if (result != GSI_STATUS_SUCCESS)
 		goto fail_start_channel;
-
+	if (ep->client == IPA_CLIENT_MEMCPY_DMA_SYNC_CONS)
+		gsi_config_channel_mode(ep->gsi_chan_hdl,
+				GSI_CHAN_MODE_POLL);
 	return 0;
 
 fail_start_channel:

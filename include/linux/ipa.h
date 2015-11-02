@@ -1067,16 +1067,21 @@ struct ipa_mhi_msi_info {
  * @mmio_addr: MHI MMIO physical address
  * @first_ch_idx: First channel ID for hardware accelerated channels.
  * @first_er_idx: First event ring ID for hardware accelerated channels.
+ * @assert_bit40: should assert bit 40 in order to access hots space.
+ *	if PCIe iATU is configured then not need to assert bit40
  * @notify: client callback
  * @priv: client private data to be provided in client callback
+ * @test_mode: flag to indicate if IPA MHI is in unit test mode
  */
 struct ipa_mhi_init_params {
 	struct ipa_mhi_msi_info msi;
 	u32 mmio_addr;
 	u32 first_ch_idx;
 	u32 first_er_idx;
+	bool assert_bit40;
 	mhi_client_cb notify;
 	void *priv;
+	bool test_mode;
 };
 
 /**
@@ -1084,10 +1089,14 @@ struct ipa_mhi_init_params {
  *
  * @host_ctrl_addr: Base address of MHI control data structures
  * @host_data_addr: Base address of MHI data buffers
+ * @channel_context_addr: channel context array address in host address space
+ * @event_context_addr: event context array address in host address space
  */
 struct ipa_mhi_start_params {
 	u32 host_ctrl_addr;
 	u32 host_data_addr;
+	u64 channel_context_array_addr;
+	u64 event_context_array_addr;
 };
 
 /**
@@ -1236,8 +1245,6 @@ struct ipa_usb_teth_prot_params {
  * channels, and connect RNDIS/ECM/teth_bridge
  *
  * @max_pkt_size:          high speed or full speed
- * @ipa_to_usb_clnt_hdl:   client handle received from
- *                         ipa_usb_request_xdci_channel() for IN channel
  * @ipa_to_usb_xferrscidx: Transfer Resource Index (XferRscIdx) for IN channel.
  *                         The hardware-assigned transfer resource index for the
  *                         transfer, which was returned in response to the
@@ -1246,8 +1253,6 @@ struct ipa_usb_teth_prot_params {
  *                         Should be 0 =< ipa_to_usb_xferrscidx <= 127.
  * @ipa_to_usb_xferrscidx_valid: true if xferRscIdx should be updated for IN
  *                         channel
- * @usb_to_ipa_clnt_hdl:   client handle received from
- *                         ipa_usb_request_xdci_channel() for OUT channel
  * @usb_to_ipa_xferrscidx: Transfer Resource Index (XferRscIdx) for OUT channel
  *                         Should be 0 =< usb_to_ipa_xferrscidx <= 127.
  * @usb_to_ipa_xferrscidx_valid: true if xferRscIdx should be updated for OUT
@@ -1258,10 +1263,8 @@ struct ipa_usb_teth_prot_params {
  */
 struct ipa_usb_xdci_connect_params {
 	enum ipa_usb_max_usb_packet_size max_pkt_size;
-	u32 ipa_to_usb_clnt_hdl;
 	u8 ipa_to_usb_xferrscidx;
 	bool ipa_to_usb_xferrscidx_valid;
-	u32 usb_to_ipa_clnt_hdl;
 	u8 usb_to_ipa_xferrscidx;
 	bool usb_to_ipa_xferrscidx_valid;
 	enum ipa_usb_teth_prot teth_prot;
@@ -1282,6 +1285,11 @@ int ipa_disconnect(u32 clnt_hdl);
  * Resume / Suspend
  */
 int ipa_reset_endpoint(u32 clnt_hdl);
+
+/*
+ * Remove ep delay
+ */
+int ipa_clear_endpoint_delay(u32 clnt_hdl);
 
 /*
  * Configuration
@@ -1542,9 +1550,9 @@ int ipa_dma_enable(void);
 
 int ipa_dma_disable(void);
 
-int ipa_dma_sync_memcpy(phys_addr_t dest, phys_addr_t src, int len);
+int ipa_dma_sync_memcpy(u64 dest, u64 src, int len);
 
-int ipa_dma_async_memcpy(phys_addr_t dest, phys_addr_t src, int len,
+int ipa_dma_async_memcpy(u64 dest, u64 src, int len,
 			void (*user_cb)(void *user1), void *user_param);
 
 int ipa_dma_uc_memcpy(phys_addr_t dest, phys_addr_t src, int len);
@@ -1592,44 +1600,41 @@ int ipa_usb_init_teth_prot(enum ipa_usb_teth_prot teth_prot,
 			   void *user_data);
 
 /**
- * ipa_usb_request_xdci_channel - Peripheral should call this function to allocate
- * an xDCI channel, and initialize IPA EP.
- *
- * @params:     parameters for allocating xDCI channel. containing required
- *              info on event and transfer rings, and IPA EP configuration
- * @out_params: [out] opaque client handle assigned by IPA to client & DB
- *              registers physical address
- *
- * Note: Should not be called from atomic context
- *
- * @Return 0 on success, negative on failure
- *
- */
-int ipa_usb_request_xdci_channel(struct ipa_usb_xdci_chan_params *params,
-				 struct ipa_req_chan_out_params *out_params);
-
-/**
  * ipa_usb_xdci_connect - Peripheral should call this function to start IN &
  * OUT xDCI channels, and connect RNDIS/ECM/MBIM/RMNET.
  * For DIAG, only starts IN channel.
  *
- * @params: handles and scratch params of the required channels, tethering
- * protocol and the tethering protocol parameters.
+ * @ul_chan_params: parameters for allocating UL xDCI channel. containing
+ *              required info on event and transfer rings, and IPA EP
+ *              configuration
+ * @ul_out_params: [out] opaque client handle assigned by IPA to client & DB
+ *              registers physical address for UL channel
+ * @dl_chan_params: parameters for allocating DL xDCI channel. containing
+ *              required info on event and transfer rings, and IPA EP
+ *              configuration
+ * @dl_out_params: [out] opaque client handle assigned by IPA to client & DB
+ *              registers physical address for DL channel
+ * @connect_params: handles and scratch params of the required channels,
+ *              tethering protocol and the tethering protocol parameters.
  *
  * Note: Should not be called from atomic context
  *
  * @Return 0 on success, negative on failure
  */
-int ipa_usb_xdci_connect(struct ipa_usb_xdci_connect_params *params);
+int ipa_usb_xdci_connect(struct ipa_usb_xdci_chan_params *ul_chan_params,
+			 struct ipa_usb_xdci_chan_params *dl_chan_params,
+			 struct ipa_req_chan_out_params *ul_out_params,
+			 struct ipa_req_chan_out_params *dl_out_params,
+			 struct ipa_usb_xdci_connect_params *connect_params);
 
 /**
  * ipa_usb_xdci_disconnect - Peripheral should call this function to stop
  * IN & OUT xDCI channels
  * For DIAG, only stops IN channel.
  *
- * @ul_clnt_hdl:    client handle received from ipa_usb_request_xdci_channel()
+ * @ul_clnt_hdl:    client handle received from ipa_usb_xdci_connect()
  *                  for OUT channel
- * @dl_clnt_hdl:    client handle received from ipa_usb_request_xdci_channel()
+ * @dl_clnt_hdl:    client handle received from ipa_usb_xdci_connect()
  *                  for IN channel
  * @teth_prot:      tethering protocol
  *
@@ -1639,20 +1644,6 @@ int ipa_usb_xdci_connect(struct ipa_usb_xdci_connect_params *params);
  */
 int ipa_usb_xdci_disconnect(u32 ul_clnt_hdl, u32 dl_clnt_hdl,
 			    enum ipa_usb_teth_prot teth_prot);
-
-/**
- * ipa_usb_release_xdci_channel - Peripheral should call this function to
- * deallocate an xDCI channel
- *
- * @clnt_hdl:  client handle received from ipa_usb_request_xdci_channel()
- * @teth_prot: tethering protocol
- *
- * Note: Should not be called from atomic context
- *
- * @Return 0 on success, negative on failure
- */
-int ipa_usb_release_xdci_channel(u32 clnt_hdl,
-				 enum ipa_usb_teth_prot teth_prot);
 
 /**
  * ipa_usb_deinit_teth_prot - Peripheral should call this function to deinit
@@ -1669,9 +1660,9 @@ int ipa_usb_deinit_teth_prot(enum ipa_usb_teth_prot teth_prot);
  * IN & OUT xDCI channels
  *
  * @ul_clnt_hdl: client handle previously obtained from
- *               ipa_usb_request_xdci_channel() for OUT channel
+ *               ipa_usb_xdci_connect() for OUT channel
  * @dl_clnt_hdl: client handle previously obtained from
- *               ipa_usb_request_xdci_channel() for IN channel
+ *               ipa_usb_xdci_connect() for IN channel
  * @teth_prot:   tethering protocol
  *
  * Note: Should not be called from atomic context
@@ -1685,9 +1676,9 @@ int ipa_usb_xdci_suspend(u32 ul_clnt_hdl, u32 dl_clnt_hdl,
  * ipa_usb_xdci_resume - Peripheral should call this function to resume
  * IN & OUT xDCI channels
  *
- * @ul_clnt_hdl:   client handle received from ipa_usb_request_xdci_channel()
+ * @ul_clnt_hdl:   client handle received from ipa_usb_xdci_connect()
  *                 for OUT channel
- * @dl_clnt_hdl:   client handle received from ipa_usb_request_xdci_channel()
+ * @dl_clnt_hdl:   client handle received from ipa_usb_xdci_connect()
  *                 for IN channel
  *
  * Note: Should not be called from atomic context
@@ -1710,6 +1701,8 @@ int ipa_add_interrupt_handler(enum ipa_irq_type interrupt,
 		void *private_data);
 
 int ipa_remove_interrupt_handler(enum ipa_irq_type interrupt);
+
+int ipa_restore_suspend_handler(void);
 
 /*
  * Miscellaneous
@@ -1764,6 +1757,14 @@ static inline int ipa_disconnect(u32 clnt_hdl)
  * Resume / Suspend
  */
 static inline int ipa_reset_endpoint(u32 clnt_hdl)
+{
+	return -EPERM;
+}
+
+/*
+ * Remove ep delay
+ */
+static inline int ipa_clear_endpoint_delay(u32 clnt_hdl)
 {
 	return -EPERM;
 }
@@ -2262,7 +2263,7 @@ static inline int teth_bridge_connect(struct teth_bridge_connect_params
 static inline void ipa_set_client(int index, enum ipacm_client_enum client,
 	bool uplink)
 {
-	return -EPERM;
+	return;
 }
 
 static inline enum ipacm_client_enum ipa_get_client(int pipe_idx)
@@ -2398,27 +2399,17 @@ static inline int ipa_usb_init_teth_prot(enum ipa_usb_teth_prot teth_prot,
 	return -EPERM;
 }
 
-static inline int ipa_usb_request_xdci_channel(
-	struct ipa_usb_xdci_chan_params *params,
-	struct ipa_req_chan_out_params *out_params)
-{
-	return -EPERM;
-}
-
-static inline int ipa_usb_xdci_connect(
-	struct ipa_usb_xdci_connect_params *params)
+static int ipa_usb_xdci_connect(struct ipa_usb_xdci_chan_params *ul_chan_params,
+			 struct ipa_usb_xdci_chan_params *dl_chan_params,
+			 struct ipa_req_chan_out_params *ul_out_params,
+			 struct ipa_req_chan_out_params *dl_out_params,
+			 struct ipa_usb_xdci_connect_params *connect_params)
 {
 	return -EPERM;
 }
 
 static inline int ipa_usb_xdci_disconnect(u32 ul_clnt_hdl, u32 dl_clnt_hdl,
 			    enum ipa_usb_teth_prot teth_prot)
-{
-	return -EPERM;
-}
-
-static inline int ipa_usb_release_xdci_channel(u32 clnt_hdl,
-				 enum ipa_usb_teth_prot teth_prot)
 {
 	return -EPERM;
 }
@@ -2459,6 +2450,11 @@ static inline int ipa_add_interrupt_handler(enum ipa_irq_type interrupt,
 }
 
 static inline int ipa_remove_interrupt_handler(enum ipa_irq_type interrupt)
+{
+	return -EPERM;
+}
+
+static inline int ipa_restore_suspend_handler(void)
 {
 	return -EPERM;
 }

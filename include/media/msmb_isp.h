@@ -27,6 +27,7 @@
 #define ISP1_BIT              (0x10000 << 2)
 #define ISP_META_CHANNEL_BIT  (0x10000 << 3)
 #define ISP_SCRATCH_BUF_BIT   (0x10000 << 4)
+#define ISP_OFFLINE_STATS_BIT (0x10000 << 5)
 #define ISP_STATS_STREAM_BIT  0x80000000
 
 struct msm_vfe_cfg_cmd_list;
@@ -87,6 +88,14 @@ enum msm_vfe_frame_skip_pattern {
 	SKIP_RANGE,
 	MAX_SKIP,
 };
+
+/*
+ * Define an unused period. When this period is set it means that the stream is
+ * stopped(i.e the pattern is 0). We don't track the current pattern, just the
+ * period defines what the pattern is, if period is this then pattern is 0 else
+ * pattern is 1
+ */
+#define MSM_VFE_STREAM_STOP_PERIOD 15
 
 enum msm_isp_stats_type {
 	MSM_ISP_STATS_AEC,   /* legacy based AEC */
@@ -296,6 +305,7 @@ struct msm_vfe_axi_stream_cfg_cmd {
 	uint8_t num_streams;
 	uint32_t stream_handle[VFE_AXI_SRC_MAX];
 	enum msm_vfe_axi_stream_cmd cmd;
+	uint8_t sync_frame_id_src;
 };
 
 enum msm_vfe_axi_stream_update_type {
@@ -517,6 +527,7 @@ struct msm_isp_qbuf_info {
 };
 
 struct msm_isp_clk_rates {
+	uint32_t svs_rate;
 	uint32_t nominal_rate;
 	uint32_t high_rate;
 };

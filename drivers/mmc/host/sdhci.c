@@ -2608,6 +2608,18 @@ static int sdhci_late_init(struct mmc_host *mmc)
 
 	return 0;
 }
+
+static void sdhci_force_err_irq(struct mmc_host *mmc, u64 errmask)
+{
+	struct sdhci_host *host = mmc_priv(mmc);
+	u16 mask = errmask & 0xFFFF;
+
+	pr_err("%s: Force raise error mask:0x%04x\n", __func__, mask);
+	sdhci_runtime_pm_get(host);
+	sdhci_writew(host, mask, SDHCI_SET_INT_ERROR);
+	sdhci_runtime_pm_put(host);
+}
+
 static const struct mmc_host_ops sdhci_ops = {
 	.init           = sdhci_late_init,
 	.pre_req	= sdhci_pre_req,
@@ -2628,6 +2640,7 @@ static const struct mmc_host_ops sdhci_ops = {
 	.notify_load	= sdhci_notify_load,
 	.notify_halt	= sdhci_notify_halt,
 	.detect		= sdhci_detect,
+	.force_err_irq	= sdhci_force_err_irq,
 };
 
 /*****************************************************************************\
@@ -3860,10 +3873,6 @@ int sdhci_add_host(struct sdhci_host *host)
 
 	if (override_timeout_clk)
 		host->timeout_clk = override_timeout_clk;
-
-
-	if (!(host->quirks2 & SDHCI_QUIRK2_USE_MAX_DISCARD_SIZE))
-		mmc->max_busy_timeout = (1 << 27) / host->timeout_clk;
 
 	mmc->caps |= MMC_CAP_SDIO_IRQ | MMC_CAP_ERASE | MMC_CAP_CMD23;
 	mmc->caps2 |= MMC_CAP2_SDIO_IRQ_NOTHREAD;

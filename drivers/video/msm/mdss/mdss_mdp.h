@@ -677,6 +677,24 @@ enum mdss_screen_state {
 	MDSS_SCREEN_FORCE_BLANK,
 };
 
+/**
+ * enum mdss_mdp_clt_intf_event_flags - flags specifying how event to should
+ *                                      be sent to panel drivers.
+ *
+ * @CTL_INTF_EVENT_FLAG_DEFAULT: this flag denotes default behaviour where
+ *                              event will be send to all panels attached this
+ *                              display, recursively in split-DSI.
+ * @CTL_INTF_EVENT_FLAG_SKIP_BROADCAST: this flag sends event only to panel
+ *                                     associated with this ctl.
+ * @CTL_INTF_EVENT_FLAG_SLAVE_INTF: this flag sends event only to slave panel
+ *                                  associated with this ctl, i.e pingpong-split
+ */
+enum mdss_mdp_clt_intf_event_flags {
+	CTL_INTF_EVENT_FLAG_DEFAULT = 0,
+	CTL_INTF_EVENT_FLAG_SKIP_BROADCAST = BIT(1),
+	CTL_INTF_EVENT_FLAG_SLAVE_INTF = BIT(2),
+};
+
 #define mfd_to_mdp5_data(mfd) (mfd->mdp.private1)
 #define mfd_to_mdata(mfd) (((struct mdss_overlay_private *)\
 				(mfd->mdp.private1))->mdata)
@@ -981,6 +999,7 @@ void mdss_mdp_irq_clear(struct mdss_data_type *mdata,
 		u32 intr_type, u32 intf_num);
 int mdss_mdp_irq_enable(u32 intr_type, u32 intf_num);
 void mdss_mdp_irq_disable(u32 intr_type, u32 intf_num);
+void mdss_mdp_intr_check_and_clear(u32 intr_type, u32 intf_num);
 int mdss_mdp_hist_irq_enable(u32 irq);
 void mdss_mdp_hist_irq_disable(u32 irq);
 void mdss_mdp_irq_disable_nosync(u32 intr_type, u32 intf_num);
@@ -1063,7 +1082,7 @@ int mdss_mdp_ctl_destroy(struct mdss_mdp_ctl *ctl);
 int mdss_mdp_ctl_start(struct mdss_mdp_ctl *ctl, bool handoff);
 int mdss_mdp_ctl_stop(struct mdss_mdp_ctl *ctl, int panel_power_mode);
 int mdss_mdp_ctl_intf_event(struct mdss_mdp_ctl *ctl, int event, void *arg,
-	bool skip_broadcast);
+	u32 flags);
 int mdss_mdp_get_prefetch_lines(struct mdss_mdp_ctl *ctl);
 int mdss_mdp_perf_bw_check(struct mdss_mdp_ctl *ctl,
 		struct mdss_mdp_pipe **left_plist, int left_cnt,
@@ -1227,11 +1246,12 @@ void mdss_mdp_get_v_h_subsample_rate(u8 chroma_samp,
 	u8 *v_sample, u8 *h_sample);
 struct mult_factor *mdss_mdp_get_comp_factor(u32 format,
 	bool rt_factor);
-int mdss_mdp_data_get(struct mdss_mdp_data *data, struct msmfb_data *planes,
-		int num_planes, u32 flags, struct device *dev, bool rotator,
-		int dir);
 int mdss_mdp_data_map(struct mdss_mdp_data *data, bool rotator, int dir);
 void mdss_mdp_data_free(struct mdss_mdp_data *data, bool rotator, int dir);
+int mdss_mdp_data_get_and_validate_size(struct mdss_mdp_data *data,
+	struct msmfb_data *planes, int num_planes, u32 flags,
+	struct device *dev, bool rotator, int dir,
+	struct mdp_layer_buffer *buffer);
 u32 mdss_get_panel_framerate(struct msm_fb_data_type *mfd);
 int mdss_mdp_calc_phase_step(u32 src, u32 dst, u32 *out_phase);
 

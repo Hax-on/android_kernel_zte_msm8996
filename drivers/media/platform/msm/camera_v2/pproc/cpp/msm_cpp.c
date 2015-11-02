@@ -183,7 +183,7 @@ static struct msm_bus_scale_pdata msm_cpp_bus_scale_data = {
 	qcmd;			 \
 })
 
-#define MSM_CPP_MAX_TIMEOUT_TRIAL 0
+#define MSM_CPP_MAX_TIMEOUT_TRIAL 1
 
 struct msm_cpp_timer_data_t {
 	struct cpp_device *cpp_dev;
@@ -1716,7 +1716,6 @@ static void msm_cpp_flush_queue_and_release_buffer(struct cpp_device *cpp_dev,
 	atomic_set(&cpp_timer.used, 0);
 	for (i = 0; i < MAX_CPP_PROCESSING_FRAME; i++)
 		cpp_timer.data.processed_frame[i] = NULL;
-	cpp_dev->timeout_trial_cnt = 0;
 }
 
 static void msm_cpp_set_micro_irq_mask(struct cpp_device *cpp_dev,
@@ -1756,11 +1755,19 @@ static void msm_cpp_do_timeout_work(struct work_struct *work)
 
 
 	disable_irq(cpp_timer.data.cpp_dev->irq->start);
+	/* make sure all the pending queued entries are scheduled */
+	tasklet_kill(&cpp_dev->cpp_tasklet);
 
 	queue = &cpp_timer.data.cpp_dev->processing_q;
 	queue_len = queue->len;
+	if (!queue_len) {
+		pr_err("%s:%d: irq serviced after timeout.Ignore timeout\n",
+			__func__, __LINE__);
+		msm_cpp_set_micro_irq_mask(cpp_dev, 1, 0x8);
+		goto end;
+	}
 
-	pr_debug("Reloading firmware\n");
+	pr_debug("Reloading firmware %d\n", queue_len);
 	rc = cpp_load_fw(cpp_timer.data.cpp_dev,
 		cpp_timer.data.cpp_dev->fw_name_bin);
 	if (rc) {
@@ -1769,6 +1776,7 @@ static void msm_cpp_do_timeout_work(struct work_struct *work)
 		/* clean buf queue here */
 		msm_cpp_flush_queue_and_release_buffer(cpp_dev, queue_len);
 		msm_cpp_set_micro_irq_mask(cpp_dev, 1, 0x0);
+		cpp_dev->timeout_trial_cnt = 0;
 		goto end;
 	} else {
 		pr_debug("Firmware loading done\n");
@@ -1778,20 +1786,20 @@ static void msm_cpp_do_timeout_work(struct work_struct *work)
 		pr_warn("Delayed trigger, IRQ serviced\n");
 		/* Do not flush queue here as it is not a fatal error */
 		msm_cpp_set_micro_irq_mask(cpp_dev, 1, 0x8);
+		cpp_dev->timeout_trial_cnt = 0;
 		goto end;
 	}
 
 	if (cpp_dev->timeout_trial_cnt >=
 		cpp_dev->max_timeout_trial_cnt) {
 		pr_warn("Max trial reached\n");
-		cpp_dev->state = CPP_STATE_OFF;
 		msm_cpp_flush_queue_and_release_buffer(cpp_dev, queue_len);
-		msm_cpp_set_micro_irq_mask(cpp_dev, 1, 0x0);
+		msm_cpp_set_micro_irq_mask(cpp_dev, 1, 0x8);
 		goto end;
 	}
 
 	atomic_set(&cpp_timer.used, 1);
-	pr_debug("Starting timer to fire in %d ms. (jiffies=%lu)\n",
+	pr_warn("Starting timer to fire in %d ms. (jiffies=%lu)\n",
 		CPP_CMD_TIMEOUT_MS, jiffies);
 	mod_timer(&cpp_timer.cpp_timer,
 		jiffies + msecs_to_jiffies(CPP_CMD_TIMEOUT_MS));
@@ -1817,6 +1825,7 @@ static void msm_cpp_do_timeout_work(struct work_struct *work)
 					cpp_dev->state = CPP_STATE_OFF;
 					msm_cpp_set_micro_irq_mask(cpp_dev,
 						0, 0x0);
+					cpp_dev->timeout_trial_cnt = 0;
 					goto end;
 				}
 			}
@@ -1831,6 +1840,7 @@ static void msm_cpp_do_timeout_work(struct work_struct *work)
 			msm_cpp_flush_queue_and_release_buffer(cpp_dev,
 				queue_len);
 			msm_cpp_set_micro_irq_mask(cpp_dev, 0, 0x0);
+			cpp_dev->timeout_trial_cnt = 0;
 			goto end;
 		}
 		/* send stripes */
@@ -1860,6 +1870,7 @@ static void msm_cpp_do_timeout_work(struct work_struct *work)
 			msm_cpp_flush_queue_and_release_buffer(cpp_dev,
 				queue_len);
 			msm_cpp_set_micro_irq_mask(cpp_dev, 0, 0x0);
+			cpp_dev->timeout_trial_cnt = 0;
 			goto end;
 		}
 		/* send trailer */
@@ -3194,7 +3205,7 @@ STREAM_BUFF_END:
 			&buff_mgr_info);
 		if (rc < 0) {
 			rc = -EAGAIN;
-			pr_err("error getting buffer rc:%d\n", rc);
+			pr_err_ratelimited("error getting buffer rc:%d\n", rc);
 			break;
 		}
 		buff_mgr_info.frame_id = frame_info.frame_id;
@@ -3568,13 +3579,16 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 			vdev, cpp_dev);
 		return -EINVAL;
 	}
+	mutex_lock(&cpp_dev->mutex);
 	/*
 	 * copy the user space 32 bit pointer to kernel space 32 bit compat
 	 * pointer
 	 */
 	if (copy_from_user(&up32_ioctl, (void __user *)up,
-		sizeof(up32_ioctl)))
+		sizeof(up32_ioctl))) {
+		mutex_unlock(&cpp_dev->mutex);
 		return -EFAULT;
+	}
 
 	/* copy the data from 32 bit compat to kernel space 64 bit pointer */
 	kp_ioctl.id = up32_ioctl.id;
@@ -3584,6 +3598,7 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 	kp_ioctl.ioctl_ptr = compat_ptr(up32_ioctl.ioctl_ptr);
 	if (!kp_ioctl.ioctl_ptr) {
 		pr_err("%s: Invalid ioctl pointer\n", __func__);
+		mutex_unlock(&cpp_dev->mutex);
 		return -EINVAL;
 	}
 
@@ -3601,8 +3616,10 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 
 		if (copy_from_user(&k32_frame_info,
 			(void __user *)kp_ioctl.ioctl_ptr,
-			sizeof(k32_frame_info)))
+			sizeof(k32_frame_info))) {
+			mutex_unlock(&cpp_dev->mutex);
 			return -EFAULT;
+		}
 		/* Get the cpp frame pointer */
 		cpp_frame = get_64bit_cpp_frame_from_compat(&kp_ioctl);
 
@@ -3620,6 +3637,7 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 			}
 		} else {
 			pr_err("%s: Error getting frame\n", __func__);
+			mutex_unlock(&cpp_dev->mutex);
 			rc = -EINVAL;
 		}
 
@@ -3634,8 +3652,10 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 
 		if (copy_to_user((void __user *)kp_ioctl.ioctl_ptr,
 			&k32_frame_info,
-			sizeof(k32_frame_info)))
+			sizeof(k32_frame_info))) {
+			mutex_unlock(&cpp_dev->mutex);
 			return -EFAULT;
+		}
 
 		cmd = VIDIOC_MSM_CPP_CFG;
 		break;
@@ -3657,8 +3677,10 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 		u32_cpp_hw_info.freq_tbl_count =
 			cpp_dev->hw_info.freq_tbl_count;
 		if (copy_to_user((void __user *)kp_ioctl.ioctl_ptr,
-			&u32_cpp_hw_info, sizeof(struct cpp_hw_info_32_t)))
+			&u32_cpp_hw_info, sizeof(struct cpp_hw_info_32_t))) {
+			mutex_unlock(&cpp_dev->mutex);
 			return -EFAULT;
+		}
 
 		cmd = VIDIOC_MSM_CPP_GET_HW_INFO;
 		break;
@@ -3683,6 +3705,7 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 		if (copy_to_user(
 				(void __user *)kp_ioctl.ioctl_ptr, &inst_info,
 				sizeof(struct msm_cpp_frame_info32_t))) {
+			mutex_unlock(&cpp_dev->mutex);
 			return -EFAULT;
 		}
 		cmd = VIDIOC_MSM_CPP_GET_INST_INFO;
@@ -3709,11 +3732,13 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 		kp_ioctl.ioctl_ptr = (void *)&k_cpp_buff_info;
 		if (is_compat_task()) {
 			if (kp_ioctl.len != sizeof(
-				struct msm_cpp_stream_buff_info32_t))
+				struct msm_cpp_stream_buff_info32_t)) {
+				mutex_unlock(&cpp_dev->mutex);
 				return -EINVAL;
-			else
+			} else {
 				kp_ioctl.len =
 				  sizeof(struct msm_cpp_stream_buff_info_t);
+			}
 		}
 		if (cmd == VIDIOC_MSM_CPP_ENQUEUE_STREAM_BUFF_INFO32)
 			cmd = VIDIOC_MSM_CPP_ENQUEUE_STREAM_BUFF_INFO;
@@ -3740,7 +3765,6 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 		struct msm_cpp_frame_info32_t k32_process_frame;
 
 		CPP_DBG("VIDIOC_MSM_CPP_GET_EVENTPAYLOAD\n");
-		mutex_lock(&cpp_dev->mutex);
 		event_qcmd = msm_dequeue(queue, list_eventdata, POP_FRONT);
 		if (!event_qcmd) {
 			pr_err("no queue cmd available");
@@ -3767,7 +3791,6 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 		kfree(process_frame);
 		kfree(event_qcmd);
 		cmd = VIDIOC_MSM_CPP_GET_EVENTPAYLOAD;
-		mutex_unlock(&cpp_dev->mutex);
 		break;
 	}
 	case VIDIOC_MSM_CPP_SET_CLOCK32:
@@ -3781,11 +3804,13 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 		kp_ioctl.ioctl_ptr = (void *)&clock_settings;
 		if (is_compat_task()) {
 			if (kp_ioctl.len != sizeof(
-				struct msm_cpp_clock_settings32_t))
+				struct msm_cpp_clock_settings32_t)) {
+				mutex_unlock(&cpp_dev->mutex);
 				return -EINVAL;
-			else
+			} else {
 				kp_ioctl.len =
 					sizeof(struct msm_cpp_clock_settings_t);
+			}
 		}
 		cmd = VIDIOC_MSM_CPP_SET_CLOCK;
 		break;
@@ -3824,15 +3849,19 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 	}
 	case VIDIOC_MSM_CPP_POP_STREAM_BUFFER32:
 	{
-		if (kp_ioctl.len != sizeof(struct msm_cpp_frame_info32_t))
+		if (kp_ioctl.len != sizeof(struct msm_cpp_frame_info32_t)) {
+			mutex_unlock(&cpp_dev->mutex);
 			return -EINVAL;
-		else
+		} else {
 			kp_ioctl.len = sizeof(struct msm_cpp_frame_info_t);
+		}
 
 		if (copy_from_user(&k32_frame_info,
 			(void __user *)kp_ioctl.ioctl_ptr,
-			sizeof(k32_frame_info)))
+			sizeof(k32_frame_info))) {
+			mutex_unlock(&cpp_dev->mutex);
 			return -EFAULT;
+		}
 
 		memset(&k64_frame_info, 0, sizeof(k64_frame_info));
 		k64_frame_info.identity = k32_frame_info.identity;
@@ -3859,6 +3888,7 @@ static long msm_cpp_subdev_fops_compat_ioctl(struct file *file,
 		break;
 	}
 
+	mutex_unlock(&cpp_dev->mutex);
 	switch (cmd) {
 	case VIDIOC_MSM_CPP_LOAD_FIRMWARE:
 	case VIDIOC_MSM_CPP_FLUSH_QUEUE:

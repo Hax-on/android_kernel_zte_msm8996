@@ -46,6 +46,8 @@
 #define IPA_NUM_DESC_PER_SW_TX (2)
 #define IPA_GENERIC_RX_POOL_SZ 192
 
+#define IPA_MAX_STATUS_STAT_NUM 30
+
 #define IPADBG(fmt, args...) \
 	pr_debug(DRV_NAME " %s:%d " fmt, __func__, __LINE__, ## args)
 #define IPAERR(fmt, args...) \
@@ -478,6 +480,11 @@ struct ipa_wlan_comm_memb {
 	atomic_t active_clnt_cnt;
 };
 
+struct ipa_status_stats {
+	struct ipa_hw_pkt_status status[IPA_MAX_STATUS_STAT_NUM];
+	int curr;
+};
+
 /**
  * struct ipa_ep_context - IPA end point context
  * @valid: flag indicating id EP context is valid
@@ -504,6 +511,9 @@ struct ipa_wlan_comm_memb {
  *                          descriptors replenish function to be called to
  *                          avoid the RX pipe to run out of descriptors
  *                          and cause HOLB.
+ * @disconnect_in_progress: Indicates client disconnect in progress.
+ * @qmi_request_sent: Indicates whether QMI request to enable clear data path
+ *					request is sent or not.
  */
 struct ipa_ep_context {
 	int valid;
@@ -532,6 +542,9 @@ struct ipa_ep_context {
 	struct ipa_wlan_stats wstats;
 	u32 wdi_state;
 	u32 rx_replenish_threshold;
+	bool disconnect_in_progress;
+	u32 qmi_request_sent;
+
 	/* sys MUST be the last element of this struct */
 	struct ipa_sys_context *sys;
 };
@@ -590,6 +603,7 @@ struct ipa_sys_context {
 	spinlock_t spinlock;
 	struct workqueue_struct *wq;
 	struct workqueue_struct *repl_wq;
+	struct ipa_status_stats *status_stat;
 	/* ordering is important - other immutable fields go below */
 };
 
@@ -1057,7 +1071,7 @@ struct ipa_uc_wdi_ctx {
  *  the inactivity timer
  */
 struct ipa_sps_pm {
-	bool dec_clients;
+	atomic_t dec_clients;
 	atomic_t eot_activity;
 };
 
@@ -1126,7 +1140,7 @@ struct ipacm_client_info {
  * @tag_process_before_gating: indicates whether to start tag process before
  *  gating IPA clocks
  * @sps_pm: sps power management related information
- * @lan_rx_clnt_notify_lock: protects LAN_CONS packet receive notification CB
+ * @disconnect_lock: protects LAN_CONS packet receive notification CB
  * @pipe_mem_pool: pipe memory pool
  * @dma_pool: special purpose DMA pool
  * @ipa_active_clients: structure for reference counting connected IPA clients
@@ -1206,7 +1220,7 @@ struct ipa_context {
 	u32 clnt_hdl_cmd;
 	u32 clnt_hdl_data_in;
 	u32 clnt_hdl_data_out;
-	spinlock_t lan_rx_clnt_notify_lock;
+	spinlock_t disconnect_lock;
 	u8 a5_pipe_index;
 	struct list_head intf_list;
 	struct list_head msg_list;
@@ -1247,11 +1261,11 @@ struct ipa_context {
 	u32 peer_bam_map_cnt;
 	u32 wdi_map_cnt;
 	bool use_dma_zone;
-
 	/* RMNET_IOCTL_INGRESS_FORMAT_AGG_DATA */
 	bool ipa_client_apps_wan_cons_agg_gro;
 	/* M-release support to know client pipes */
 	struct ipacm_client_info ipacm_client[IPA_MAX_NUM_PIPES];
+	bool tethered_flow_control;
 };
 
 /**
@@ -1302,6 +1316,7 @@ struct ipa_plat_drv_res {
 	u32 wan_rx_ring_size;
 	bool skip_uc_pipe_reset;
 	bool use_dma_zone;
+	bool tethered_flow_control;
 };
 
 struct ipa_mem_partition {
@@ -1426,6 +1441,11 @@ int ipa2_disconnect(u32 clnt_hdl);
  * Resume / Suspend
  */
 int ipa2_reset_endpoint(u32 clnt_hdl);
+
+/*
+ * Remove ep delay
+ */
+int ipa2_clear_endpoint_delay(u32 clnt_hdl);
 
 /*
  * Configuration
@@ -1689,9 +1709,9 @@ int ipa2_dma_enable(void);
 
 int ipa2_dma_disable(void);
 
-int ipa2_dma_sync_memcpy(phys_addr_t dest, phys_addr_t src, int len);
+int ipa2_dma_sync_memcpy(u64 dest, u64 src, int len);
 
-int ipa2_dma_async_memcpy(phys_addr_t dest, phys_addr_t src, int len,
+int ipa2_dma_async_memcpy(u64 dest, u64 src, int len,
 			void (*user_cb)(void *user1), void *user_param);
 
 int ipa2_dma_uc_memcpy(phys_addr_t dest, phys_addr_t src, int len);
@@ -1923,6 +1943,7 @@ int ipa_uc_interface_init(void);
 int ipa_uc_reset_pipe(enum ipa_client_type ipa_client);
 int ipa_uc_monitor_holb(enum ipa_client_type ipa_client, bool enable);
 int ipa_uc_state_check(void);
+int ipa_uc_loaded_check(void);
 int ipa_uc_send_cmd(u32 cmd, u32 opcode, u32 expected_status,
 		    bool polling_mode, unsigned long timeout_jiffies);
 void ipa_register_panic_hdlr(void);
@@ -1965,4 +1986,5 @@ void ipa_suspend_apps_pipes(bool suspend);
 void ipa_update_repl_threshold(enum ipa_client_type ipa_client);
 void ipa_flow_control(enum ipa_client_type ipa_client, bool enable,
 			uint32_t qmap_id);
+int ipa2_restore_suspend_handler(void);
 #endif /* _IPA_I_H_ */
