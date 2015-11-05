@@ -1802,12 +1802,29 @@ static struct device_attribute dev_attr_serial_xport_names =
 				serial_xport_names_show,
 				serial_xport_names_store);
 
+/*init serial transports from init.qcom.usb.rc, at_port_mod 1/5*/
+static char serial_transports_init[32];
+static ssize_t transports_init_store(
+		struct device *device, struct device_attribute *attr,
+		const char *buff, size_t size)
+{
+	strlcpy(serial_transports_init, buff, sizeof(serial_transports_init));
+
+	return size;
+}
+
+static struct device_attribute dev_attr_transports_init =
+				__ATTR(transports_init, S_IRUGO | S_IWUSR,
+				NULL,
+				transports_init_store);
+/*end*/
 static struct device_attribute *serial_function_attributes[] = {
 					&dev_attr_transports,
 					&dev_attr_serial_xport_names,
 					&dev_attr_is_connected_flag,
 					&dev_attr_dun_w_softap_enable,
 					&dev_attr_dun_w_softap_active,
+					&dev_attr_transports_init, /* at_port_mod 2/5 */
 					NULL };
 
 static int serial_function_init(struct android_usb_function *f,
@@ -1846,7 +1863,15 @@ static int serial_function_bind_config(struct android_usb_function *f,
 	int err = -1, i, ports = 0;
 	static int serial_initialized;
 	struct serial_function_config *config = f->config;
-	strlcpy(buf, serial_transports, sizeof(buf));
+
+	/*init serial transports, as transports type
+	can not be changed twice, at_port_mod 3/5*/
+	if (!serial_initialized)
+        strlcpy(buf, serial_transports_init, sizeof(buf));
+	else
+        strlcpy(buf, serial_transports, sizeof(buf));
+    /* end */
+
 	b = strim(buf);
 
 	strlcpy(xport_name_buf, serial_xport_names, sizeof(xport_name_buf));
@@ -1902,6 +1927,19 @@ static int serial_function_bind_config(struct android_usb_function *f,
 			goto err_gser_usb_get_function;
 		}
 	}
+
+    /* get real ports number, as it has replaced serial_transports with
+    serial_transports_init if !serial_initialized, at_port_mod 4/5*/
+    strlcpy(buf, serial_transports, sizeof(buf));
+    ports = 0;
+    b = strim(buf);
+    while (b) {
+        name = strsep(&b, ",");
+        if (name) {
+            ports++;
+        }
+    }
+    /*end*/
 
 	serial_initialized = 1;
 
