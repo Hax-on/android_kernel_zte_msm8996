@@ -5910,11 +5910,6 @@ static irqreturn_t usbin_uv_handler(int irq, void *_chip)
 		"chip->usb_present = %d rt_sts = 0x%02x aicl = %d\n",
 		chip->usb_present, reg, aicl_level);
 	printk("ZTE_CHG %s,chip->usb_present = %d usb_present = %d\n",__func__,chip->usb_present, usb_present);
-	if (chip->usb_present && !usb_present) {
-		/* USB removed */
-		chip->usb_present = usb_present;
-		handle_usb_removal(chip);
-	}
 
 	rc = smbchg_read(chip, &reg, chip->usb_chgpth_base + RT_STS, 1);
 	if (rc) {

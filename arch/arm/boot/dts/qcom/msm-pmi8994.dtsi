@@ -204,7 +204,7 @@
 			qcom,fastchg-current-ma = <3000>;
 			qcom,float-voltage-mv = <4350>;
 			qcom,fastchg-current-comp = <900>;
-			qcom,float-voltage-comp = <4100>;
+			/*qcom,float-voltage-comp = <10>;*/
 			qcom,resume-delta-mv = <100>;
 			qcom,chg-inhibit-fg;
 			qcom,dc-psy-type = "Mains";
