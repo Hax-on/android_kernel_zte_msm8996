@@ -43,7 +43,7 @@
 
 #define CODEC_DT_MAX_PROP_SIZE   40
 //for slim_spi 2014-11-17 
-// ZTE_chenjun:#define CONTROL_IF_SPI
+#define CONTROL_IF_SPI
 #ifdef CONTROL_IF_SPI
 struct ak49xx *ak49xx_slim_spi;
 #endif
@@ -57,6 +57,11 @@ struct pinctrl_info {
 static struct pinctrl_info pinctrl_info;
 int ak49xx_spi_read(struct ak49xx *ak49xx, unsigned short reg,int bytes, void *dest, bool interface_reg);
 int ak49xx_spi_write(struct ak49xx *ak49xx, unsigned short reg, int bytes, void *src, bool interface_reg);
+static int ak49xx_slim_write_device(struct ak49xx *ak49xx,
+		unsigned short reg, int bytes, void *src, bool interface);
+static int ak49xx_slim_read_device(struct ak49xx *ak49xx, unsigned short reg,
+				int bytes, void *dest, bool interface);
+
 static int extcodec_get_pinctrl(struct device *dev)
 {
 	struct pinctrl *pinctrl;
@@ -187,7 +192,8 @@ int ak49xx_interface_reg_read(struct ak49xx *ak49xx, unsigned short reg)
 	int ret;
 
 	mutex_lock(&ak49xx->io_lock);
-	ret = ak49xx_read(ak49xx, reg, 1, &val, true);
+//	ret = ak49xx_read(ak49xx, reg, 1, &val, true);
+	ret = ak49xx_slim_read_device(ak49xx, reg, 1, &val, true);
 	mutex_unlock(&ak49xx->io_lock);
 
 	if (ret < 0)
@@ -203,7 +209,8 @@ int ak49xx_interface_reg_write(struct ak49xx *ak49xx, unsigned short reg,
 	int ret;
 
 	mutex_lock(&ak49xx->io_lock);
-	ret = ak49xx_write(ak49xx, reg, 1, &val, true);
+	//ret = ak49xx_write(ak49xx, reg, 1, &val, true);
+	ret = ak49xx_slim_write_device(ak49xx, reg, 1, &val, true);
 	mutex_unlock(&ak49xx->io_lock);
 
 	return ret;
@@ -505,6 +512,23 @@ static void ak49xx_bring_up(struct ak49xx *ak49xx)
 	ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT8_ARRAY, 0x02);
 	ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT9_ARRAY, 0x04);
 }
+
+void ak49xx_slimbus_interfacereg_setup(struct ak49xx *ak49xx)
+{
+	pr_err("[LHS] %s in \n",__func__);
+
+	ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT0_ARRAY, 0x0A);	
+	ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT1_ARRAY, 0x0B);
+	ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT2_ARRAY, 0x0C);
+	ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT3_ARRAY, 0x0D);
+	ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT4_ARRAY, 0x0E);
+	ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT5_ARRAY, 0x0F);
+
+	ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT8_ARRAY, 0x02);
+	ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT9_ARRAY, 0x04);
+	pr_err("[LHS] %s out \n",__func__);
+}
+
 
 static void ak49xx_bring_down(struct ak49xx *ak49xx)
 {

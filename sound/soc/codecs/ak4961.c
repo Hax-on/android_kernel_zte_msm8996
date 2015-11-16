@@ -313,6 +313,7 @@ struct ak4961_priv {
 	bool ak4961_dsp_downlink_status;
 	bool ak4961_dsp_uplink_status;
        bool ak4961_voice_sync_switch;
+	bool ak4961_slimbus_interface_reg;
 
 	u8 lch_bargein_sel;
 	u8 rch_bargein_sel;
@@ -2569,6 +2570,143 @@ static int ak4961_set_voice_sync_switch(struct snd_kcontrol *kcontrol,
         return ret;
 }
 
+static const char *slimbus_interface_reg_text[] = {
+        "off", "on","test" ,"reg1","reg2"
+};
+ 
+static const struct soc_enum slimbus_interface_reg_enum =
+                SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(slimbus_interface_reg_text), slimbus_interface_reg_text);
+ 
+
+
+static int ak4961_get_slimbus_interface_reg(struct snd_kcontrol *kcontrol,
+        struct snd_ctl_elem_value *ucontrol)
+{
+        struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+        struct ak4961_priv *ak4961 = snd_soc_codec_get_drvdata(codec);
+ 
+        ucontrol->value.enumerated.item[0] = ak4961->ak4961_slimbus_interface_reg;
+ 
+        return 0;
+}
+
+static int ak4961_set_slimbus_interface_reg(struct snd_kcontrol *kcontrol,
+        struct snd_ctl_elem_value *ucontrol)
+{
+        struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+        struct ak4961_priv *ak4961 = snd_soc_codec_get_drvdata(codec);
+        struct ak49xx *ak49xx = dev_get_drvdata(codec->dev->parent);
+        u8   status = ucontrol->value.integer.value[0];
+        int   ret = 0;
+	int cnt =0;
+ 
+        pr_info("%s: status = %d\n", __func__, status);
+ 	ak4961->ak4961_slimbus_interface_reg = status;
+ 	//ak4961_bring_up(ak49xx);
+	if(status==0)
+		{
+ 	ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT0_ARRAY);
+	printk("[LHS] %s 0x00 ret=%x\n",__func__,ret);
+
+	 ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT1_ARRAY);
+	printk("[LHS] %s 0x01 ret=%x\n",__func__,ret);
+
+	 ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT2_ARRAY);
+	printk("[LHS] %s 0x02 ret=%x\n",__func__,ret);
+
+	 ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT3_ARRAY);
+	printk("[LHS] %s 0x03 ret=%x\n",__func__,ret);
+
+	 ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT4_ARRAY);
+	printk("[LHS] %s 0x04 ret=%x\n",__func__,ret);
+
+	 ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT5_ARRAY);
+	printk("[LHS] %s 0x05 ret=%x\n",__func__,ret);
+
+	 ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT8_ARRAY);
+	printk("[LHS] %s 0x08 ret=%x\n",__func__,ret);
+
+	 ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT9_ARRAY);
+	printk("[LHS] %s 0x09 ret=%x\n",__func__,ret);
+
+ 
+ /*	 ret=ak49xx_interface_reg_read(ak49xx,0x100);
+	printk("[LHS] %s 0x100 ret=%x\n",__func__,ret);
+	 ret=ak49xx_interface_reg_read(ak49xx,0x101);
+	printk("[LHS] %s 0x101 ret=%x\n",__func__,ret);*/
+		}
+	else if(status==1)
+		{
+		
+		ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT0_ARRAY, 0x0A);
+		ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT0_ARRAY);
+			printk("[LHS] %s 0x00 ret=%x\n",__func__,ret);
+		
+		ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT1_ARRAY, 0x0B);
+		 ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT1_ARRAY);
+			printk("[LHS] %s 0x01 ret=%x\n",__func__,ret);
+		
+		ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT2_ARRAY, 0x0C);
+		 ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT2_ARRAY);
+			printk("[LHS] %s 0x02 ret=%x\n",__func__,ret);
+		
+		ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT3_ARRAY, 0x0D);
+		 ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT3_ARRAY);
+			printk("[LHS] %s 0x03 ret=%x\n",__func__,ret);
+		
+		ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT4_ARRAY, 0x0E);
+		 ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT4_ARRAY);
+			printk("[LHS] %s 0x04 ret=%x\n",__func__,ret);
+		
+		ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT5_ARRAY, 0x0F);
+		 ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT5_ARRAY);
+			printk("[LHS] %s 0x05 ret=%x\n",__func__,ret);
+		
+		ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT8_ARRAY, 0x02);
+		 ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT8_ARRAY);
+			printk("[LHS] %s 0x08 ret=%x\n",__func__,ret);
+		
+		ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT9_ARRAY, 0x04);
+		 ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT9_ARRAY);
+			printk("[LHS] %s 0x09 ret=%x\n",__func__,ret);
+		}
+	else if(status==2)
+		{
+		ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT0_ARRAY);
+		printk("[LHS] sliminter reg 0x00 %x cnt =%d\n",ret,cnt);
+
+		
+		ak49xx_interface_reg_write(ak49xx, AK496X_SLIM_PGD_PORT0_ARRAY, 0x0A);
+			do{
+				ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT0_ARRAY);
+				printk("[LHS] sliminter reg 0x00 %x cnt =%d\n",ret,cnt);
+				msleep(1000);
+				cnt++;
+				}while((ret==0x0A)&&(cnt<100));
+		}
+	else if(status == 3)
+		{
+			ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT1_ARRAY);
+				printk("[LHS] sliminter reg 0x01 %x \n",ret);
+		}
+	else if(status == 4)
+		{
+			ret=ak49xx_interface_reg_read(ak49xx,AK496X_SLIM_PGD_PORT2_ARRAY);
+				printk("[LHS] sliminter reg 0x02 %x \n",ret);
+		}
+	else 
+		{
+		ret=ak49xx_interface_reg_read(ak49xx,0x100);
+		printk("[LHS] %s 0x100 ret=%x\n",__func__,ret);
+		ret=ak49xx_interface_reg_read(ak49xx,0x101);
+		printk("[LHS] %s 0x101 ret=%x\n",__func__,ret);
+		}
+
+        return ret;
+}
+
+
+
 static const struct snd_kcontrol_new ak4961_snd_controls[] = {
 
 	SOC_ENUM("MIC1 Power Level", mic_1_power_level),
@@ -2699,6 +2837,9 @@ static const struct snd_kcontrol_new ak4961_snd_controls[] = {
 
         SOC_ENUM_EXT("Voice Sync Switch", voice_sync_switch_enum,
                         ak4961_get_voice_sync_switch, ak4961_set_voice_sync_switch),
+
+	SOC_ENUM_EXT("Slimbus interface reg", slimbus_interface_reg_enum,
+					ak4961_get_slimbus_interface_reg, ak4961_set_slimbus_interface_reg),
 
 	 SOC_ENUM_EXT("Voice Band Switch", voice_band_switch_enum,
                         ak4961_bandswitch_get, ak4961_bandswitch_set),
@@ -3016,6 +3157,8 @@ static int ak4961_codec_enable_slimrx(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
+		ak49xx_slimbus_interfacereg_setup(core);
+		
 		ret = ak49xx_cfg_slim_sch_rx(core, &dai->ak49xx_ch_list,
 					      dai->rate, dai->bit_width,
 					      &dai->grph);
@@ -3061,6 +3204,8 @@ static int ak4961_codec_enable_slimtx(struct snd_soc_dapm_widget *w,
 	dai = &ak4961_p->dai[w->shift];
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
+		ak49xx_slimbus_interfacereg_setup(core);
+		
 		ret = ak49xx_cfg_slim_sch_tx(core, &dai->ak49xx_ch_list,
 						dai->rate, dai->bit_width,
 					    &dai->grph);
@@ -6636,6 +6781,7 @@ static int ak4961_codec_probe(struct snd_soc_codec *codec)
 	ak4961->ak4961_dsp_downlink_status = 0;
 	ak4961->ak4961_dsp_uplink_status = 0;
 	ak4961->ak4961_voice_sync_switch = 0;
+	ak4961->ak4961_slimbus_interface_reg=0;
 
 	codec->component.ignore_pmdown_time = 1;
 	return ret;

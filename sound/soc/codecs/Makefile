@@ -372,6 +372,9 @@ obj-$(CONFIG_SND_SOC_MSM_STUB)  += snd-soc-msm-stub.o
 # Amp
 obj-$(CONFIG_SND_SOC_MAX9877)	+= snd-soc-max9877.o
 obj-$(CONFIG_SND_SOC_TPA6130A2)	+= snd-soc-tpa6130a2.o
+# akm-sungang support ak4490 chip begin
+obj-$(CONFIG_SND_SOC_AK4490)     += ak4490/
+# akm-sungang end
 # 2015-07-30 weizj add audience es804 start
 obj-$(CONFIG_SND_SOC_ES325)     += audience/
 obj-$(CONFIG_SND_SOC_ES_515)    += audience/

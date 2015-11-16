@@ -107,6 +107,9 @@ int ak49xx_ram_write(struct ak49xx *ak49xx, u8 vat, u8 page,
 			u16 start, int count, u8 *buf);
 int ak49xx_run_ram_write(struct ak49xx *ak49xx, u8 *buf);
 
+void ak49xx_slimbus_interfacereg_setup(struct ak49xx *ak49xx);
+
+
 #if defined(CONFIG_AK4960_CODEC) || \
 	defined(CONFIG_AK4961_CODEC) || \
 	defined(CONFIG_AK4962_CODEC)

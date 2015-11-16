@@ -78,6 +78,8 @@ static int msm_hdmi_rx_ch = 2;
 static int msm_proxy_rx_ch = 2;
 static int hdmi_rx_sample_rate = SAMPLING_RATE_48KHZ;
 static int msm_tert_mi2s_tx_ch = 2;
+static int msm_quat_mi2s_rx_ch = 2;
+
 
 static bool codec_reg_done;
 
@@ -112,6 +114,15 @@ static const struct soc_enum msm8996_auxpcm_enum[] = {
 static struct afe_clk_set mi2s_tx_clk = {
 	AFE_API_VERSION_I2S_CONFIG,
 	Q6AFE_LPASS_CLK_ID_TER_MI2S_IBIT,
+	Q6AFE_LPASS_IBIT_CLK_1_P536_MHZ,
+	Q6AFE_LPASS_CLK_ATTRIBUTE_COUPLE_NO,
+	Q6AFE_LPASS_CLK_ROOT_DEFAULT,
+	0,
+};
+
+static struct afe_clk_set mi2s_rx_clk = {
+	AFE_API_VERSION_I2S_CONFIG,
+	Q6AFE_LPASS_CLK_ID_QUAD_MI2S_IBIT,
 	Q6AFE_LPASS_IBIT_CLK_1_P536_MHZ,
 	Q6AFE_LPASS_CLK_ATTRIBUTE_COUPLE_NO,
 	Q6AFE_LPASS_CLK_ROOT_DEFAULT,
@@ -1186,6 +1197,68 @@ static struct snd_soc_ops msm8996_mi2s_be_ops = {
 	.startup = msm8996_mi2s_snd_startup,
 	.shutdown = msm8996_mi2s_snd_shutdown,
 };
+
+
+static int msm_rx_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
+				     struct snd_pcm_hw_params *params)
+{
+	struct snd_interval *rate = hw_param_interval(params,
+					SNDRV_PCM_HW_PARAM_RATE);
+	struct snd_interval *channels = hw_param_interval(params,
+					SNDRV_PCM_HW_PARAM_CHANNELS);
+
+	pr_debug("%s: channel:%d\n", __func__, msm_quat_mi2s_rx_ch);
+	pr_err("[LHS]%s: channel:%d\n", __func__, msm_quat_mi2s_rx_ch);
+	rate->min = rate->max = SAMPLING_RATE_48KHZ;
+	channels->min = channels->max = msm_quat_mi2s_rx_ch;
+	return 0;
+}
+
+static int msm8996_quat_mi2s_snd_startup(struct snd_pcm_substream *substream)
+{
+	int ret = 0;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
+
+	pr_debug("%s: substream = %s  stream = %d\n", __func__,
+		 substream->name, substream->stream);
+	pr_err("[LHS] %s in substream = %s  stream = %d\n", __func__,
+		 substream->name, substream->stream);
+	mi2s_rx_clk.enable = 1;
+	ret = afe_set_lpass_clock_v2(AFE_PORT_ID_QUATERNARY_MI2S_RX,
+				&mi2s_rx_clk);
+	if (ret < 0) {
+		pr_err("%s: afe lpass clock failed, err:%d\n", __func__, ret);
+		goto err;
+	}
+	ret = snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_CBS_CFS);
+	if (ret < 0)
+		pr_err("%s: set fmt cpu dai failed, err:%d\n", __func__, ret);
+err:
+	return ret;
+}
+
+static void msm8996_quat_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
+{
+	int ret = 0;
+
+	pr_debug("%s: substream = %s  stream = %d\n", __func__,
+		substream->name, substream->stream);
+	pr_err("[LHS] %s in substream = %s  stream = %d\n", __func__,
+		substream->name, substream->stream);
+
+	mi2s_rx_clk.enable = 0;
+	ret = afe_set_lpass_clock_v2(AFE_PORT_ID_QUATERNARY_MI2S_RX,
+				&mi2s_rx_clk);
+	if (ret < 0)
+		pr_err("%s: afe lpass clock failed, err:%d\n", __func__, ret);
+}
+
+static struct snd_soc_ops msm8996_quat_mi2s_be_ops = {
+	.startup = msm8996_quat_mi2s_snd_startup,
+	.shutdown = msm8996_quat_mi2s_snd_shutdown,
+};
+
 
 #if 0
 static int msm_slim_5_rx_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
@@ -2793,7 +2866,22 @@ static struct snd_soc_dai_link msm8996_common_be_dai_links[] = {
 		.be_hw_params_fixup = msm_tx_be_hw_params_fixup,
 		.ops = &msm8996_mi2s_be_ops,
 		.ignore_suspend = 1,
-	}
+	},
+	{
+		.name = LPASS_BE_QUAT_MI2S_RX,
+		.stream_name = "Quaternary MI2S Playback",
+		.cpu_dai_name = "msm-dai-q6-mi2s.3",
+		.platform_name = "msm-pcm-routing",
+		.codec_name = "ak4490",
+		.codec_dai_name = "ak4490-AIF1",
+		.no_pcm = 1,
+		.dpcm_playback = 1,
+		.be_id = MSM_BACKEND_DAI_QUATERNARY_MI2S_RX,
+		.be_hw_params_fixup = msm_rx_be_hw_params_fixup,
+		.ops = &msm8996_quat_mi2s_be_ops,
+		.ignore_suspend = 1,
+		.ignore_pmdown_time = 1,
+	},
 };
 
 static struct snd_soc_dai_link msm8996_tomtom_be_dai_links[] = {
@@ -3457,6 +3545,7 @@ static int msm8996_asoc_machine_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Can't allocate msm8996_asoc_mach_data\n");
 		return -ENOMEM;
 	}
+	mutex_init(&pdata->cdc_mclk_mutex);
 
 	card = populate_snd_card_dailinks(&pdev->dev);
 	if (!card) {
