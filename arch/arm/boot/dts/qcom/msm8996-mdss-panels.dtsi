@@ -172,6 +172,8 @@
 		20 1d 05 07 03 03 04 a0
 		20 1d 05 07 03 03 04 a0
 		20 12 05 06 03 13 04 a0];
+		qcom,esd-check-enabled;
+	qcom,mdss-dsi-panel-status-check-mode = "te_signal_check";
 };
 
 &dsi_nt35597_dsc_cmd {
