@@ -32,6 +32,7 @@
 #include <linux/mm.h>
 #include <linux/slab.h>
 #include <linux/types.h>
+#include <linux/version.h>
 #include <linux/vmalloc.h>
 
 #include "policyproc.h"
@@ -5903,7 +5904,12 @@ int pp_postproc_av_perms(struct policydb *pol, u32 ssid, u32 tsid, u16 tclass, u
 
 	(void)snprintf(scon, len, "u:r:%s:s0", list->stype);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0)
+	rc = security_context_to_sid(scon, len, &sid, GFP_KERNEL);
+#else
 	rc = security_context_to_sid(scon, len, &sid);
+#endif /* LINUX_VERSION_CODE */
+
 	if (rc || (sid != ssid)) {
 		goto pp_postproc_av_perms_exit;
 	}
@@ -5918,7 +5924,12 @@ int pp_postproc_av_perms(struct policydb *pol, u32 ssid, u32 tsid, u16 tclass, u
 
 	(void)snprintf(tcon, len, "u:object_r:%s:s0", list->ttype);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0)
+	rc = security_context_to_sid(scon, len, &sid, GFP_KERNEL);
+#else
 	rc = security_context_to_sid(tcon, len, &sid);
+#endif /* LINUX_VERSION_CODE */
+
 	if (rc || (sid != tsid)) {
 		goto pp_postproc_av_perms_exit;
 	}
