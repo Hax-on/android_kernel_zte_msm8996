@@ -688,6 +688,40 @@
 			};
 		};
 
+/* shilinfeng added, start */
+		spi_5 {
+			spi_5_active: spi_5_active {
+				mux {
+					pins = "gpio81", "gpio82",
+						"gpio83", "gpio84";
+					function = "blsp_spi5";
+				};
+
+				config {
+					pins = "gpio81", "gpio82",
+						"gpio83", "gpio84";
+					drive-strength = <6>;
+					bias-disable;
+				};
+			};
+
+			spi_5_sleep: spi_5_sleep {
+				mux {
+					pins = "gpio81", "gpio82",
+						"gpio83", "gpio84";
+					function = "blsp5_spi";
+				};
+
+				config {
+					pins = "gpio81", "gpio82",
+						"gpio83", "gpio84";
+					drive-strength = <6>;
+					bias-disable;
+				};
+			};
+		};
+/* shilinfeng added, end */
+
 		spi_0 {
 			spi_0_active: spi_0_active {
 				mux {
