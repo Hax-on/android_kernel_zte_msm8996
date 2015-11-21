@@ -1867,9 +1867,9 @@ static int serial_function_bind_config(struct android_usb_function *f,
 	/*init serial transports, as transports type
 	can not be changed twice, at_port_mod 3/5*/
 	if (!serial_initialized)
-        strlcpy(buf, serial_transports_init, sizeof(buf));
+		strlcpy(buf, serial_transports_init, sizeof(buf));
 	else
-        strlcpy(buf, serial_transports, sizeof(buf));
+		strlcpy(buf, serial_transports, sizeof(buf));
     /* end */
 
 	b = strim(buf);
