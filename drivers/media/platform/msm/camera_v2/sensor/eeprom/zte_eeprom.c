@@ -21,7 +21,7 @@
 #include <linux/crc32.h>
 #include "msm_sd.h"
 #include "msm_cci.h"
-#include "msm_eeprom.h"
+#include "zte_eeprom.h"
 
 //#define CONFIG_ZTE_CAMERA_EEPROM_DEBUG
 #undef CDBG
