@@ -7,6 +7,7 @@ Required properties:
   - reg : should contain SDHC, SD Core register map.
   - reg-names : indicates various resources passed to driver (via reg proptery) by name.
 		Required "reg-names" are "hc_mem" and "core_mem"
+		optional ones are "tlmm_mem"
   - interrupts : should contain SDHC interrupts.
   - interrupt-names : indicates interrupts passed to driver (via interrupts property) by name.
 		      Required "interrupt-names" are "hc_irq" and "pwr_irq".
@@ -65,6 +66,8 @@ Optional Properties:
 	  when load is high (performance mode) and the second is for low loads
 	  (power saving mode). These values will be used for cpu group voting for
 	  command-queueing mode or legacy respectively.
+	- qcom,core_3_0v_support: an optional property that is used to fake
+	  3.0V support for SDIO devices.
 
 In the following, <supply> can be vdd (flash core voltage) or vdd-io (I/O voltage).
 	- qcom,<supply>-always-on - specifies whether supply should be kept "on" always.

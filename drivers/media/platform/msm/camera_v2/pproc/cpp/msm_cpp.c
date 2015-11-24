@@ -447,7 +447,7 @@ static unsigned long msm_cpp_queue_buffer_info(struct cpp_device *cpp_dev,
 	list_for_each_entry_safe(buff, save, buff_head, entry) {
 		if (buff->map_info.buff_info.index == buffer_info->index) {
 			pr_err("error buffer index already queued\n");
-			return -EINVAL;
+			goto error;
 		}
 	}
 
@@ -455,7 +455,7 @@ static unsigned long msm_cpp_queue_buffer_info(struct cpp_device *cpp_dev,
 		sizeof(struct msm_cpp_buffer_map_list_t), GFP_KERNEL);
 	if (!buff) {
 		pr_err("error allocating memory\n");
-		return -EINVAL;
+		goto error;
 	}
 	buff->map_info.buff_info = *buffer_info;
 
@@ -466,13 +466,15 @@ static unsigned long msm_cpp_queue_buffer_info(struct cpp_device *cpp_dev,
 	if (rc < 0) {
 		pr_err("ION mmap failed\n");
 		kzfree(buff);
-		return rc;
+		goto error;
 	}
 
 	INIT_LIST_HEAD(&buff->entry);
 	list_add_tail(&buff->entry, buff_head);
 
 	return buff->map_info.phy_addr;
+error:
+	return 0;
 }
 
 static void msm_cpp_dequeue_buffer_info(struct cpp_device *cpp_dev,
@@ -4162,10 +4164,12 @@ static int cpp_probe(struct platform_device *pdev)
 	cpp_dev->msm_sd.sd.entity.name = pdev->name;
 	cpp_dev->msm_sd.close_seq = MSM_SD_CLOSE_3RD_CATEGORY;
 	msm_sd_register(&cpp_dev->msm_sd);
-	msm_cpp_v4l2_subdev_fops.owner = v4l2_subdev_fops.owner;
-	msm_cpp_v4l2_subdev_fops.open = v4l2_subdev_fops.open;
-	msm_cpp_v4l2_subdev_fops.release = v4l2_subdev_fops.release;
-	msm_cpp_v4l2_subdev_fops.poll = v4l2_subdev_fops.poll;
+	msm_cam_copy_v4l2_subdev_fops(&msm_cpp_v4l2_subdev_fops);
+	msm_cpp_v4l2_subdev_fops.unlocked_ioctl = msm_cpp_subdev_fops_ioctl;
+#ifdef CONFIG_COMPAT
+	msm_cpp_v4l2_subdev_fops.compat_ioctl32 =
+		msm_cpp_subdev_fops_compat_ioctl;
+#endif
 
 	cpp_dev->msm_sd.sd.devnode->fops = &msm_cpp_v4l2_subdev_fops;
 	cpp_dev->msm_sd.sd.entity.revision = cpp_dev->msm_sd.sd.devnode->num;

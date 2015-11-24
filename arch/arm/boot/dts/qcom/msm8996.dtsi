@@ -573,6 +573,7 @@
 			<  5195 /*  681 MHz */ >,
 			<  5859 /*  768 MHz */ >,
 			<  7759 /* 1017 MHz */ >,
+			<  9887 /* 1296 MHz */ >,
 			< 11863 /* 1555 MHz */ >,
 			< 13763 /* 1804 MHz */ >;
 	};
@@ -601,6 +602,7 @@
 			<  5195 /*  681 MHz */ >,
 			<  5859 /*  768 MHz */ >,
 			<  7759 /* 1017 MHz */ >,
+			<  9887 /* 1296 MHz */ >,
 			< 11863 /* 1555 MHz */ >,
 			< 13763 /* 1804 MHz */ >;
 	};
@@ -643,13 +645,13 @@
 
 	qcom,arm-memlat-mon-0 {
 		compatible = "qcom,arm-memlat-mon";
-		qcom,firstcpu = <&CPU0>;
+		qcom,cpulist =	<&CPU0 &CPU1>;
 		qcom,target-dev = <&memlat_cpu0>;
 	};
 
 	qcom,arm-memlat-mon-2 {
 		compatible = "qcom,arm-memlat-mon";
-		qcom,firstcpu = <&CPU2>;
+		qcom,cpulist =	<&CPU2 &CPU3>;
 		qcom,target-dev = <&memlat_cpu2>;
 	};
 
@@ -836,6 +838,9 @@
 		vdd_dig-supply = <&pm8994_s1_corner>;
 		mmpll4_dig-supply = <&pm8994_s1_corner>;
 		mmpll4_analog-supply = <&pm8994_l12>;
+		qcom,vfe0_clk_src-opp-store-vcorner = <&vfe0>;
+		qcom,vfe1_clk_src-opp-store-vcorner = <&vfe1>;
+		qcom,cpp_clk_src-opp-store-vcorner = <&cpp>;
 		clock-names = "xo", "gpll0", "gpll0_div",
 				"pclk0_src", "pclk1_src",
 				"byte0_src", "byte1_src",
@@ -1846,6 +1851,8 @@
 
 		iommus = <&anoc0_smmu>;
 
+		qcom,ep-wakeirq;
+
 		qcom,ep-latency = <10>;
 
 		linux,pci-domain = <2>;
@@ -2252,6 +2259,7 @@
 		qcom,vdd-voltage-level = <1 5 7>;
 		qcom,tune2-efuse-bit-pos = <21>;
 		qcom,tune2-efuse-num-bits = <4>;
+		qcom,enable-dpdm-pulsing;
 		qcom,qusb-phy-init-seq = <0xF8 0x80
 					0xB3 0x84
 					0x83 0x88
@@ -2260,18 +2268,14 @@
 					0x79 0x0C
 					0x21 0x10
 					0x14 0x9C
-					0x80 0x04
 					0x9F 0x1C
 					0x00 0x18>;
 		phy_type= "utmi";
 
-		clocks = <&clock_gcc clk_ln_bb_clk>,
-			 <&clock_gcc clk_gcc_rx1_usb2_clkref_clk>,
-			 <&clock_gcc clk_gcc_usb_phy_cfg_ahb2phy_clk>,
+		clocks = <&clock_gcc clk_gcc_usb_phy_cfg_ahb2phy_clk>,
 			 <&clock_gcc clk_gcc_qusb2phy_prim_reset>;
 
-		clock-names = "ref_clk_src", "ref_clk", "cfg_ahb_clk",
-			      "phy_reset";
+		clock-names = "cfg_ahb_clk", "phy_reset";
 	};
 
 	qusb_phy1: qusb@7412000 {
@@ -2298,19 +2302,15 @@
 					0x79 0x0C
 					0x21 0x10
 					0x14 0x9C
-					0x80 0x04
 					0x9F 0x1C
 					0x00 0x18>;
 		phy_type = "utmi";
 		qcom,hold-reset;
 
-		clocks = <&clock_gcc clk_ln_bb_clk>,
-			 <&clock_gcc clk_gcc_rx2_usb2_clkref_clk>,
-			 <&clock_gcc clk_gcc_usb_phy_cfg_ahb2phy_clk>,
+		clocks = <&clock_gcc clk_gcc_usb_phy_cfg_ahb2phy_clk>,
 			 <&clock_gcc clk_gcc_qusb2phy_sec_reset>;
 
-		clock-names = "ref_clk_src", "ref_clk", "cfg_ahb_clk",
-			      "phy_reset";
+		clock-names = "cfg_ahb_clk", "phy_reset";
 	};
 
 	ssphy: ssphy@7410000 {
@@ -2450,7 +2450,7 @@
 					/* Up to 400 Mbps */
 					<45 512 96650 1520000>,
 					/* Up to 800 Mbps */
-					<45 512 207108 3120000>;
+					<45 512 207108 14432000>;
 	};
 
 	wil6210: qcom,wil6210 {
@@ -2464,6 +2464,7 @@
 		qcom,msm-bus,vectors-KBps =
 			<100 512 0 0>,
 			<100 512 600000 800000>; /* ~4.6Gbps (MCS12) */
+		status = "disabled";
 	};
 
 	qcom,ssc@1c00000 {

@@ -293,7 +293,7 @@ static const char *pm_qos_to_string(enum android_pm_qos_state state)
 	}
 }
 
-static void android_pm_qos_update_latency(struct android_dev *dev, u32 latency)
+static void android_pm_qos_update_latency(struct android_dev *dev, s32 latency)
 {
 	static int last_vote = -1;
 
@@ -2572,10 +2572,20 @@ struct mass_storage_function_config {
 	char inquiry_string[INQUIRY_MAX_LEN];
 };
 
+#ifdef CONFIG_USB_GADGET_DEBUG_FILES
+static unsigned int fsg_num_buffers = CONFIG_USB_GADGET_STORAGE_NUM_BUFFERS;
+#else
+#define fsg_num_buffers	CONFIG_USB_GADGET_STORAGE_NUM_BUFFERS
+#endif /* CONFIG_USB_GADGET_DEBUG_FILES */
+static struct fsg_module_parameters fsg_mod_data;
+FSG_MODULE_PARAMETERS(/* no prefix */, fsg_mod_data);
+
 static int mass_storage_function_init(struct android_usb_function *f,
 					struct usb_composite_dev *cdev)
 {
 	struct mass_storage_function_config *config;
+	struct fsg_opts *fsg_opts;
+	struct fsg_config m_config;
 	int ret;
 
 	pr_debug("%s(): Inside\n", __func__);
@@ -2591,58 +2601,9 @@ static int mass_storage_function_init(struct android_usb_function *f,
 		goto err_usb_get_function_instance;
 	}
 
-	config->f_ms = usb_get_function(config->f_ms_inst);
-	if (IS_ERR(config->f_ms)) {
-		ret = PTR_ERR(config->f_ms);
-		goto err_usb_get_function;
-	}
-	return 0;
-
-err_usb_get_function:
-	usb_put_function_instance(config->f_ms_inst);
-
-err_usb_get_function_instance:
-	return ret;
-}
-
-static void mass_storage_function_cleanup(struct android_usb_function *f)
-{
-	struct mass_storage_function_config *config = f->config;
-
-	pr_debug("%s(): Inside\n", __func__);
-	usb_put_function(config->f_ms);
-	usb_put_function_instance(config->f_ms_inst);
-	kfree(f->config);
-	f->config = NULL;
-}
-
-#ifdef CONFIG_USB_GADGET_DEBUG_FILES
-static unsigned int fsg_num_buffers = CONFIG_USB_GADGET_STORAGE_NUM_BUFFERS;
-#else
-#define fsg_num_buffers	CONFIG_USB_GADGET_STORAGE_NUM_BUFFERS
-#endif /* CONFIG_USB_GADGET_DEBUG_FILES */
-static struct fsg_module_parameters fsg_mod_data;
-FSG_MODULE_PARAMETERS(/* no prefix */, fsg_mod_data);
-
-static int mass_storage_function_bind_config(struct android_usb_function *f,
-						struct usb_configuration *c)
-{
-	struct mass_storage_function_config *config = f->config;
-	int ret = 0;
-	int i;
-	struct fsg_opts *fsg_opts;
-	struct fsg_config m_config;
-
-	ret = usb_add_function(c, config->f_ms);
-	if (ret) {
-		pr_err("Could not bind ms%u config\n", i);
-		goto err_usb_add_function;
-	}
-
 	fsg_mod_data.removable[0] = true;
 	fsg_config_from_params(&m_config, &fsg_mod_data, fsg_num_buffers);
 	fsg_opts = fsg_opts_from_func_inst(config->f_ms_inst);
-	fsg_opts->no_configfs = true;
 	ret = fsg_common_set_num_buffers(fsg_opts->common, fsg_num_buffers);
 	if (ret) {
 		pr_err("%s(): error(%d) for fsg_common_set_num_buffers\n",
@@ -2657,7 +2618,7 @@ static int mass_storage_function_bind_config(struct android_usb_function *f,
 		goto err_set_nluns;
 	}
 
-	ret = fsg_common_set_cdev(fsg_opts->common, c->cdev,
+	ret = fsg_common_set_cdev(fsg_opts->common, cdev,
 						m_config.can_stall);
 	if (ret) {
 		pr_err("%s(): error(%d) for fsg_common_set_cdev\n",
@@ -2689,21 +2650,63 @@ err_set_cdev:
 err_set_nluns:
 	fsg_common_free_buffers(fsg_opts->common);
 err_set_num_buffers:
-	usb_remove_function(c, config->f_ms);
+	usb_put_function_instance(config->f_ms_inst);
+err_usb_get_function_instance:
+	return ret;
+}
+
+static void mass_storage_function_cleanup(struct android_usb_function *f)
+{
+	struct fsg_opts *fsg_opts;
+	struct mass_storage_function_config *config = f->config;
+
+	pr_debug("%s(): Inside\n", __func__);
+	fsg_opts = fsg_opts_from_func_inst(config->f_ms_inst);
+	fsg_sysfs_update(fsg_opts->common, f->dev, false);
+	fsg_common_free_luns(fsg_opts->common);
+
+	usb_put_function_instance(config->f_ms_inst);
+	kfree(f->config);
+	f->config = NULL;
+}
+
+static int mass_storage_function_bind_config(struct android_usb_function *f,
+						struct usb_configuration *c)
+{
+	struct mass_storage_function_config *config = f->config;
+	int ret = 0;
+	int i;
+	struct fsg_opts *fsg_opts;
+
+	config->f_ms = usb_get_function(config->f_ms_inst);
+	if (IS_ERR(config->f_ms)) {
+		ret = PTR_ERR(config->f_ms);
+		return ret;
+	}
+
+	ret = usb_add_function(c, config->f_ms);
+	if (ret) {
+		pr_err("Could not bind ms%u config\n", i);
+		goto err_usb_add_function;
+	}
+
+	fsg_opts = fsg_opts_from_func_inst(config->f_ms_inst);
+	fsg_opts->no_configfs = true;
+
+	return 0;
 
 err_usb_add_function:
+	usb_put_function(config->f_ms);
+
 	return ret;
 }
 
 static void mass_storage_function_unbind_config(struct android_usb_function *f,
 					       struct usb_configuration *c)
 {
-	struct fsg_opts *fsg_opts;
 	struct mass_storage_function_config *config = f->config;
 
-	fsg_opts = fsg_opts_from_func_inst(config->f_ms_inst);
-	fsg_sysfs_update(fsg_opts->common, f->dev, false);
-	fsg_common_free_luns(fsg_opts->common);
+	usb_put_function(config->f_ms);
 }
 
 static ssize_t mass_storage_inquiry_show(struct device *dev,
@@ -2891,6 +2894,36 @@ static struct android_usb_function midi_function = {
 };
 #endif
 static struct android_usb_function *supported_functions[] = {
+	[ANDROID_FFS] = &ffs_function,
+	[ANDROID_MBIM_BAM] = &mbim_function,
+	[ANDROID_ECM_BAM] = &ecm_qc_function,
+#ifdef CONFIG_SND_PCM
+	[ANDROID_AUDIO] = &audio_function,
+#endif
+	[ANDROID_RMNET] = &rmnet_function,
+	[ANDROID_GPS] = &gps_function,
+	[ANDROID_DIAG] = &diag_function,
+	[ANDROID_QDSS_BAM] = &qdss_function,
+	[ANDROID_SERIAL] = &serial_function,
+	[ANDROID_CCID] = &ccid_function,
+	[ANDROID_ACM] = &acm_function,
+	[ANDROID_MTP] = &mtp_function,
+	[ANDROID_PTP] = &ptp_function,
+	[ANDROID_RNDIS] = &rndis_function,
+	[ANDROID_RNDIS_BAM] = &rndis_qc_function,
+	[ANDROID_ECM] = &ecm_function,
+	[ANDROID_NCM] = &ncm_function,
+	[ANDROID_UMS] = &mass_storage_function,
+	[ANDROID_ACCESSORY] = &accessory_function,
+	[ANDROID_AUDIO_SRC] = &audio_source_function,
+	[ANDROID_CHARGER] = &charger_function,
+#ifdef CONFIG_SND_RAWMIDI
+	[ANDROID_MIDI] = &midi_function,
+#endif
+	NULL
+};
+
+static struct android_usb_function *default_functions[] = {
 	&ffs_function,
 	&mbim_function,
 	&ecm_qc_function,
@@ -3908,6 +3941,7 @@ static int android_probe(struct platform_device *pdev)
 {
 	struct android_usb_platform_data *pdata;
 	struct android_dev *android_dev;
+	struct android_usb_function **supported_list = NULL;
 	struct resource *res;
 	int ret = 0, i, len = 0, prop_len = 0;
 	u32 usb_core_id = 0;
@@ -3968,10 +4002,45 @@ static int android_probe(struct platform_device *pdev)
 		pdata = pdev->dev.platform_data;
 	}
 
+	len = of_property_count_strings(pdev->dev.of_node,
+			"qcom,supported-func");
+	if (len > ANDROID_MAX_FUNC_CNT) {
+		pr_err("Invalid number of functions used.\n");
+		return -EINVAL;
+	} else if (len > 0) {
+		/* one extra for NULL termination */
+		supported_list = devm_kzalloc(
+				&pdev->dev, sizeof(supported_list) * (len + 1),
+				GFP_KERNEL);
+		if (!supported_list)
+			return -ENOMEM;
+
+		for (i = 0; i < len; i++) {
+			const char *name = NULL;
+
+			of_property_read_string_index(pdev->dev.of_node,
+				"qcom,supported-func", i, &name);
+
+			if (!name || sizeof(name) > FUNC_NAME_LEN ||
+			name_to_func_idx(name) == ANDROID_INVALID_FUNC) {
+				pr_err("Invalid Function name %s\n", name);
+				ret = -EINVAL;
+				goto err;
+			}
+
+			supported_list[i] =
+				supported_functions[name_to_func_idx(name)];
+			pr_debug("name of supported function:%s\n",
+				supported_list[i]->name);
+		}
+	}
+
 	if (!android_class) {
 		android_class = class_create(THIS_MODULE, "android_usb");
-		if (IS_ERR(android_class))
-			return PTR_ERR(android_class);
+		if (IS_ERR(android_class)) {
+			ret = PTR_ERR(android_class);
+			goto err;
+		}
 	}
 
 	android_dev = kzalloc(sizeof(*android_dev), GFP_KERNEL);
@@ -3984,7 +4053,8 @@ static int android_probe(struct platform_device *pdev)
 
 	android_dev->name = pdev->name;
 	android_dev->disable_depth = 1;
-	android_dev->functions = supported_functions;
+	android_dev->functions =
+		supported_list ? supported_list : default_functions;
 	android_dev->configs_num = 0;
 	INIT_LIST_HEAD(&android_dev->configs);
 	INIT_WORK(&android_dev->work, android_work);
@@ -4037,6 +4107,19 @@ static int android_probe(struct platform_device *pdev)
 	/* pm qos request to prevent apps idle power collapse */
 	android_dev->curr_pm_qos_state = NO_USB_VOTE;
 	if (pdata && pdata->pm_qos_latency[0]) {
+		/*
+		 * The default request type PM_QOS_REQ_ALL_CORES is
+		 * applicable to all CPU cores that are online and
+		 * would have a power impact when there are more
+		 * number of CPUs. PM_QOS_REQ_AFFINE_IRQ request
+		 * type shall update/apply the vote only to that CPU to
+		 * which IRQ's affinity is set to.
+		 */
+#ifdef CONFIG_SMP
+		android_dev->pm_qos_req_dma.type = PM_QOS_REQ_AFFINE_IRQ;
+		android_dev->pm_qos_req_dma.irq =
+				android_dev->cdev->gadget->interrupt_num;
+#endif
 		pm_qos_add_request(&android_dev->pm_qos_req_dma,
 			PM_QOS_CPU_DMA_LATENCY, PM_QOS_DEFAULT_VALUE);
 		android_dev->down_pm_qos_sample_sec = DOWN_PM_QOS_SAMPLE_SEC;
@@ -4060,6 +4143,7 @@ err_alloc:
 		android_class = NULL;
 	}
 	debug_debugfs_exit();
+err:
 	return ret;
 }
 

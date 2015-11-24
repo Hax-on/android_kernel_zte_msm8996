@@ -88,6 +88,15 @@ static struct wcd_mbhc_config mbhc_cfg = {
 	.mono_stero_detection = false,
 	.swap_gnd_mic = NULL,
 	.hs_ext_micbias = false,
+	.key_code[0] = KEY_MEDIA,
+	.key_code[1] = KEY_VOICECOMMAND,
+	.key_code[2] = KEY_VOLUMEUP,
+	.key_code[3] = KEY_VOLUMEDOWN,
+	.key_code[4] = 0,
+	.key_code[5] = 0,
+	.key_code[6] = 0,
+	.key_code[7] = 0,
+	.linein_th = 5000,
 };
 
 static struct afe_clk_set mi2s_tx_clk = {
@@ -2618,7 +2627,7 @@ int msm8952_init_wsa_switch_supply(struct platform_device *pdev,
 		return -ENODEV;
 	}
 
-	pdata->wsa_switch_supply.supply = regulator_get(dev,
+	pdata->wsa_switch_supply.supply = devm_regulator_get(dev,
 			switch_supply_str);
 	if (IS_ERR(pdata->wsa_switch_supply.supply)) {
 		ret = PTR_ERR(pdata->wsa_switch_supply.supply);
@@ -2641,7 +2650,6 @@ int msm8952_init_wsa_switch_supply(struct platform_device *pdev,
 	if (ret) {
 		dev_err(dev, "Setting voltage failed for regulator %s err = %d\n",
 			switch_supply_str, ret);
-		regulator_put(pdata->wsa_switch_supply.supply);
 		pdata->wsa_switch_supply.supply = NULL;
 		return ret;
 	}
@@ -2660,7 +2668,6 @@ int msm8952_init_wsa_switch_supply(struct platform_device *pdev,
 	if (ret < 0) {
 		dev_err(dev, "Setting current failed for regulator %s err = %d\n",
 			switch_supply_str, ret);
-		regulator_put(pdata->wsa_switch_supply.supply);
 		pdata->wsa_switch_supply.supply = NULL;
 		return ret;
 	}

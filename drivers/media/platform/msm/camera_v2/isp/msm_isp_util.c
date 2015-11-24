@@ -564,6 +564,21 @@ static int msm_isp_set_clk_rate(struct vfe_device *vfe_dev, long *rate)
 	return 0;
 }
 
+
+static int msm_isp_start_fetch_engine(struct vfe_device *vfe_dev,
+	void *arg)
+{
+	struct msm_vfe_fetch_eng_start *fe_cfg = arg;
+	/*
+	 * For Offline VFE, HAL expects same frame id
+	 * for offline output which it requested in do_reprocess.
+	 */
+	vfe_dev->axi_data.src_info[VFE_PIX_0].frame_id =
+		fe_cfg->frame_id;
+	return vfe_dev->hw_info->vfe_ops.core_ops.
+		start_fetch_eng(vfe_dev, arg);
+}
+
 void msm_isp_fetch_engine_done_notify(struct vfe_device *vfe_dev,
 	struct msm_vfe_fetch_engine_info *fetch_engine_info)
 {
@@ -571,17 +586,18 @@ void msm_isp_fetch_engine_done_notify(struct vfe_device *vfe_dev,
 	if (!fetch_engine_info->is_busy)
 		return;
 
-	vfe_dev->axi_data.src_info[VFE_PIX_0].frame_id++;
-	if (vfe_dev->axi_data.src_info[VFE_PIX_0].frame_id == 0)
-		vfe_dev->axi_data.src_info[VFE_PIX_0].frame_id = 1;
-
 	memset(&fe_rd_done_event, 0, sizeof(struct msm_isp_event_data));
 	fe_rd_done_event.frame_id =
 		vfe_dev->axi_data.src_info[VFE_PIX_0].frame_id;
-	fe_rd_done_event.u.buf_done.session_id = fetch_engine_info->session_id;
-	fe_rd_done_event.u.buf_done.stream_id = fetch_engine_info->stream_id;
-	fe_rd_done_event.u.buf_done.handle = fetch_engine_info->bufq_handle;
-	fe_rd_done_event.u.buf_done.buf_idx = fetch_engine_info->buf_idx;
+	fe_rd_done_event.u.fetch_done.session_id =
+		fetch_engine_info->session_id;
+	fe_rd_done_event.u.fetch_done.stream_id = fetch_engine_info->stream_id;
+	fe_rd_done_event.u.fetch_done.handle = fetch_engine_info->bufq_handle;
+	fe_rd_done_event.u.fetch_done.buf_idx = fetch_engine_info->buf_idx;
+	fe_rd_done_event.u.fetch_done.fd = fetch_engine_info->fd;
+	fe_rd_done_event.u.fetch_done.offline_mode =
+		fetch_engine_info->offline_mode;
+
 	ISP_DBG("%s:VFE%d ISP_EVENT_FE_READ_DONE buf_idx %d\n",
 		__func__, vfe_dev->pdev->id, fetch_engine_info->buf_idx);
 	fetch_engine_info->is_busy = 0;
@@ -944,8 +960,9 @@ static long msm_isp_ioctl_unlocked(struct v4l2_subdev *sd,
 		/* fallthrough */
 	case VIDIOC_MSM_ISP_ENQUEUE_BUF:
 		/* fallthrough */
-	case VIDIOC_MSM_ISP_DEQUEUE_BUF: {
+	case VIDIOC_MSM_ISP_DEQUEUE_BUF:
 		/* fallthrough */
+	case VIDIOC_MSM_ISP_UNMAP_BUF: {
 		mutex_lock(&vfe_dev->buf_mgr->lock);
 		rc = msm_isp_proc_buf_cmd(vfe_dev->buf_mgr, cmd, arg);
 		mutex_unlock(&vfe_dev->buf_mgr->lock);
@@ -1017,9 +1034,9 @@ static long msm_isp_ioctl_unlocked(struct v4l2_subdev *sd,
 		mutex_unlock(&vfe_dev->core_mutex);
 		break;
 	case VIDIOC_MSM_ISP_FETCH_ENG_START:
+	case VIDIOC_MSM_ISP_MAP_BUF_START_FE:
 		mutex_lock(&vfe_dev->core_mutex);
-		rc = vfe_dev->hw_info->vfe_ops.core_ops.
-			start_fetch_eng(vfe_dev, arg);
+		rc = msm_isp_start_fetch_engine(vfe_dev, arg);
 		mutex_unlock(&vfe_dev->core_mutex);
 		break;
 	case VIDIOC_MSM_ISP_REG_UPDATE_CMD:
@@ -1789,7 +1806,7 @@ void ms_isp_process_iommu_page_fault(struct vfe_device *vfe_dev)
 	pr_err("%s:%d] VFE%d Handle Page fault! vfe_dev %p\n", __func__,
 		__LINE__,  vfe_dev->pdev->id, vfe_dev);
 
-	msm_isp_halt_send_error(vfe_dev);
+	msm_isp_halt_send_error(vfe_dev, ISP_EVENT_IOMMU_P_FAULT);
 
 	if (vfe_dev->buf_mgr->pagefault_debug_disable == 0) {
 		vfe_dev->buf_mgr->pagefault_debug_disable = 1;
@@ -2084,6 +2101,11 @@ int msm_isp_open_node(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 	long rc = 0;
 
 	ISP_DBG("%s open_cnt %u\n", __func__, vfe_dev->vfe_open_cnt);
+
+	if (vfe_dev->common_data == NULL) {
+		pr_err("%s: Error in probe. No common_data\n", __func__);
+		return -EINVAL;
+	}
 
 	mutex_lock(&vfe_dev->realtime_mutex);
 	mutex_lock(&vfe_dev->core_mutex);

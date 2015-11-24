@@ -259,8 +259,8 @@
 		mdmfermium_l13: regulator-l13 {
 			compatible = "qcom,rpm-smd-regulator";
 			regulator-name = "mdmfermium_l13";
-			regulator-min-microvolt = <2850000>;
-			regulator-max-microvolt = <3300000>;
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <2850000>;
 			qcom,init-voltage = <2850000>;
 			status = "okay";
 		};
@@ -310,7 +310,7 @@
 		compatible = "qcom,cpr-regulator";
 		reg = <0xb018000 0x1000>, <0xb010058 4>, <0xa4000 0x1000>;
 		reg-names = "rbcpr", "rbcpr_clk", "efuse_addr";
-		interrupts = <0 15 0>;
+		interrupts = <0 20 0>;
 		regulator-name = "apc_corner";
 		qcom,cpr-fuse-corners = <3>;
 		regulator-min-microvolt = <1>;
@@ -358,7 +358,7 @@
 		qcom,cpr-init-voltage-as-ceiling;
 		qcom,cpr-corner-frequency-map =
 					<1 400000000>,
-					<2 800000000>,
+					<2 806400000>,
 					<3 998400000>,
 					<4 1094400000>,
 					<5 1190400000>,
@@ -368,5 +368,14 @@
 		qcom,cpr-speed-bin-max-corners =
 					<0 0 1 2 7>;
 		qcom,cpr-quot-adjust-scaling-factor-max = <1400>;
+	};
+
+/* Miscellaneous regulators */
+	sdcard_ext_vreg: sdcard_ext_vreg {
+		compatible = "regulator-fixed";
+		regulator-name = "sdcard_ext_vreg";
+		startup-delay-us = <250>;
+		enable-active-high;
+		gpio = <&pm8019_gpios 4 0>;
 	};
 };

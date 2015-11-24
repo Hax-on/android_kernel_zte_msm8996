@@ -42,6 +42,10 @@
 	status = "ok";
 };
 
+&i2c_6 {
+	status = "disabled";
+};
+
 &i2c_7 {
 	smb1351-charger@1d {
 		compatible = "qcom,smb1351-charger";
@@ -57,6 +61,10 @@
 		qcom,batt-id-range-pct = <15>;
 		#include "batterydata-qrd-skum-4v4-2920mah.dtsi"
 	};
+};
+
+&pmi8994_charger {
+	qcom,battery-data = <&qrd_batterydata>;
 };
 
 &pmi8994_fg {
@@ -436,7 +444,6 @@
 	qcom,mdss-dsi-bl-max-level = <4095>;
 	qcom,panel-supply-entries = <&dsi_panel_pwr_supply>;
 	qcom,dcs-cmd-by-left;
-	qcom,cont-splash-enabled;
 };
 
 &sdhc_2 {

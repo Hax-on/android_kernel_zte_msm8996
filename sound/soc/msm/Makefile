@@ -29,3 +29,10 @@ snd-soc-msm8x16-objs := msm8952.o msm-audio-pinctrl.o
 snd-soc-msm8x16-objs += msm8952-slimbus.o msm8952-dai-links.o
 obj-$(CONFIG_SND_SOC_MSM8X16) += snd-soc-msm8x16.o
 
+# for MDM Californium sound card driver
+snd-soc-mdmcalifornium-objs := mdmcalifornium.o
+obj-$(CONFIG_SND_SOC_MDMCALIFORNIUM) += snd-soc-mdmcalifornium.o
+
+# for MDM FERMIUM sound card driver
+snd-soc-mdmfermium-objs := mdmfermium.o
+obj-$(CONFIG_SND_SOC_MDMFERMIUM) += snd-soc-mdmfermium.o

@@ -25,6 +25,8 @@
 #include "dsi-panel-hx8379a-truly-fwvga-video.dtsi"
 #include "dsi-panel-zte-sam-s6e3fa3-sam-6p0-1080p-video.dtsi"
 #include "dsi-panel-r69007-dualdsi-wqxga-cmd.dtsi"
+#include "dsi-adv7533-720p.dtsi"
+#include "dsi-adv7533-1080p.dtsi"
 
 &soc {
 	dsi_panel_pwr_supply: dsi_panel_pwr_supply {

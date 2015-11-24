@@ -430,9 +430,6 @@ static void a5xx_platform_setup(struct adreno_device *adreno_dev)
 				A510_VBIF_XIN_HALT_CTRL0_MASK;
 	}
 
-	if (adreno_is_a530(adreno_dev) && !adreno_is_a530v1(adreno_dev))
-		INIT_WORK(&adreno_dev->gpmu_work, a5xx_gpmu_reset);
-
 	/* Calculate SP local and private mem addresses */
 	addr = ALIGN(ADRENO_UCHE_GMEM_BASE + adreno_dev->gmem_size, SZ_64K);
 	adreno_dev->sp_local_gpuaddr = addr;
@@ -444,6 +441,14 @@ static void a5xx_platform_setup(struct adreno_device *adreno_dev)
 
 	/* Check efuse bits for various capabilties */
 	a5xx_check_features(adreno_dev);
+}
+
+static void a5xx_init(struct adreno_device *adreno_dev)
+{
+	if (adreno_is_a530(adreno_dev) && !adreno_is_a530v1(adreno_dev))
+		INIT_WORK(&adreno_dev->gpmu_work, a5xx_gpmu_reset);
+
+	a5xx_crashdump_init(adreno_dev);
 }
 
 /**
@@ -723,187 +728,17 @@ static int _gpmu_create_load_cmds(struct adreno_device *adreno_dev,
 	return 0;
 }
 
-static int _gpmu_verify_header(struct adreno_device *adreno_dev,
-	uint32_t *header, uint32_t fw_size)
-{
-	unsigned int i;
-	const struct adreno_gpu_core *gpucore = adreno_dev->gpucore;
-	unsigned int gpmu_major_offset = 0, gpmu_minor_offset = 0;
-	unsigned int gpmu_major, gpmu_minor;
-	uint32_t header_size;
-
-	header_size = header[0];
-
-	/*
-	 * The minimum firmware binary size is eight dwords, one for each of
-	 * the following fields: GPMU header block length, header block ID,
-	 * major tag, major vlaue, minor tag, minor value, ucode block length,
-	 * and ucode block ID.
-	 */
-	if (fw_size < 8) {
-		KGSL_CORE_ERR("GPMU firmware size is less than 8 dwords, actual size %d\n",
-			fw_size);
-		return -EIO;
-	}
-
-	/*
-	 * The minimum firmware header size is five dwords, one for each of
-	 * the following fields: GPMU header block ID, major tag, major value,
-	 * minor tag, minor value.
-	 */
-	if (header_size < 5) {
-		KGSL_CORE_ERR("GPMU firmware header size is less than 5 dwords, actual size %d\n",
-			header_size);
-		return -EIO;
-	}
-
-	if (header_size >= fw_size) {
-		KGSL_CORE_ERR("GPMU firmware header size (%d) is larger than firmware size (%d)\n",
-				header_size, fw_size);
-		return -EIO;
-	}
-
-	if (header[1] != GPMU_HEADER_ID) {
-		KGSL_CORE_ERR("GPMU firmware header ID mis-match: expected 0x%X, actual 0x%X\n",
-				GPMU_HEADER_ID, header[1]);
-		return -EIO;
-	}
-
-	if ((header_size - 1) % 2 != 0) {
-		KGSL_CORE_ERR("GPMU firmware header contains incompete (tag, value) pair\n");
-		return -EIO;
-	}
-
-	for (i = 2; i < header_size; i += 2) {
-		switch (header[i]) {
-		case HEADER_MAJOR:
-			gpmu_major_offset = i;
-			gpmu_major = header[i + 1];
-			break;
-		case HEADER_MINOR:
-			gpmu_minor_offset = i;
-			gpmu_minor = header[i + 1];
-			break;
-		case HEADER_DATE:
-		case HEADER_TIME:
-			break;
-		default:
-			KGSL_CORE_ERR("GPMU unknown header ID %d\n",
-					header[i]);
-			break;
-		}
-	}
-
-	if (gpmu_major_offset == 0) {
-		KGSL_CORE_ERR("GPMU major version number is missing\n");
-		return -EIO;
-	}
-
-	if (gpmu_minor_offset == 0) {
-		KGSL_CORE_ERR("GPMU minor version number is missing\n");
-		return -EIO;
-	}
-
-	/*
-	 * A value of 0 for both the Major and Minor version fields indicates
-	 * the code is un-versioned, and should be allowed to pass all
-	 * versioning checks.
-	 */
-	if ((gpmu_major != 0) || (gpmu_minor != 0)) {
-		if (gpucore->gpmu_major != gpmu_major) {
-			KGSL_CORE_ERR(
-				"GPMU major version mis-match: expected %d, actual %d\n",
-				gpucore->gpmu_major, gpmu_major);
-			return -EIO;
-		}
-
-		/*
-		 * Driver should be compatible for firmware with
-		 * smaller minor version number.
-		 */
-		if (gpucore->gpmu_minor < gpmu_minor) {
-			KGSL_CORE_ERR(
-				"GPMU minor version mis-match: expected %d, actual %d\n",
-				gpucore->gpmu_minor, gpmu_minor);
-			return -EIO;
-		}
-	}
-
-	return 0;
-}
-
-static int _gpmu_verify_ucode(struct adreno_device *adreno_dev,
-	uint32_t *data, uint32_t fw_size)
-{
-	uint32_t header_size = data[0];
-	uint32_t *block = &data[header_size + 1];
-	uint32_t block_size = block[0];
-	uint32_t block_id = block[1];
-
-	if (block_size == 0) {
-		KGSL_CORE_ERR("GPMU firmware block size is zero\n");
-		return -EIO;
-	}
-
-	/*
-	 * Deduct one (block length field) from the firmware block size to
-	 * get the microcode size.
-	 */
-	block_size -= 1;
-
-	if (block_size > GPMU_INST_RAM_SIZE) {
-		KGSL_CORE_ERR(
-		"GPMU firmware block size is larger than RAM size\n");
-		return -EIO;
-	}
-
-	/*
-	 * The actual microcode size is fw_size - header_size - 2, with
-	 * the two block length dword fields deducted.
-	 */
-	if (block_size > fw_size - header_size - 2) {
-		KGSL_CORE_ERR("GPMU firmware microcode size (%d) larger than actual (%d)\n",
-				block_size, fw_size - header_size - 2);
-		return -EIO;
-	}
-
-	if (block_id != GPMU_FIRMWARE_ID) {
-		KGSL_CORE_ERR("GPMU firmware id not mis-match: expected 0x%X, actual 0x%X\n",
-			GPMU_FIRMWARE_ID,  block_id);
-		return -EIO;
-	}
-
-	return 0;
-}
 
 /*
  * _load_gpmu_firmware() - Load the ucode into the GPMU RAM
  * @adreno_dev: Pointer to adreno device
-
- * GPMU firmare format (one dword per field):
- *	Header block length (length dword field not inclusive)
- *	Header block ID
- *	Header Field 1 tag
- *	Header Field 1 data
- *	Header Field 2 tag
- *	Header Field 2 data (two tag/data pairs minimum for major and minor)
- *	. . .
- *	Header Field M tag
- *	Header Field M data
- *	Microcode block length (length dword field not inclusive)
- *	Microcode block ID
- *	Microcode data Dword 1
- *	Microcode data Dword 2
- *	. . .
- *	Microcode data Dword N
  */
 static int _load_gpmu_firmware(struct adreno_device *adreno_dev)
 {
-	uint32_t *data, *header;
+	uint32_t *data;
 	const struct firmware *fw = NULL;
 	struct kgsl_device *device = &adreno_dev->dev;
 	const struct adreno_gpu_core *gpucore = adreno_dev->gpucore;
-	uint32_t fw_size, header_size;
 	uint32_t *cmds, cmd_size;
 	int ret =  -EINVAL;
 
@@ -925,44 +760,21 @@ static int _load_gpmu_firmware(struct adreno_device *adreno_dev)
 	}
 
 	data = (uint32_t *)fw->data;
-	fw_size = fw->size / sizeof(uint32_t);
 
-	if (data[0] == 9) {
-		/* Legacy file header */
+	if (data[0] >= (fw->size / sizeof(uint32_t)) || data[0] < 2)
+		goto err;
 
-		/* Read header block and verify versioning first */
-		ret = _gpmu_verify_header(adreno_dev, data, fw_size);
-		if (ret)
-			goto err;
+	if (data[1] != GPMU_FIRMWARE_ID)
+		goto err;
+	ret = _read_fw2_block_header(&data[2],
+		GPMU_FIRMWARE_ID,
+		adreno_dev->gpucore->gpmu_major,
+		adreno_dev->gpucore->gpmu_minor);
+	if (ret)
+		goto err;
 
-		/* Now verify the block data */
-		ret = _gpmu_verify_ucode(adreno_dev, data, fw_size);
-		if (ret)
-			goto err;
-
-		header = &data[0];
-		header_size = header[0];
-
-		cmds = data + header_size + 1 + 2;
-		cmd_size = data[header_size + 1] - 1;
-	} else {
-		/* New file header */
-
-		if (data[0] >= fw_size || data[0] < 2)
-			goto err;
-
-		if (data[1] != GPMU_FIRMWARE_ID)
-			goto err;
-		ret = _read_fw2_block_header(&data[2],
-			GPMU_FIRMWARE_ID,
-			adreno_dev->gpucore->gpmu_major,
-			adreno_dev->gpucore->gpmu_minor);
-		if (ret)
-			goto err;
-
-		cmds = data + data[2] + 3;
-		cmd_size = data[0] - data[2] - 2;
-	}
+	cmds = data + data[2] + 3;
+	cmd_size = data[0] - data[2] - 2;
 
 	if (cmd_size > GPMU_INST_RAM_SIZE) {
 		KGSL_CORE_ERR(
@@ -996,9 +808,7 @@ static int _gpmu_send_init_cmds(struct adreno_device *adreno_dev)
 
 	/* Copy to the RB the predefined fw sequence cmds */
 	memcpy(cmds, adreno_dev->gpmu_cmds, size << 2);
-	adreno_ringbuffer_submit(rb, NULL);
-
-	return adreno_spin_idle(&adreno_dev->dev);
+	return adreno_ringbuffer_submit_spin(rb, NULL, 2000);
 }
 
 /*
@@ -1715,20 +1525,6 @@ out:
 }
 
 /*
- * a5xx_cp_crash_dumper_init() - Initialize CP Crash Dumper. Allocate memory
- *				for capturescript and for register dump
- * @adreno_dev: Pointer to adreno device
- */
-static void a5xx_cp_crash_dumper_init(struct adreno_device *adreno_dev)
-{
-	kgsl_allocate_global(&adreno_dev->dev, &adreno_dev->capturescript,
-				PAGE_SIZE, KGSL_MEMFLAGS_GPUREADONLY, 0);
-	kgsl_allocate_global(&adreno_dev->dev, &adreno_dev->snapshot_registers,
-				a5xx_num_registers() * 4, 0 , 0);
-	adreno_dev->capturescript_working = true;
-}
-
-/*
  * a5xx_start() - Device start
  * @adreno_dev: Pointer to adreno device
  *
@@ -1875,7 +1671,7 @@ static void a5xx_start(struct adreno_device *adreno_dev)
 		 * microcodes after v77
 		 */
 		if ((adreno_compare_pfp_version(adreno_dev, 0x5FF077) >= 0))
-			kgsl_regrmw(device, A5XX_SP_DBG_ECO_CNTL, 0, (1 << 8));
+			kgsl_regrmw(device, A5XX_PC_DBG_ECO_CNTL, 0, (1 << 8));
 	}
 
 	/* Set the USE_RETENTION_FLOPS chicken bit */
@@ -2003,11 +1799,31 @@ static int _preemption_init(
 	return cmds - cmds_orig;
 }
 
+/* Print some key registers if a spin-for-idle times out */
+static void spin_idle_debug(struct kgsl_device *device)
+{
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+	unsigned int rptr, wptr;
+	unsigned int status, status3, intstatus;
+	unsigned int hwfault;
+
+	adreno_readreg(adreno_dev, ADRENO_REG_CP_RB_RPTR, &rptr);
+	adreno_readreg(adreno_dev, ADRENO_REG_CP_RB_WPTR, &wptr);
+
+	kgsl_regread(device, A5XX_RBBM_STATUS, &status);
+	kgsl_regread(device, A5XX_RBBM_STATUS3, &status3);
+	kgsl_regread(device, A5XX_RBBM_INT_0_STATUS, &intstatus);
+	kgsl_regread(device, A5XX_CP_HW_FAULT, &hwfault);
+
+	dev_err(device->dev,
+		" rb=%X/%X rbbm_status=%8.8X/%8.8X int_0_status=%8.8X\n",
+		rptr, wptr, status, status3, intstatus);
+	dev_err(device->dev, " hwfault=%8.8X\n", hwfault);
+}
+
 static void a5xx_post_start(struct adreno_device *adreno_dev)
 {
 	unsigned int *cmds, *start;
-	int status = 0;
-	struct kgsl_device *device = &(adreno_dev->dev);
 	struct adreno_ringbuffer *rb = adreno_dev->cur_rb;
 
 	cmds = adreno_ringbuffer_allocspace(rb, 42);
@@ -2033,13 +1849,10 @@ static void a5xx_post_start(struct adreno_device *adreno_dev)
 	if (cmds == start)
 		return;
 
-	adreno_ringbuffer_submit(rb, NULL);
+	if (adreno_ringbuffer_submit_spin(rb, NULL, 2000)) {
+		struct kgsl_device *device = &adreno_dev->dev;
 
-	/* idle device to validate hw INIT */
-	status = adreno_spin_idle(device);
-	if (status) {
-		KGSL_DRV_ERR(rb->device,
-		"hw initialization failed to idle\n");
+		KGSL_DRV_ERR(device, "hw initialization failed to idle\n");
 		kgsl_device_snapshot(device, NULL);
 	}
 }
@@ -2084,6 +1897,7 @@ static int a5xx_rb_init(struct adreno_device *adreno_dev,
 			 struct adreno_ringbuffer *rb)
 {
 	unsigned int *cmds;
+	int ret;
 
 	cmds = adreno_ringbuffer_allocspace(rb, 8);
 	if (IS_ERR(cmds))
@@ -2113,15 +1927,23 @@ static int a5xx_rb_init(struct adreno_device *adreno_dev,
 	*cmds++ = 0x00000000;
 	*cmds++ = 0x00000000;
 
-	adreno_ringbuffer_submit(rb, NULL);
+	ret = adreno_ringbuffer_submit_spin(rb, NULL, 2000);
+	if (ret != 0) {
+		struct kgsl_device *device = &adreno_dev->dev;
 
-	return 0;
+		dev_err(device->dev, "CP initialization failed to idle\n");
+		spin_idle_debug(device);
+		kgsl_device_snapshot(device, NULL);
+	}
+
+	return ret;
 }
 
 int a5xx_switch_to_unsecure_mode(struct adreno_device *adreno_dev,
 				struct adreno_ringbuffer *rb)
 {
 	unsigned int *cmds;
+	int ret;
 
 	cmds = adreno_ringbuffer_allocspace(rb, 2);
 	if (IS_ERR(cmds))
@@ -2131,8 +1953,16 @@ int a5xx_switch_to_unsecure_mode(struct adreno_device *adreno_dev,
 
 	cmds += cp_secure_mode(adreno_dev, cmds, 0);
 
-	adreno_ringbuffer_submit(rb, NULL);
-	return 0;
+	ret = adreno_ringbuffer_submit_spin(rb, NULL, 2000);
+	if (ret != 0) {
+		struct kgsl_device *device = &adreno_dev->dev;
+
+		dev_err(device->dev, "Switch to unsecure failed to idle\n");
+		spin_idle_debug(device);
+		kgsl_device_snapshot(device, NULL);
+	}
+
+	return ret;
 }
 
 static int _load_firmware(struct adreno_device *adreno_dev, const char *fwfile,
@@ -2768,7 +2598,8 @@ static unsigned int a5xx_register_offsets[ADRENO_REG_REGISTER_MAX] = {
 				A5XX_VBIF_XIN_HALT_CTRL0),
 	ADRENO_REG_DEFINE(ADRENO_REG_VBIF_XIN_HALT_CTRL1,
 				A5XX_VBIF_XIN_HALT_CTRL1),
-
+	ADRENO_REG_DEFINE(ADRENO_REG_VBIF_VERSION,
+				A5XX_VBIF_VERSION),
 };
 
 static const struct adreno_reg_offsets a5xx_reg_offsets = {
@@ -3523,6 +3354,7 @@ struct adreno_gpudev adreno_a5xx_gpudev = {
 	.irq_trace = trace_kgsl_a5xx_irq_status,
 	.num_prio_levels = ADRENO_PRIORITY_MAX_RB_LEVELS,
 	.platform_setup = a5xx_platform_setup,
+	.init = a5xx_init,
 	.rb_init = a5xx_rb_init,
 	.hw_init = a5xx_hw_init,
 	.switch_to_unsecure_mode = a5xx_switch_to_unsecure_mode,
@@ -3541,5 +3373,4 @@ struct adreno_gpudev adreno_a5xx_gpudev = {
 	.preemption_init = a5xx_preemption_init,
 	.preemption_schedule = a5xx_preemption_schedule,
 	.enable_64bit = a5xx_enable_64bit,
-	.cp_crash_dumper_init = a5xx_cp_crash_dumper_init,
 };

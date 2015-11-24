@@ -91,7 +91,7 @@ struct msm_mdp_interface mdp5 = {
 
 static DEFINE_SPINLOCK(mdp_lock);
 static DEFINE_MUTEX(mdp_clk_lock);
-static DEFINE_MUTEX(mdp_iommu_lock);
+static DEFINE_MUTEX(mdp_iommu_ref_cnt_lock);
 static DEFINE_MUTEX(mdp_fs_idle_pc_lock);
 
 static struct mdss_panel_intf pan_types[] = {
@@ -817,7 +817,7 @@ int mdss_iommu_ctrl(int enable)
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
 	int rc = 0;
 
-	mutex_lock(&mdp_iommu_lock);
+	mutex_lock(&mdp_iommu_ref_cnt_lock);
 	pr_debug("%pS: enable:%d ref_cnt:%d attach:%d hoff:%d\n",
 		__builtin_return_address(0), enable, mdata->iommu_ref_cnt,
 		mdata->iommu_attached, mdata->handoff_pending);
@@ -839,7 +839,7 @@ int mdss_iommu_ctrl(int enable)
 			pr_err("unbalanced iommu ref\n");
 		}
 	}
-	mutex_unlock(&mdp_iommu_lock);
+	mutex_unlock(&mdp_iommu_ref_cnt_lock);
 
 	if (IS_ERR_VALUE(rc))
 		return rc;
@@ -1215,6 +1215,7 @@ static void mdss_mdp_hw_rev_caps_init(struct mdss_data_type *mdata)
 	mdata->min_prefill_lines = 0xffff;
 	/* clock gating feature is disabled by default */
 	mdata->enable_gate = true;
+	mdata->pixel_ram_size = 0;
 
 	mdss_mdp_hw_rev_debug_caps_init(mdata);
 
@@ -1234,6 +1235,7 @@ static void mdss_mdp_hw_rev_caps_init(struct mdss_data_type *mdata)
 		mdata->hflip_buffer_reused = false;
 		mdata->min_prefill_lines = 21;
 		mdata->has_ubwc = true;
+		mdata->pixel_ram_size = 50 * 1024;
 		set_bit(MDSS_QOS_PER_PIPE_IB, mdata->mdss_qos_map);
 		set_bit(MDSS_QOS_OVERHEAD_FACTOR, mdata->mdss_qos_map);
 		set_bit(MDSS_QOS_CDP, mdata->mdss_qos_map);
@@ -1246,6 +1248,8 @@ static void mdss_mdp_hw_rev_caps_init(struct mdss_data_type *mdata)
 		set_bit(MDSS_CAPS_3D_MUX_UNDERRUN_RECOVERY_SUPPORTED,
 			mdata->mdss_caps_map);
 		mdss_mdp_init_default_prefill_factors(mdata);
+		mdss_set_quirk(mdata, MDSS_QUIRK_DSC_RIGHT_ONLY_PU);
+		mdss_set_quirk(mdata, MDSS_QUIRK_DSC_2SLICE_PU_THRPUT);
 		break;
 	case MDSS_MDP_HW_REV_105:
 	case MDSS_MDP_HW_REV_109:
@@ -1343,8 +1347,6 @@ void mdss_hw_init(struct mdss_data_type *mdata)
 
 	mdata->nmax_concurrent_ad_hw =
 		(mdata->mdp_rev < MDSS_MDP_HW_REV_103) ? 1 : 2;
-
-	mdss_mdp_config_pipe_panic_lut(mdata);
 
 	pr_debug("MDP hw init done\n");
 }
@@ -1590,7 +1592,7 @@ static ssize_t mdss_mdp_show_capabilities(struct device *dev,
 	}
 
 	if (mdata->props)
-		SPRINT("props=%d", mdata->props);
+		SPRINT("props=%d\n", mdata->props);
 	if (mdata->max_bw_low)
 		SPRINT("max_bandwidth_low=%u\n", mdata->max_bw_low);
 	if (mdata->max_bw_high)
@@ -1666,6 +1668,42 @@ static int mdss_mdp_register_sysfs(struct mdss_data_type *mdata)
 	return rc;
 }
 
+int mdss_panel_get_intf_status(u32 disp_num, u32 intf_type)
+{
+	int rc, intf_status = 0;
+	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
+
+	if (!mdss_res || !mdss_res->pan_cfg.init_done)
+		return -EPROBE_DEFER;
+
+	if (mdss_res->handoff_pending) {
+		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
+		intf_status = readl_relaxed(mdata->mdp_base +
+			MDSS_MDP_REG_DISP_INTF_SEL);
+		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
+		if (intf_type == MDSS_PANEL_INTF_DSI) {
+			if (disp_num == DISPLAY_1)
+				rc = (intf_status & MDSS_MDP_INTF_DSI0_SEL);
+			else if (disp_num == DISPLAY_2)
+				rc = (intf_status & MDSS_MDP_INTF_DSI1_SEL);
+			else
+				rc = 0;
+		} else if (intf_type == MDSS_PANEL_INTF_EDP) {
+			intf_status &= MDSS_MDP_INTF_EDP_SEL;
+			rc = (intf_status == MDSS_MDP_INTF_EDP_SEL);
+		} else if (intf_type == MDSS_PANEL_INTF_HDMI) {
+			intf_status &= MDSS_MDP_INTF_HDMI_SEL;
+			rc = (intf_status == MDSS_MDP_INTF_HDMI_SEL);
+		} else {
+			rc = 0;
+		}
+	} else {
+		rc = 0;
+	}
+
+	return rc;
+}
+
 static int mdss_mdp_probe(struct platform_device *pdev)
 {
 	struct resource *res;
@@ -1710,6 +1748,7 @@ static int mdss_mdp_probe(struct platform_device *pdev)
 	mdss_res->mdss_util->bus_scale_set_quota = mdss_bus_scale_set_quota;
 	mdss_res->mdss_util->bus_bandwidth_ctrl = mdss_bus_bandwidth_ctrl;
 	mdss_res->mdss_util->panel_intf_type = mdss_panel_intf_type;
+	mdss_res->mdss_util->panel_intf_status = mdss_panel_get_intf_status;
 
 	rc = msm_dss_ioremap_byname(pdev, &mdata->mdss_io, "mdp_phys");
 	if (rc) {
@@ -1826,6 +1865,10 @@ static int mdss_mdp_probe(struct platform_device *pdev)
 	 */
 	mdss_mdp_footswitch_ctrl_splash(true);
 	mdss_hw_init(mdata);
+
+	/* Restoring Secure configuration during boot-up */
+	if (mdss_mdp_req_init_restore_cfg(mdata))
+		__mdss_restore_sec_cfg(mdata);
 
 	if (mdss_has_quirk(mdata, MDSS_QUIRK_BWCPANIC)) {
 		mdata->default_panic_lut0 = readl_relaxed(mdata->mdp_base +
@@ -2003,10 +2046,6 @@ static int mdss_mdp_parse_dt(struct platform_device *pdev)
 		return rc;
 	}
 
-	rc = mdss_mdp_parse_dt_ppb_off(pdev);
-	if (rc)
-		pr_debug("Info in device tree: ppb offset not configured\n");
-
 	rc = mdss_mdp_parse_dt_cdm(pdev);
 	if (rc)
 		pr_debug("CDM offset not found in device tree\n");
@@ -2145,7 +2184,7 @@ static int mdss_mdp_parse_dt_pipe(struct platform_device *pdev)
 	u32 nfids = 0, setup_cnt = 0, len, nxids = 0;
 	u32 *offsets = NULL, *ftch_id = NULL, *xin_id = NULL;
 	u32 sw_reset_offset = 0;
-	u32 data[2];
+	u32 data[4];
 
 	struct mdss_data_type *mdata = platform_get_drvdata(pdev);
 
@@ -2397,15 +2436,17 @@ static int mdss_mdp_parse_dt_pipe(struct platform_device *pdev)
 	}
 
 	len = mdss_mdp_parse_dt_prop_len(pdev, "qcom,mdss-per-pipe-panic-luts");
-	if (len != 2) {
+	if (len != 4) {
 		pr_debug("Unable to read per-pipe-panic-luts\n");
 	} else {
 		rc = mdss_mdp_parse_dt_handler(pdev,
 			"qcom,mdss-per-pipe-panic-luts", data, len);
-		mdata->default_panic_lut_per_pipe = data[0];
-		mdata->default_robust_lut_per_pipe = data[1];
-		pr_debug("per pipe panic lut [0]:0x%x [1]:0x%x\n",
-			data[0], data[1]);
+		mdata->default_panic_lut_per_pipe_linear = data[0];
+		mdata->default_panic_lut_per_pipe_tile = data[1];
+		mdata->default_robust_lut_per_pipe_linear = data[2];
+		mdata->default_robust_lut_per_pipe_tile = data[3];
+		pr_debug("per pipe panic lut [0]:0x%x [1]:0x%x [2]:0x%x [3]:0x%x\n",
+			data[0], data[1], data[2], data[3]);
 	}
 
 	if (mdata->ncursor_pipes) {
@@ -3211,7 +3252,7 @@ static int mdss_mdp_parse_dt_misc(struct platform_device *pdev)
 		pr_debug("Could not read optional property: highest bank bit\n");
 
 	mdata->has_pingpong_split = of_property_read_bool(pdev->dev.of_node,
-		 "qcom,mdss-has-dst-split");
+		 "qcom,mdss-has-pingpong-split");
 
 	if (mdata->has_pingpong_split) {
 		rc = of_property_read_u32(pdev->dev.of_node,
@@ -3223,6 +3264,11 @@ static int mdss_mdp_parse_dt_misc(struct platform_device *pdev)
 		}
 		mdata->slave_pingpong_base = mdata->mdss_io.base +
 			slave_pingpong_off;
+		rc = mdss_mdp_parse_dt_ppb_off(pdev);
+		if (rc) {
+			pr_err("Error in device tree: ppb offset not configured\n");
+			return rc;
+		}
 	}
 
 	/*
@@ -3523,19 +3569,6 @@ struct irq_info *mdss_intr_line()
 	return mdss_mdp_hw.irq_info;
 }
 EXPORT_SYMBOL(mdss_intr_line);
-
-int mdss_panel_get_boot_cfg(void)
-{
-	int rc;
-
-	if (!mdss_res || !mdss_res->pan_cfg.init_done)
-		return -EPROBE_DEFER;
-	if (mdss_res->handoff_pending)
-		rc = 1;
-	else
-		rc = 0;
-	return rc;
-}
 
 int mdss_mdp_wait_for_xin_halt(u32 xin_id, bool is_vbif_nrt)
 {
@@ -4119,12 +4152,17 @@ static int __init mdss_mdp_driver_init(void)
 
 module_param_string(panel, mdss_mdp_panel, MDSS_MAX_PANEL_LEN, 0);
 MODULE_PARM_DESC(panel,
-		"panel=<lk_cfg>:<pan_intf>:<pan_intf_cfg> "
+		"panel=<lk_cfg>:<pan_intf>:<pan_intf_cfg>:<panel_topology_cfg> "
 		"where <lk_cfg> is "1"-lk/gcdb config or "0" non-lk/non-gcdb "
 		"config; <pan_intf> is dsi:<ctrl_id> or hdmi or edp "
 		"<pan_intf_cfg> is panel interface specific string "
 		"Ex: This string is panel's device node name from DT "
 		"for DSI interface "
-		"hdmi/edp interface does not use this string");
+		"hdmi/edp interface does not use this string "
+		"<panel_topology_cfg> is an optional string. Currently it is "
+		"only valid for DSI panels. In dual-DSI case, it needs to be"
+		"used on both panels or none. When used, format is config%d "
+		"where %d is one of the configuration found in device node of "
+		"panel selected by <pan_intf_cfg>");
 
 module_init(mdss_mdp_driver_init);

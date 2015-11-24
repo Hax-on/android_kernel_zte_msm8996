@@ -290,6 +290,11 @@ enum mdss_mdp_sspp_chroma_samp_type {
 #define MDSS_MDP_NUM_WB_MIXERS 2
 #define MDSS_MDP_CTL_X_LAYER_5 0x24
 
+#define MDSS_MDP_INTF_EDP_SEL	(BIT(3) | BIT(1))
+#define MDSS_MDP_INTF_HDMI_SEL	(BIT(25) | BIT(24))
+#define MDSS_MDP_INTF_DSI0_SEL	BIT(8)
+#define MDSS_MDP_INTF_DSI1_SEL	BIT(16)
+
 enum mdss_mdp_mixer_intf_index {
 	MDSS_MDP_INTF_LAYERMIXER0,
 	MDSS_MDP_INTF_LAYERMIXER1,
@@ -653,6 +658,8 @@ enum mdss_mdp_pingpong_index {
 
 #define MDSS_MDP_INTF_MISR_CTRL		0x180
 #define MDSS_MDP_INTF_MISR_SIGNATURE		(MDSS_MDP_INTF_MISR_CTRL + 0x4)
+#define MDSS_MDP_INTF_CMD_MISR_CTRL		(MDSS_MDP_INTF_MISR_CTRL + 0x8)
+#define MDSS_MDP_INTF_CMD_MISR_SIGNATURE	(MDSS_MDP_INTF_MISR_CTRL + 0xC)
 
 #define MDSS_MDP_REG_CDM_CSC_10_OPMODE                  0x000
 #define MDSS_MDP_REG_CDM_CSC_10_BASE                    0x004
@@ -675,6 +682,8 @@ enum mdss_mdp_pingpong_index {
 
 /* Following offsets are with respect to MDP base */
 #define MDSS_MDP_MDP_OUT_CTL_0                          0x410
+#define MDSS_MDP_INTF_CMD_MISR_CTRL		(MDSS_MDP_INTF_MISR_CTRL + 0x8)
+#define MDSS_MDP_INTF_CMD_MISR_SIGNATURE	(MDSS_MDP_INTF_MISR_CTRL + 0xC)
 /* following offsets are with respect to MDP VBIF base */
 #define MMSS_VBIF_CLKON			0x4
 #define MMSS_VBIF_RD_LIM_CONF			0x0B0

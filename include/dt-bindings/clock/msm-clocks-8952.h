@@ -16,6 +16,10 @@
 /* clock_gcc controlled clocks */
 
 /* GPLLs */
+#define clk_gpll0_clk_src_8952			0x1617c790
+#define clk_gpll0_ao_clk_src_8952		0x9b4db4e8
+#define clk_gpll0_clk_src_8937			0x94350fc4
+#define clk_gpll0_ao_clk_src_8937		0x923c7546
 #define clk_gpll0_clk_src			0x5933b69f
 #define clk_gpll0_ao_clk_src			0x6b2fb034
 #define clk_gpll0_out_main			0x850fecec
@@ -236,7 +240,7 @@
 #define clk_gcc_mdss_byte1_clk			0x41f97fd8
 #define clk_gcc_mdss_esc1_clk			0x34653cc7
 #define clk_gcc_dcc_clk				0xd1000c50
-#define clk_gcc_debug_mux_thorium		0x917968c2
+#define clk_gcc_debug_mux_8937			0x917968c2
 
 /* clock_rpm controlled clocks */
 #define clk_pnoc_clk				0xc1296d0f

@@ -722,7 +722,7 @@ static struct msm_vidc_ctrl msm_venc_ctrls[] = {
 		.name = "Extradata Type",
 		.type = V4L2_CTRL_TYPE_MENU,
 		.minimum = V4L2_MPEG_VIDC_EXTRADATA_NONE,
-		.maximum = V4L2_MPEG_VIDC_EXTRADATA_YUV_STATS,
+		.maximum = V4L2_MPEG_VIDC_EXTRADATA_ROI_QP,
 		.default_value = V4L2_MPEG_VIDC_EXTRADATA_NONE,
 		.menu_skip_mask = ~(
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_NONE) |
@@ -743,7 +743,8 @@ static struct msm_vidc_ctrl msm_venc_ctrls[] = {
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_ASPECT_RATIO) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_LTR) |
 			(1 << V4L2_MPEG_VIDC_EXTRADATA_METADATA_MBI) |
-			(1 << V4L2_MPEG_VIDC_EXTRADATA_YUV_STATS)
+			(1 << V4L2_MPEG_VIDC_EXTRADATA_YUV_STATS)|
+			(1 << V4L2_MPEG_VIDC_EXTRADATA_ROI_QP)
 			),
 		.qmenu = mpeg_video_vidc_extradata,
 	},
@@ -1182,6 +1183,17 @@ static struct msm_vidc_ctrl msm_venc_ctrls[] = {
 		.default_value = V4L2_CID_MPEG_VIDC_VIDEO_VENC_BITRATE_ENABLE,
 		.step = 1,
 	},
+	{
+		.id = V4L2_CID_MPEG_VIDC_VIDEO_H264_PIC_ORDER_CNT,
+		.name = "Set H264 Picture Order Count",
+		.type = V4L2_CTRL_TYPE_INTEGER,
+		.minimum = 0,
+		.maximum = 2,
+		.default_value = 0,
+		.step = 2,
+		.qmenu = NULL,
+	},
+
 };
 
 #define NUM_CTRLS ARRAY_SIZE(msm_venc_ctrls)
@@ -1441,6 +1453,7 @@ static int msm_venc_queue_setup(struct vb2_queue *q,
 			case V4L2_MPEG_VIDC_EXTRADATA_DIGITAL_ZOOM:
 			case V4L2_MPEG_VIDC_EXTRADATA_ASPECT_RATIO:
 			case V4L2_MPEG_VIDC_EXTRADATA_YUV_STATS:
+			case V4L2_MPEG_VIDC_EXTRADATA_ROI_QP:
 				*num_planes = *num_planes + 1;
 				break;
 			default:
@@ -2033,6 +2046,7 @@ static int try_set_ctrl(struct msm_vidc_inst *inst, struct v4l2_ctrl *ctrl)
 	int max_hierp_layers;
 	int baselayerid = 0;
 	int frameqp = 0;
+	int pic_order_cnt = 0;
 
 	if (!inst || !inst->core || !inst->core->device) {
 		dprintk(VIDC_ERR, "%s invalid parameters\n", __func__);
@@ -2950,6 +2964,13 @@ static int try_set_ctrl(struct msm_vidc_inst *inst, struct v4l2_ctrl *ctrl)
 		pdata = &enable;
 		break;
 	}
+	case V4L2_CID_MPEG_VIDC_VIDEO_H264_PIC_ORDER_CNT:
+	{
+		property_id = HAL_PARAM_VENC_H264_PIC_ORDER_CNT;
+		pic_order_cnt = ctrl->val;
+		pdata = &pic_order_cnt;
+		break;
+	}
 	default:
 		dprintk(VIDC_ERR, "Unsupported index: %x\n", ctrl->id);
 		rc = -ENOTSUPP;
@@ -3205,15 +3226,6 @@ int msm_venc_inst_init(struct msm_vidc_inst *inst)
 	inst->buffer_mode_set[OUTPUT_PORT] = HAL_BUFFER_MODE_STATIC;
 	inst->buffer_mode_set[CAPTURE_PORT] = HAL_BUFFER_MODE_STATIC;
 	return rc;
-}
-
-int msm_venc_s_ctrl(struct msm_vidc_inst *inst, struct v4l2_control *ctrl)
-{
-	return v4l2_s_ctrl(NULL, &inst->ctrl_handler, ctrl);
-}
-int msm_venc_g_ctrl(struct msm_vidc_inst *inst, struct v4l2_control *ctrl)
-{
-	return v4l2_g_ctrl(&inst->ctrl_handler, ctrl);
 }
 
 int msm_venc_s_ext_ctrl(struct msm_vidc_inst *inst,
@@ -3761,128 +3773,9 @@ int msm_venc_streamoff(struct msm_vidc_inst *inst, enum v4l2_buf_type i)
 	return rc;
 }
 
-static struct v4l2_ctrl **get_super_cluster(struct msm_vidc_inst *inst,
-				int *size)
-{
-	int c = 0, sz = 0;
-	struct v4l2_ctrl **cluster = kmalloc(sizeof(struct v4l2_ctrl *) *
-			NUM_CTRLS, GFP_KERNEL);
-
-	if (!size || !cluster || !inst)
-		return NULL;
-
-	for (c = 0; c < NUM_CTRLS; c++)
-		cluster[sz++] =  inst->ctrls[c];
-
-	*size = sz;
-	return cluster;
-}
-
 int msm_venc_ctrl_init(struct msm_vidc_inst *inst)
 {
-	int idx = 0;
-	struct v4l2_ctrl_config ctrl_cfg = {0};
-	int ret_val = 0;
-	int cluster_size = 0;
-
-	if (!inst) {
-		dprintk(VIDC_ERR, "%s - invalid input\n", __func__);
-		return -EINVAL;
-	}
-
-	inst->ctrls = kzalloc(sizeof(struct v4l2_ctrl *) * NUM_CTRLS,
-				GFP_KERNEL);
-	if (!inst->ctrls) {
-		dprintk(VIDC_ERR, "%s - failed to allocate ctrl\n", __func__);
-		return -ENOMEM;
-	}
-
-	ret_val = v4l2_ctrl_handler_init(&inst->ctrl_handler, NUM_CTRLS);
-	if (ret_val) {
-		dprintk(VIDC_ERR, "CTRL ERR: Control handler init failed, %d\n",
-			inst->ctrl_handler.error);
-		return ret_val;
-	}
-
-	for (; idx < NUM_CTRLS; idx++) {
-		struct v4l2_ctrl *ctrl = NULL;
-		if (IS_PRIV_CTRL(msm_venc_ctrls[idx].id)) {
-			ctrl_cfg.def = msm_venc_ctrls[idx].default_value;
-			ctrl_cfg.flags = 0;
-			ctrl_cfg.id = msm_venc_ctrls[idx].id;
-			ctrl_cfg.max = msm_venc_ctrls[idx].maximum;
-			ctrl_cfg.min = msm_venc_ctrls[idx].minimum;
-			ctrl_cfg.menu_skip_mask =
-				msm_venc_ctrls[idx].menu_skip_mask;
-			ctrl_cfg.name = msm_venc_ctrls[idx].name;
-			ctrl_cfg.ops = &msm_venc_ctrl_ops;
-			ctrl_cfg.step = msm_venc_ctrls[idx].step;
-			ctrl_cfg.type = msm_venc_ctrls[idx].type;
-			ctrl_cfg.qmenu = msm_venc_ctrls[idx].qmenu;
-			ctrl = v4l2_ctrl_new_custom(
-					&inst->ctrl_handler,
-					&ctrl_cfg, NULL);
-		} else {
-			if (msm_venc_ctrls[idx].type == V4L2_CTRL_TYPE_MENU) {
-				ctrl = v4l2_ctrl_new_std_menu(
-					&inst->ctrl_handler,
-					&msm_venc_ctrl_ops,
-					msm_venc_ctrls[idx].id,
-					msm_venc_ctrls[idx].maximum,
-					msm_venc_ctrls[idx].menu_skip_mask,
-					msm_venc_ctrls[idx].default_value);
-			} else {
-				ctrl = v4l2_ctrl_new_std(&inst->ctrl_handler,
-					&msm_venc_ctrl_ops,
-					msm_venc_ctrls[idx].id,
-					msm_venc_ctrls[idx].minimum,
-					msm_venc_ctrls[idx].maximum,
-					msm_venc_ctrls[idx].step,
-					msm_venc_ctrls[idx].default_value);
-			}
-		}
-
-		if (!ctrl) {
-			dprintk(VIDC_ERR, "%s - invalid ctrl : %s\n",
-				ctrl_cfg.name, __func__);
-			return -EINVAL;
-		}
-
-		ret_val = inst->ctrl_handler.error;
-		if (ret_val) {
-			dprintk(VIDC_ERR,
-					"Error adding ctrl (%s) to ctrl handle, %d\n",
-					msm_venc_ctrls[idx].name,
-					inst->ctrl_handler.error);
-			return ret_val;
-		}
-
-		inst->ctrls[idx] = ctrl;
-	}
-
-	/* Construct a super cluster of all controls */
-	inst->cluster = get_super_cluster(inst, &cluster_size);
-	if (!inst->cluster || !cluster_size) {
-		dprintk(VIDC_WARN,
-				"Failed to setup super cluster\n");
-		return -EINVAL;
-	}
-
-	v4l2_ctrl_cluster(cluster_size, inst->cluster);
-
-	return ret_val;
+	return msm_comm_ctrl_init(inst, msm_venc_ctrls,
+			ARRAY_SIZE(msm_venc_ctrls), &msm_venc_ctrl_ops);
 }
 
-int msm_venc_ctrl_deinit(struct msm_vidc_inst *inst)
-{
-	if (!inst) {
-		dprintk(VIDC_ERR, "%s invalid parameters\n", __func__);
-		return -EINVAL;
-	}
-
-	kfree(inst->ctrls);
-	kfree(inst->cluster);
-	v4l2_ctrl_handler_free(&inst->ctrl_handler);
-
-	return 0;
-}

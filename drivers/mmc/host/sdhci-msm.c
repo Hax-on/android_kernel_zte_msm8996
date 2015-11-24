@@ -1432,6 +1432,15 @@ out:
 	return ret;
 }
 
+#ifdef CONFIG_SMP
+static inline void parse_affine_irq(struct sdhci_msm_pltfm_data *pdata)
+{
+	pdata->pm_qos_data.irq_req_type = PM_QOS_REQ_AFFINE_IRQ;
+}
+#else
+static inline void parse_affine_irq(struct sdhci_msm_pltfm_data *pdata) { }
+#endif
+
 static int sdhci_msm_pm_qos_parse_irq(struct device *dev,
 		struct sdhci_msm_pltfm_data *pdata)
 {
@@ -1445,7 +1454,7 @@ static int sdhci_msm_pm_qos_parse_irq(struct device *dev,
 	pdata->pm_qos_data.irq_req_type = PM_QOS_REQ_AFFINE_CORES;
 	if (!of_property_read_string(np, "qcom,pm-qos-irq-type", &str) &&
 		!strcmp(str, "affine_irq")) {
-		pdata->pm_qos_data.irq_req_type = PM_QOS_REQ_AFFINE_IRQ;
+		parse_affine_irq(pdata);
 	}
 
 	/* must specify cpu for "affine_cores" type */
@@ -1737,6 +1746,9 @@ struct sdhci_msm_pltfm_data *sdhci_msm_populate_pdata(struct device *dev,
 		msm_host->mmc->wakeup_on_idle = true;
 
 	sdhci_msm_pm_qos_parse(dev, pdata);
+
+	if (of_get_property(np, "qcom,core_3_0v_support", NULL))
+		pdata->core_3_0v_support = true;
 
 	return pdata;
 out:
@@ -3032,6 +3044,7 @@ void sdhci_msm_dump_vendor_regs(struct sdhci_host *host)
 	if (host->is_crypto_en) {
 		sdhci_msm_ice_get_status(host, &sts);
 		pr_info("%s: ICE status %x\n", mmc_hostname(host->mmc), sts);
+		sdhci_msm_ice_print_regs(host);
 	}
 }
 
@@ -3295,6 +3308,17 @@ out:
 	return count;
 }
 
+#ifdef CONFIG_SMP
+static inline void set_affine_irq(struct sdhci_msm_host *msm_host,
+				struct sdhci_host *host)
+{
+	msm_host->pm_qos_irq.req.irq = host->irq;
+}
+#else
+static inline void set_affine_irq(struct sdhci_msm_host *msm_host,
+				struct sdhci_host *host) { }
+#endif
+
 void sdhci_msm_pm_qos_irq_init(struct sdhci_host *host)
 {
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
@@ -3312,8 +3336,9 @@ void sdhci_msm_pm_qos_irq_init(struct sdhci_host *host)
 	atomic_set(&msm_host->pm_qos_irq.counter, 0);
 	msm_host->pm_qos_irq.req.type =
 			msm_host->pdata->pm_qos_data.irq_req_type;
-	if (msm_host->pm_qos_irq.req.type == PM_QOS_REQ_AFFINE_IRQ)
-		msm_host->pm_qos_irq.req.irq = host->irq;
+	if ((msm_host->pm_qos_irq.req.type != PM_QOS_REQ_AFFINE_CORES) &&
+		(msm_host->pm_qos_irq.req.type != PM_QOS_REQ_ALL_CORES))
+		set_affine_irq(msm_host, host);
 	else
 		cpumask_copy(&msm_host->pm_qos_irq.req.cpus_affine,
 			cpumask_of(msm_host->pdata->pm_qos_data.irq_cpu));
@@ -3723,6 +3748,14 @@ static void sdhci_set_default_hw_caps(struct sdhci_msm_host *msm_host,
 				(minor == 0x49)))
 		msm_host->use_14lpp_dll = true;
 
+	/* Fake 3.0V support for SDIO devices which requires such voltage */
+	if (msm_host->pdata->core_3_0v_support) {
+		caps |= CORE_3_0V_SUPPORT;
+			writel_relaxed(
+			(readl_relaxed(host->ioaddr + SDHCI_CAPABILITIES) |
+			caps), host->ioaddr + CORE_VENDOR_SPEC_CAPABILITIES0);
+	}
+
 	if ((major == 1) && (minor >= 0x49))
 		msm_host->rclk_delay_fix = true;
 	/*
@@ -3792,6 +3825,8 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	int ret = 0, dead = 0;
 	u16 host_version;
 	u32 irq_status, irq_ctl;
+	struct resource *tlmm_memres = NULL;
+	void __iomem *tlmm_mem;
 
 	pr_debug("%s: Enter %s\n", dev_name(&pdev->dev), __func__);
 	msm_host = devm_kzalloc(&pdev->dev, sizeof(struct sdhci_msm_host),
@@ -3987,6 +4022,22 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Failed to remap registers\n");
 		ret = -ENOMEM;
 		goto vreg_deinit;
+	}
+
+	tlmm_memres = platform_get_resource_byname(pdev,
+				IORESOURCE_MEM, "tlmm_mem");
+	if (tlmm_memres) {
+		tlmm_mem = devm_ioremap(&pdev->dev, tlmm_memres->start,
+						resource_size(tlmm_memres));
+
+		if (!tlmm_mem) {
+			dev_err(&pdev->dev, "Failed to remap tlmm registers\n");
+			ret = -ENOMEM;
+			goto vreg_deinit;
+		}
+		writel_relaxed(readl_relaxed(tlmm_mem) | 0x2, tlmm_mem);
+		dev_dbg(&pdev->dev, "tlmm reg %pa value 0x%08x\n",
+				&tlmm_memres->start, readl_relaxed(tlmm_mem));
 	}
 
 	/*
@@ -4294,6 +4345,12 @@ static int sdhci_msm_runtime_suspend(struct device *dev)
 	ktime_t start = ktime_get();
 	int ret;
 
+	if (host->mmc->card && mmc_card_sdio(host->mmc->card)) {
+		if (mmc_enable_qca6574_settings(host->mmc->card) ||
+				mmc_enable_qca9377_settings(host->mmc->card))
+			return 0;
+	}
+
 	disable_irq(host->irq);
 	disable_irq(msm_host->pwr_irq);
 
@@ -4325,6 +4382,13 @@ static int sdhci_msm_runtime_resume(struct device *dev)
 	struct sdhci_msm_host *msm_host = pltfm_host->priv;
 	ktime_t start = ktime_get();
 	int ret;
+
+	if (host->mmc->card && mmc_card_sdio(host->mmc->card)) {
+		if (mmc_enable_qca6574_settings(host->mmc->card) ||
+				mmc_enable_qca9377_settings(host->mmc->card))
+			return 0;
+	}
+
 
 	if (host->is_crypto_en) {
 		ret = sdhci_msm_enable_controller_clock(host);

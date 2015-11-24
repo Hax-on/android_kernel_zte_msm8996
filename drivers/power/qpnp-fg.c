@@ -60,6 +60,7 @@
 #define NO_OTP_PROF_RELOAD	BIT(6)
 #define REDO_FIRST_ESTIMATE	BIT(3)
 #define RESTART_GO		BIT(0)
+#define THERM_DELAY_MASK	0xE0
 
 /* SUBTYPE definitions */
 #define FG_SOC			0x9
@@ -87,6 +88,12 @@ enum {
 	FG_STATUS			= BIT(6), /* Show FG status changes */
 	FG_AGING			= BIT(7), /* Show FG aging algorithm */
 };
+
+/* PMIC REVISIONS */
+#define REVID_RESERVED			0
+#define REVID_VARIANT			1
+#define REVID_ANA_MAJOR			2
+#define REVID_DIG_MAJOR			3
 
 enum dig_major {
 	DIG_REV_1 = 0x1,
@@ -194,6 +201,7 @@ enum fg_mem_setting_index {
 	FG_MEM_SOC_MAX,
 	FG_MEM_SOC_MIN,
 	FG_MEM_BATT_LOW,
+	FG_MEM_THERM_DELAY,
 	FG_MEM_SETTING_MAX,
 };
 
@@ -240,6 +248,7 @@ static struct fg_mem_setting settings[FG_MEM_SETTING_MAX] = {
 	SETTING(SOC_MAX,	 0x458,   1,      85),
 	SETTING(SOC_MIN,	 0x458,   2,      15),
 	SETTING(BATT_LOW,	 0x458,   0,      4200),
+	SETTING(THERM_DELAY,	 0x4AC,   3,      0),
 };
 
 #define DATA(_idx, _address, _offset, _length,  _value)	\
@@ -394,7 +403,7 @@ struct fg_chip {
 	struct device		*dev;
 	struct spmi_device	*spmi;
 	u8			pmic_subtype;
-	u8			pmic_revision;
+	u8			pmic_revision[4];
 	u8			revision[4];
 	u16			soc_base;
 	u16			batt_base;
@@ -1039,6 +1048,7 @@ out:
 	return rc;
 }
 
+#define MEM_INTF_IMA_CFG		0x52
 #define MEM_INTF_IMA_OPR_STS		0x54
 #define MEM_INTF_IMA_ERR_STS		0x5F
 #define MEM_INTF_IMA_EXP_STS		0x55
@@ -1073,15 +1083,15 @@ static int fg_check_ima_exception(struct fg_chip *chip)
 		rc = err_sts;
 
 		/* clear the error */
-		ret |= fg_masked_write(chip, MEM_INTF_CFG(chip), IMA_IACS_CLR,
-							IMA_IACS_CLR, 1);
+		ret |= fg_masked_write(chip, chip->mem_base + MEM_INTF_IMA_CFG,
+					IMA_IACS_CLR, IMA_IACS_CLR, 1);
 		temp = 0x4;
 		ret |= fg_write(chip, &temp, MEM_INTF_ADDR_LSB(chip) + 1, 1);
 		temp = 0x0;
 		ret |= fg_write(chip, &temp, MEM_INTF_WR_DATA0(chip) + 3, 1);
 		ret |= fg_read(chip, &temp, MEM_INTF_RD_DATA0(chip) + 3, 1);
-		ret |= fg_masked_write(chip, MEM_INTF_CFG(chip),
-						IMA_IACS_CLR, 0, 1);
+		ret |= fg_masked_write(chip, chip->mem_base + MEM_INTF_IMA_CFG,
+					IMA_IACS_CLR, 0, 1);
 		if (!ret)
 			return -EAGAIN;
 		else
@@ -1117,6 +1127,8 @@ static int fg_check_iacs_ready(struct fg_chip *chip)
 
 	if (!timeout || rc) {
 		pr_err("IACS_RDY not set\n");
+		/* perform IACS_CLR sequence */
+		fg_check_ima_exception(chip);
 		return -EBUSY;
 	}
 
@@ -1368,7 +1380,8 @@ retry:
 		pr_info("Start beat_count = %x End beat_count = %x\n",
 				start_beat_count, end_beat_count);
 	if (start_beat_count != end_beat_count) {
-		pr_err("Beat count do not match - retry transaction\n");
+		if (fg_debug_mask & FG_MEM_DEBUG_READS)
+			pr_info("Beat count do not match - retry transaction\n");
 		goto retry;
 	}
 out:
@@ -1507,6 +1520,19 @@ static u8 batt_to_setpoint_8b(int vbatt_mv)
 	/* Battery voltage is an offset from 2.5 V and LSB is 5/2^9. */
 	val = (vbatt_mv - 2500) * 512 / 1000;
 	return DIV_ROUND_CLOSEST(val, 5);
+}
+
+static u8 therm_delay_to_setpoint(u32 delay_us)
+{
+	u8 val;
+
+	if (delay_us < 2560)
+		val = 0;
+	else if (delay_us > 163840)
+		val = 7;
+	else
+		val = ilog2(delay_us / 10) - 7;
+	return val << 5;
 }
 
 static int get_current_time(unsigned long *now_tm_sec)
@@ -5052,6 +5078,7 @@ static int fg_of_init(struct fg_chip *chip)
 	OF_READ_SETTING(FG_MEM_SOC_MAX, "fg-soc-max", rc, 1);
 	OF_READ_SETTING(FG_MEM_SOC_MIN, "fg-soc-min", rc, 1);
 	OF_READ_SETTING(FG_MEM_BATT_LOW, "fg-vbatt-low-threshold", rc, 1);
+	OF_READ_SETTING(FG_MEM_THERM_DELAY, "fg-therm-delay-us", rc, 1);
 	OF_READ_PROPERTY(chip->learning_data.max_increment,
 			"cl-max-increment-deciperc", rc, 5);
 	OF_READ_PROPERTY(chip->learning_data.max_decrement,
@@ -5871,6 +5898,15 @@ static int fg_common_hw_init(struct fg_chip *chip)
 		return rc;
 	}
 
+	rc = fg_mem_masked_write(chip, settings[FG_MEM_THERM_DELAY].address,
+		THERM_DELAY_MASK,
+		therm_delay_to_setpoint(settings[FG_MEM_THERM_DELAY].value),
+		settings[FG_MEM_THERM_DELAY].offset);
+	if (rc) {
+		pr_err("failed to write therm_delay rc=%d\n", rc);
+		return rc;
+	}
+
 	if (chip->use_thermal_coefficients) {
 		fg_mem_write(chip, chip->thermal_coefficients,
 			THERMAL_COEFF_ADDR, THERMAL_COEFF_N_BYTES,
@@ -5950,6 +5986,36 @@ static int fg_8994_hw_init(struct fg_chip *chip)
 	return 0;
 }
 
+#define FG_USBID_CONFIG_OFFSET		0x2
+#define DISABLE_USBID_DETECT_BIT	BIT(0)
+static int fg_8996_hw_init(struct fg_chip *chip)
+{
+	int rc;
+
+	rc = fg_mem_masked_write(chip, FG_ADC_CONFIG_REG,
+			BCL_FORCED_HPM_IN_CHARGE,
+			BCL_FORCED_HPM_IN_CHARGE,
+			FG_BCL_CONFIG_OFFSET);
+	if (rc) {
+		pr_err("failed to force hpm in charge rc=%d\n", rc);
+		return rc;
+	}
+
+	/* enable usbid conversions for PMi8996 V1.0 */
+	if (chip->pmic_revision[REVID_DIG_MAJOR] == 1
+			&& chip->pmic_revision[REVID_ANA_MAJOR] == 0) {
+		rc = fg_mem_masked_write(chip, FG_ADC_CONFIG_REG,
+				DISABLE_USBID_DETECT_BIT,
+				0, FG_USBID_CONFIG_OFFSET);
+		if (rc) {
+			pr_err("failed to enable usbid conversions: %d\n", rc);
+			return rc;
+		}
+	}
+
+	return rc;
+}
+
 static int fg_8950_hw_init(struct fg_chip *chip)
 {
 	int rc;
@@ -5981,12 +6047,20 @@ static int fg_hw_init(struct fg_chip *chip)
 		chip->wa_flag |= PULSE_REQUEST_WA;
 		break;
 	case PMI8996:
+		rc = fg_8996_hw_init(chip);
+		/* Setup workaround flag based on PMIC type */
+		if (fg_sense_type == INTERNAL_CURRENT_SENSE)
+			chip->wa_flag |= IADC_GAIN_COMP_WA;
+		if (chip->pmic_revision[REVID_DIG_MAJOR] > 1)
+			chip->wa_flag |= USE_CC_SOC_REG;
+
+		break;
 	case PMI8950:
 		rc = fg_8950_hw_init(chip);
 		/* Setup workaround flag based on PMIC type */
 		if (fg_sense_type == INTERNAL_CURRENT_SENSE)
 			chip->wa_flag |= IADC_GAIN_COMP_WA;
-		if (chip->pmic_revision > 1)
+		if (chip->pmic_revision[REVID_DIG_MAJOR] > 1)
 			chip->wa_flag |= USE_CC_SOC_REG;
 
 		break;
@@ -6076,7 +6150,10 @@ static int fg_detect_pmic_type(struct fg_chip *chip)
 	case PMI8950:
 	case PMI8996:
 		chip->pmic_subtype = pmic_rev_id->pmic_subtype;
-		chip->pmic_revision = pmic_rev_id->rev4;
+		chip->pmic_revision[REVID_RESERVED]	= pmic_rev_id->rev1;
+		chip->pmic_revision[REVID_VARIANT]	= pmic_rev_id->rev2;
+		chip->pmic_revision[REVID_ANA_MAJOR]	= pmic_rev_id->rev3;
+		chip->pmic_revision[REVID_DIG_MAJOR]	= pmic_rev_id->rev4;
 		break;
 	default:
 		pr_err("PMIC subtype %d not supported\n",

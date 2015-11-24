@@ -225,6 +225,7 @@ int set_l2_mode(struct low_power_ops *ops, int mode, bool notify_rpm)
 		coresight_cti_ctx_restore();
 
 	switch (mode) {
+	case MSM_SPM_MODE_STANDALONE_POWER_COLLAPSE:
 	case MSM_SPM_MODE_POWER_COLLAPSE:
 	case MSM_SPM_MODE_FASTPC:
 		cpu_ops->tz_flag = MSM_SCM_L2_OFF;
@@ -259,6 +260,7 @@ int set_l3_mode(struct low_power_ops *ops, int mode, bool notify_rpm)
 			smp_processor_id())->lpm_dev;
 
 	switch (mode) {
+	case MSM_SPM_MODE_STANDALONE_POWER_COLLAPSE:
 	case MSM_SPM_MODE_POWER_COLLAPSE:
 	case MSM_SPM_MODE_FASTPC:
 		cpu_ops->tz_flag |= MSM_SCM_L3_PC_OFF;
@@ -878,12 +880,15 @@ static int lpm_cpuidle_enter(struct cpuidle_device *dev,
 	if (need_resched() || (idx < 0))
 		goto exit;
 
-	if (idx > 0 && !use_psci) {
-		update_debug_pc_event(CPU_ENTER, idx, 0xdeaffeed, 0xdeaffeed,
-					true);
-	    success = zte_msm_cpu_pm_enter_sleep(cluster->cpu->levels[idx].mode, true);//zte_pm_liyf	
-		update_debug_pc_event(CPU_EXIT, idx, success, 0xdeaffeed,
-					true);
+	if (!use_psci) {
+		if (idx > 0)
+			update_debug_pc_event(CPU_ENTER, idx, 0xdeaffeed,0xdeaffeed, true);
+
+		success = zte_msm_cpu_pm_enter_sleep(cluster->cpu->levels[idx].mode, true);//zte_pm_liyf
+
+		if (idx > 0)
+			update_debug_pc_event(CPU_EXIT, idx, success,0xdeaffeed, true);
+
 	} else {
 		success = psci_enter_sleep(cluster, idx, true);
 	}

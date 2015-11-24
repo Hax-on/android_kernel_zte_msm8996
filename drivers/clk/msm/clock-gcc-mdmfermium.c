@@ -113,7 +113,7 @@ static struct alpha_pll_clk a7sspll = {
 		.parent = &xo_a_clk_src.c,
 		.dbg_name = "a7sspll",
 		.ops = &clk_ops_dyna_alpha_pll,
-		VDD_STROMER_FMAX_MAP1(LOW, 140000000),
+		VDD_STROMER_FMAX_MAP1(LOW, 1400000000),
 		CLK_INIT(a7sspll.c),
 	},
 };
@@ -185,7 +185,7 @@ static struct pll_vote_clk gpll1_clk_src = {
 };
 
 static struct clk_freq_tbl ftbl_apss_ahb_clk_src[] = {
-	F(  19200000,             xo,    1,    0,     0),
+	F(  19200000,           xo_a,    1,    0,     0),
 	F(  50000000,          gpll0,   16,    0,     0),
 	F( 100000000,          gpll0,    8,    0,     0),
 	F_END
@@ -213,6 +213,8 @@ static struct clk_freq_tbl ftbl_emac_0_125m_clk_src[] = {
 static struct rcg_clk emac_0_125m_clk_src = {
 	.cmd_rcgr_reg = EMAC_0_125M_CMD_RCGR,
 	.current_freq = ftbl_emac_0_125m_clk_src,
+	.set_rate = set_rate_hid,
+	.freq_tbl = ftbl_emac_0_125m_clk_src,
 	.base = &virt_bases[GCC_BASE],
 	.c = {
 		.dbg_name = "emac_0_125m_clk_src",
@@ -224,12 +226,15 @@ static struct rcg_clk emac_0_125m_clk_src = {
 
 static struct clk_freq_tbl ftbl_emac_0_sys_25m_clk_src[] = {
 	F(      19200000,                   xo,    1,    0,     0),
+	F_EXT(	25000000,      emac_0_125m_clk,    5,    0,     0),
 	F_EXT( 125000000,      emac_0_125m_clk,    1,    0,     0),
 	F_END
 };
 static struct rcg_clk emac_0_sys_25m_clk_src = {
 	.cmd_rcgr_reg = EMAC_0_SYS_25M_CMD_RCGR,
 	.current_freq = ftbl_emac_0_sys_25m_clk_src,
+	.set_rate = set_rate_hid,
+	.freq_tbl = ftbl_emac_0_sys_25m_clk_src,
 	.base = &virt_bases[GCC_BASE],
 	.c = {
 		.dbg_name = "emac_0_sys_25m_clk_src",
@@ -247,6 +252,8 @@ static struct clk_freq_tbl ftbl_emac_0_tx_clk_src[] = {
 static struct rcg_clk emac_0_tx_clk_src = {
 	.cmd_rcgr_reg = EMAC_0_TX_CMD_RCGR,
 	.current_freq = ftbl_emac_0_tx_clk_src,
+	.set_rate = set_rate_hid,
+	.freq_tbl = ftbl_emac_0_tx_clk_src,
 	.base = &virt_bases[GCC_BASE],
 	.c = {
 		.dbg_name = "emac_0_tx_clk_src",
@@ -702,7 +709,7 @@ static struct clk_freq_tbl ftbl_sdcc_apps_clk[] = {
 
 static struct rcg_clk sdcc1_apps_clk_src = {
 	.cmd_rcgr_reg = SDCC1_APPS_CMD_RCGR,
-	.set_rate = set_rate_hid,
+	.set_rate = set_rate_mnd,
 	.freq_tbl = ftbl_sdcc_apps_clk,
 	.current_freq = &rcg_dummy_freq,
 	.base = &virt_bases[GCC_BASE],
@@ -716,7 +723,7 @@ static struct rcg_clk sdcc1_apps_clk_src = {
 
 static struct rcg_clk sdcc2_apps_clk_src = {
 	.cmd_rcgr_reg = SDCC2_APPS_CMD_RCGR,
-	.set_rate = set_rate_hid,
+	.set_rate = set_rate_mnd,
 	.freq_tbl = ftbl_sdcc_apps_clk,
 	.current_freq = &rcg_dummy_freq,
 	.base = &virt_bases[GCC_BASE],
@@ -1291,7 +1298,7 @@ static struct branch_clk gcc_sdcc2_apps_clk = {
 
 static struct branch_clk gcc_emac_0_125m_clk = {
 	.cbcr_reg = EMAC_0_125M_CBCR,
-	.has_sibling = 1,
+	.has_sibling = 0,
 	.base = &virt_bases[GCC_BASE],
 	.c = {
 		.dbg_name = "gcc_emac_0_125m_clk",
@@ -1405,6 +1412,7 @@ static struct branch_clk gcc_usb_hs_ahb_clk = {
 
 static struct branch_clk gcc_usb_hs_system_clk = {
 	.cbcr_reg = USB_HS_SYSTEM_CBCR,
+	.bcr_reg = USB_HS_BCR,
 	.has_sibling = 0,
 	.base = &virt_bases[GCC_BASE],
 	.c = {
@@ -1463,6 +1471,7 @@ static struct branch_clk gcc_usb_hsic_io_cal_sleep_clk = {
 
 static struct branch_clk gcc_usb_hsic_system_clk = {
 	.cbcr_reg = USB_HSIC_SYSTEM_CBCR,
+	.bcr_reg  = USB_HS_HSIC_BCR,
 	.has_sibling = 0,
 	.base = &virt_bases[GCC_BASE],
 	.c = {
@@ -1501,30 +1510,6 @@ static struct measure_clk apc0_m_clk = {
 	},
 };
 
-static struct measure_clk apc1_m_clk = {
-	.c = {
-		.ops = &clk_ops_empty,
-		.dbg_name = "apc1_m_clk",
-		CLK_INIT(apc1_m_clk.c),
-	},
-};
-
-static struct measure_clk apc2_m_clk = {
-	.c = {
-		.ops = &clk_ops_empty,
-		.dbg_name = "apc2_m_clk",
-		CLK_INIT(apc2_m_clk.c),
-	},
-};
-
-static struct measure_clk apc3_m_clk = {
-	.c = {
-		.ops = &clk_ops_empty,
-		.dbg_name = "apc3_m_clk",
-		CLK_INIT(apc3_m_clk.c),
-	},
-};
-
 static struct measure_clk l2_m_clk = {
 	.c = {
 		.ops = &clk_ops_empty,
@@ -1535,52 +1520,13 @@ static struct measure_clk l2_m_clk = {
 
 static void __iomem *meas_base;
 
-static struct mux_clk apss_debug_ter_mux = {
-	.ops = &mux_reg_ops,
-	.mask = 0x3,
-	.shift = 8,
-	MUX_SRC_LIST(
-		{&apc0_m_clk.c, 0},
-		{&apc1_m_clk.c, 1},
-		{&apc2_m_clk.c, 2},
-		{&apc3_m_clk.c, 3},
-	),
-	.base = &meas_base,
-	.c = {
-		.dbg_name = "apss_debug_ter_mux",
-		.ops = &clk_ops_gen_mux,
-		CLK_INIT(apss_debug_ter_mux.c),
-	},
-};
-
-static struct mux_clk apss_debug_sec_mux = {
-	.ops = &mux_reg_ops,
-	.mask = 0x7,
-	.shift = 12,
-	MUX_SRC_LIST(
-		{&apss_debug_ter_mux.c, 0},
-		{&l2_m_clk.c, 1},
-	),
-	MUX_REC_SRC_LIST(
-		&apss_debug_ter_mux.c,
-	),
-	.base = &meas_base,
-	.c = {
-		.dbg_name = "apss_debug_sec_mux",
-		.ops = &clk_ops_gen_mux,
-		CLK_INIT(apss_debug_sec_mux.c),
-	},
-};
-
 static struct mux_clk apss_debug_pri_mux = {
 	.ops = &mux_reg_ops,
-	.mask = 0x3,
-	.shift = 16,
+	.mask = 0x7,
+	.shift = 3,
 	MUX_SRC_LIST(
-		{&apss_debug_sec_mux.c, 0},
-	),
-	MUX_REC_SRC_LIST(
-		&apss_debug_sec_mux.c,
+		{&apc0_m_clk.c, 3},
+		{&l2_m_clk.c, 2},
 	),
 	.base = &meas_base,
 	.c = {
@@ -1590,7 +1536,20 @@ static struct mux_clk apss_debug_pri_mux = {
 	},
 };
 
-static struct clk_ops clk_ops_debug_mux;
+static int  gcc_set_mux_sel(struct mux_clk *clk, int sel)
+{
+	u32 regval;
+
+	regval = readl_relaxed(GCC_REG_BASE(GCC_DEBUG_CLK_CTL));
+	regval &= 0x1FF;
+	writel_relaxed(regval, GCC_REG_BASE(GCC_DEBUG_CLK_CTL));
+
+	if (sel == 0xFFFF)
+		return 0;
+	mux_reg_ops.set_mux_sel(clk, sel);
+
+	return 0;
+}
 
 static struct measure_clk_data debug_mux_priv = {
 	.cxo = &xo_clk_src.c,
@@ -1601,10 +1560,11 @@ static struct measure_clk_data debug_mux_priv = {
 	.status_reg = CLOCK_FRQ_MEASURE_STATUS,
 	.base = &virt_bases[DEBUG_BASE],
 };
-
+static struct clk_ops clk_ops_debug_mux;
+static struct clk_mux_ops gcc_debug_mux_ops;
 static struct mux_clk gcc_debug_mux = {
 	.priv = &debug_mux_priv,
-	.ops = &mux_reg_ops,
+	.ops = &gcc_debug_mux_ops,
 	.offset = GCC_DEBUG_CLK_CTL,
 	.mask = 0x1FF,
 	.en_offset = GCC_DEBUG_CLK_CTL,
@@ -1912,9 +1872,6 @@ static struct clk_lookup msm_clocks_measure[] = {
 	CLK_LOOKUP_OF("measure", gcc_debug_mux, "debug"),
 	CLK_LIST(apss_debug_pri_mux),
 	CLK_LIST(apc0_m_clk),
-	CLK_LIST(apc1_m_clk),
-	CLK_LIST(apc2_m_clk),
-	CLK_LIST(apc3_m_clk),
 	CLK_LIST(l2_m_clk),
 };
 
@@ -1925,6 +1882,10 @@ static int msm_clock_debug_probe(struct platform_device *pdev)
 
 	clk_ops_debug_mux = clk_ops_gen_mux;
 	clk_ops_debug_mux.get_rate = measure_get_rate;
+
+	gcc_debug_mux_ops = mux_reg_ops;
+	gcc_debug_mux_ops.set_mux_sel = gcc_set_mux_sel;
+
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "cc_base");
 	if (!res) {

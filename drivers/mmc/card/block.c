@@ -2900,7 +2900,7 @@ static void mmc_blk_cmdq_shutdown(struct mmc_queue *mq)
 	err = mmc_cmdq_halt(host, true);
 	if (err) {
 		pr_err("%s: halt: failed: %d\n", __func__, err);
-		return;
+		goto out;
 	}
 
 	/* disable CQ mode in card */
@@ -3115,8 +3115,6 @@ out:
 	if (!ctx_info->active_reqs)
 		wake_up_interruptible(&host->cmdq_ctx.queue_empty_wq);
 
-	if (blk_queue_stopped(mq->queue) && !ctx_info->active_reqs)
-		complete(&mq->cmdq_shutdown_complete);
 	return;
 }
 

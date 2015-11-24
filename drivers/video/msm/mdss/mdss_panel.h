@@ -14,6 +14,7 @@
 #ifndef MDSS_PANEL_H
 #define MDSS_PANEL_H
 
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/stringify.h>
 #include <linux/types.h>
@@ -197,6 +198,7 @@ struct mdss_intf_recovery {
  *				- 1 clock enable
  * @MDSS_EVENT_DSI_CMDLIST_KOFF: acquire dsi_mdp_busy lock before kickoff.
  * @MDSS_EVENT_ENABLE_PARTIAL_ROI: Event to update ROI of the panel.
+ * @MDSS_EVENT_DSC_PPS_SEND: Event to send DSC PPS command to panel.
  * @MDSS_EVENT_DSI_STREAM_SIZE: Event to update DSI controller's stream size
  * @MDSS_EVENT_DSI_UPDATE_PANEL_DATA: Event to update the dsi driver structures
  *				based on the dsi mode passed as argument.
@@ -238,6 +240,7 @@ enum mdss_intf_events {
 	MDSS_EVENT_PANEL_CLK_CTRL,
 	MDSS_EVENT_DSI_CMDLIST_KOFF,
 	MDSS_EVENT_ENABLE_PARTIAL_ROI,
+	MDSS_EVENT_DSC_PPS_SEND,
 	MDSS_EVENT_DSI_STREAM_SIZE,
 	MDSS_EVENT_DSI_UPDATE_PANEL_DATA,
 	MDSS_EVENT_REGISTER_RECOVERY_HANDLER,
@@ -424,8 +427,6 @@ enum {
 };
 
 struct dsc_desc {
-	int ich_reset_value;
-	int ich_reset_override;
 	int initial_lines;
 	int slice_last_group_size;
 	int bpp;	/* target bit per pixel */
@@ -444,6 +445,7 @@ struct dsc_desc {
 	int slice_height;
 	int slice_width;
 	int chunk_size;
+	int full_frame_slices; /* denotes number of slice in full frame */
 
 	int pkt_per_line;
 	int bytes_in_slice;
@@ -550,7 +552,17 @@ struct mdss_panel_info {
 	bool panel_ack_disabled;
 	bool esd_check_enabled;
 	char dfps_update;
+	/* new requested fps before it is updated in hw */
 	int new_fps;
+	/* stores initial fps after boot */
+	u32 default_fps;
+	/* stores initial vtotal (vfp-method) or htotal (hfp-method) */
+	u32 saved_total;
+	/* stores initial vfp (vfp-method) or hfp (hfp-method) */
+	u32 saved_fporch;
+	/* current fps, once is programmed in hw */
+	int current_fps;
+
 	int panel_max_fps;
 	int panel_max_vtotal;
 	u32 mode_gpio_state;
@@ -581,6 +593,7 @@ struct mdss_panel_info {
 	bool dynamic_switch_pending;
 	bool is_lpm_mode;
 	bool is_split_display; /* two DSIs in one display, pp split or not */
+	bool use_pingpong_split;
 
 	/*
 	 * index[0] = left layer mixer, value of 0 not valid
@@ -655,7 +668,7 @@ struct mdss_panel_timing {
 
 	u32 lm_widths[2];
 
-	u32 clk_rate;
+	u64 clk_rate;
 	char frame_rate;
 
 	u8 dsc_enc_total;
@@ -689,6 +702,7 @@ struct mdss_panel_data {
 	struct mdss_panel_timing *current_timing;
 	bool active;
 
+	struct device_node *cfg_np; /* NULL if config node is not present */
 	struct mdss_panel_data *next;
 };
 
@@ -879,16 +893,6 @@ static inline bool mdss_panel_is_power_on_ulp(int panel_power_state)
  * controller.
  */
 struct mdss_panel_cfg *mdss_panel_intf_type(int intf_val);
-
-/**
- * mdss_panel_get_boot_cfg() - checks if bootloader config present
- *
- * Function returns true if bootloader has configured the parameters
- * for primary controller and panel config data.
- *
- * returns true if bootloader configured, else false
- */
-int mdss_panel_get_boot_cfg(void);
 
 /**
  * mdss_is_ready() - checks if mdss is probed and ready

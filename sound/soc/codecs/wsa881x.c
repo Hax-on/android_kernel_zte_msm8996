@@ -35,6 +35,8 @@
 #include "wsa881x.h"
 #include "wsa881x-temp-sensor.h"
 
+#define WSA881X_NUM_RETRY	5
+
 enum {
 	G_18DB = 0,
 	G_16P5DB,
@@ -794,12 +796,15 @@ static int wsa881x_spkr_pa_event(struct snd_soc_dapm_widget *w,
 		break;
 	case SND_SOC_DAPM_POST_PMU:
 		if (WSA881X_IS_2_0(wsa881x->version)) {
-			/*
-			 * 1ms delay is needed before change in gain as per
-			 * HW requirement.
-			 */
-			usleep_range(1000, 1010);
-			wsa881x_ramp_pa_gain(codec, G_13P5DB, G_18DB, 1000);
+			if (!wsa881x->comp_enable) {
+				/*
+				 * 1ms delay is needed before change in gain
+				 * as per HW requirement.
+				 */
+				usleep_range(1000, 1010);
+				wsa881x_ramp_pa_gain(codec, G_13P5DB, G_18DB,
+						     1000);
+			}
 		} else {
 			/*
 			 * 710us delay is needed after PA enable as per
@@ -809,12 +814,15 @@ static int wsa881x_spkr_pa_event(struct snd_soc_dapm_widget *w,
 			regmap_multi_reg_write(wsa881x->regmap,
 					       wsa881x_post_pmu_pa,
 					       ARRAY_SIZE(wsa881x_post_pmu_pa));
-			/*
-			 * 1ms delay is needed before change in gain as per
-			 * HW requirement.
-			 */
-			usleep_range(1000, 1010);
-			wsa881x_ramp_pa_gain(codec, G_12DB, G_13P5DB, 1000);
+			if (!wsa881x->comp_enable) {
+				/*
+				 * 1ms delay is needed before change in gain
+				 * as per HW requirement.
+				 */
+				usleep_range(1000, 1010);
+				wsa881x_ramp_pa_gain(codec, G_12DB, G_13P5DB,
+						     1000);
+			}
 			snd_soc_update_bits(codec, WSA881X_ADC_SEL_IBIAS,
 					    0x70, 0x40);
 		}
@@ -983,7 +991,13 @@ static int32_t wsa881x_temp_reg_read(struct snd_soc_codec *codec,
 			return -EINVAL;
 		}
 	}
-	regcache_sync(wsa881x->regmap);
+	mutex_lock(&wsa881x->res_lock);
+	if (!wsa881x->clk_cnt) {
+		regcache_mark_dirty(wsa881x->regmap);
+		regcache_sync(wsa881x->regmap);
+	}
+	mutex_unlock(&wsa881x->res_lock);
+
 	wsa881x_resource_acquire(codec, ENABLE);
 
 	if (WSA881X_IS_2_0(wsa881x->version)) {
@@ -1254,6 +1268,7 @@ static int wsa881x_swr_down(struct swr_device *pdev)
 		dev_err(&pdev->dev, "%s: wsa881x is NULL\n", __func__);
 		return -EINVAL;
 	}
+	cancel_delayed_work_sync(&wsa881x->ocp_ctl_work);
 	ret = wsa881x_gpio_ctrl(wsa881x, false);
 	if (ret)
 		dev_err(&pdev->dev, "%s: Failed to disable gpio\n", __func__);
@@ -1266,6 +1281,8 @@ static int wsa881x_swr_down(struct swr_device *pdev)
 static int wsa881x_swr_reset(struct swr_device *pdev)
 {
 	struct wsa881x_priv *wsa881x;
+	u8 retry = WSA881X_NUM_RETRY;
+	u8 devnum = 0;
 
 	wsa881x = swr_get_dev_data(pdev);
 	if (!wsa881x) {
@@ -1274,6 +1291,10 @@ static int wsa881x_swr_reset(struct swr_device *pdev)
 	}
 	wsa881x->bg_cnt = 0;
 	wsa881x->clk_cnt = 0;
+	while (swr_get_logical_dev_num(pdev, pdev->addr, &devnum) && retry--) {
+		/* Retry after 1 msec delay */
+		usleep_range(1000, 1100);
+	}
 	regcache_mark_dirty(wsa881x->regmap);
 	regcache_sync(wsa881x->regmap);
 	return 0;

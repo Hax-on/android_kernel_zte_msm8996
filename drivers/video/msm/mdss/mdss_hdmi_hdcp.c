@@ -167,8 +167,9 @@ static void hdmi_hdcp_hw_ddc_clean(struct hdmi_hdcp_ctrl *hdcp_ctrl)
 {
 	struct dss_io_data *io = NULL;
 	u32 hdcp_ddc_status, ddc_hw_status;
-	u32 ddc_xfer_done, ddc_xfer_req, ddc_hw_done;
-	u32 ddc_hw_not_ready;
+	u32 ddc_xfer_done, ddc_xfer_req;
+	u32 ddc_hw_req, ddc_hw_not_idle;
+	bool ddc_hw_not_ready, xfer_not_done, hw_not_done;
 	u32 timeout_count;
 
 	if (!hdcp_ctrl || !hdcp_ctrl->init_data.core_io) {
@@ -182,27 +183,33 @@ static void hdmi_hdcp_hw_ddc_clean(struct hdmi_hdcp_ctrl *hdcp_ctrl)
 			return;
 	}
 
-	if (DSS_REG_R(io, HDMI_DDC_HW_STATUS) != 0) {
-		/* Wait to be clean on DDC HW engine */
-		timeout_count = 100;
-		do {
-			hdcp_ddc_status = DSS_REG_R(io, HDMI_HDCP_DDC_STATUS);
-			ddc_hw_status = DSS_REG_R(io, HDMI_DDC_HW_STATUS);
-			ddc_xfer_done = hdcp_ddc_status & BIT(10);
-			ddc_xfer_req = hdcp_ddc_status & BIT(4);
-			ddc_hw_done = ddc_hw_status & BIT(3);
-			ddc_hw_not_ready = !ddc_xfer_done ||
-				ddc_xfer_req || !ddc_hw_done;
+	/* Wait to be clean on DDC HW engine */
+	timeout_count = 100;
+	do {
+		hdcp_ddc_status = DSS_REG_R(io, HDMI_HDCP_DDC_STATUS);
+		ddc_xfer_req    = hdcp_ddc_status & BIT(4);
+		ddc_xfer_done   = hdcp_ddc_status & BIT(10);
 
-			DEV_DBG("%s: %s: timeout count(%d):ddc hw%sready\n",
-				__func__, HDCP_STATE_NAME, timeout_count,
-					ddc_hw_not_ready ? " not " : " ");
-			DEV_DBG("hdcp_ddc_status[0x%x], ddc_hw_status[0x%x]\n",
-					hdcp_ddc_status, ddc_hw_status);
-			if (ddc_hw_not_ready)
-				msleep(20);
-			} while (ddc_hw_not_ready && --timeout_count);
-	}
+		ddc_hw_status   = DSS_REG_R(io, HDMI_DDC_HW_STATUS);
+		ddc_hw_req      = ddc_hw_status & BIT(16);
+		ddc_hw_not_idle = ddc_hw_status & (BIT(0) | BIT(1));
+
+		/* ddc transfer was requested but not completed */
+		xfer_not_done = ddc_xfer_req && !ddc_xfer_done;
+
+		/* ddc status is not idle or a hw request pending */
+		hw_not_done = ddc_hw_not_idle || ddc_hw_req;
+
+		ddc_hw_not_ready = xfer_not_done || hw_not_done;
+
+		DEV_DBG("%s: %s: timeout count(%d): ddc hw%sready\n",
+			__func__, HDCP_STATE_NAME, timeout_count,
+				ddc_hw_not_ready ? " not " : " ");
+		DEV_DBG("hdcp_ddc_status[0x%x], ddc_hw_status[0x%x]\n",
+				hdcp_ddc_status, ddc_hw_status);
+		if (ddc_hw_not_ready)
+			msleep(20);
+		} while (ddc_hw_not_ready && --timeout_count);
 } /* hdmi_hdcp_hw_ddc_clean */
 
 static int hdcp_scm_call(struct scm_hdcp_req *req, u32 *resp)
@@ -366,7 +373,10 @@ static int hdmi_hdcp_authentication_part1(struct hdmi_hdcp_ctrl *hdcp_ctrl)
 	ddc_data.retry = 5;
 	ddc_data.what = "Bcaps";
 	ddc_data.no_align = true;
-	rc = hdmi_ddc_read(hdcp_ctrl->init_data.ddc_ctrl, &ddc_data);
+
+	hdcp_ctrl->init_data.ddc_ctrl->ddc_data = ddc_data;
+
+	rc = hdmi_ddc_read(hdcp_ctrl->init_data.ddc_ctrl);
 	if (rc) {
 		DEV_ERR("%s: %s: BCAPS read failed\n", __func__,
 			HDCP_STATE_NAME);
@@ -529,7 +539,9 @@ static int hdmi_hdcp_authentication_part1(struct hdmi_hdcp_ctrl *hdcp_ctrl)
 	ddc_data.data_buf = an;
 	ddc_data.data_len = 8;
 	ddc_data.what = "An";
-	rc = hdmi_ddc_write(hdcp_ctrl->init_data.ddc_ctrl, &ddc_data);
+	hdcp_ctrl->init_data.ddc_ctrl->ddc_data = ddc_data;
+
+	rc = hdmi_ddc_write(hdcp_ctrl->init_data.ddc_ctrl);
 	if (rc) {
 		DEV_ERR("%s: %s: An write failed\n", __func__, HDCP_STATE_NAME);
 		goto error;
@@ -542,7 +554,9 @@ static int hdmi_hdcp_authentication_part1(struct hdmi_hdcp_ctrl *hdcp_ctrl)
 	ddc_data.data_buf = aksv;
 	ddc_data.data_len = 5;
 	ddc_data.what = "Aksv";
-	rc = hdmi_ddc_write(hdcp_ctrl->init_data.ddc_ctrl, &ddc_data);
+	hdcp_ctrl->init_data.ddc_ctrl->ddc_data = ddc_data;
+
+	rc = hdmi_ddc_write(hdcp_ctrl->init_data.ddc_ctrl);
 	if (rc) {
 		DEV_ERR("%s: %s: AKSV write failed\n", __func__,
 			HDCP_STATE_NAME);
@@ -561,7 +575,10 @@ static int hdmi_hdcp_authentication_part1(struct hdmi_hdcp_ctrl *hdcp_ctrl)
 	ddc_data.retry = 5;
 	ddc_data.what = "Bksv";
 	ddc_data.no_align = true;
-	rc = hdmi_ddc_read(hdcp_ctrl->init_data.ddc_ctrl, &ddc_data);
+
+	hdcp_ctrl->init_data.ddc_ctrl->ddc_data = ddc_data;
+
+	rc = hdmi_ddc_read(hdcp_ctrl->init_data.ddc_ctrl);
 	if (rc) {
 		DEV_ERR("%s: %s: BKSV read failed\n", __func__,
 			HDCP_STATE_NAME);
@@ -633,7 +650,10 @@ static int hdmi_hdcp_authentication_part1(struct hdmi_hdcp_ctrl *hdcp_ctrl)
 	ddc_data.retry = 5;
 	ddc_data.what = "R0'";
 	ddc_data.no_align = true;
-	rc = hdmi_ddc_read(hdcp_ctrl->init_data.ddc_ctrl, &ddc_data);
+
+	hdcp_ctrl->init_data.ddc_ctrl->ddc_data = ddc_data;
+
+	rc = hdmi_ddc_read(hdcp_ctrl->init_data.ddc_ctrl);
 	if (rc) {
 		DEV_ERR("%s: %s: R0' read failed\n", __func__, HDCP_STATE_NAME);
 		goto error;
@@ -684,7 +704,8 @@ do { \
 	ddc_data.offset = (off); \
 	memset(what, 0, sizeof(what)); \
 	snprintf(what, sizeof(what), (name)); \
-	rc = hdmi_ddc_read(hdcp_ctrl->init_data.ddc_ctrl, &ddc_data); \
+	hdcp_ctrl->init_data.ddc_ctrl->ddc_data = ddc_data; \
+	rc = hdmi_ddc_read(hdcp_ctrl->init_data.ddc_ctrl); \
 	if (rc) { \
 		DEV_ERR("%s: %s: Read %s failed\n", __func__, HDCP_STATE_NAME, \
 			what); \
@@ -868,7 +889,10 @@ static int hdmi_hdcp_authentication_part2(struct hdmi_hdcp_ctrl *hdcp_ctrl)
 		ddc_data.retry = 5;
 		ddc_data.what = "Bcaps";
 		ddc_data.no_align = false;
-		rc = hdmi_ddc_read(hdcp_ctrl->init_data.ddc_ctrl, &ddc_data);
+
+		hdcp_ctrl->init_data.ddc_ctrl->ddc_data = ddc_data;
+
+		rc = hdmi_ddc_read(hdcp_ctrl->init_data.ddc_ctrl);
 		if (rc) {
 			DEV_ERR("%s: %s: BCAPS read failed\n", __func__,
 				HDCP_STATE_NAME);
@@ -887,7 +911,10 @@ static int hdmi_hdcp_authentication_part2(struct hdmi_hdcp_ctrl *hdcp_ctrl)
 	ddc_data.retry = 5;
 	ddc_data.what = "Bstatuss";
 	ddc_data.no_align = false;
-	rc = hdmi_ddc_read(hdcp_ctrl->init_data.ddc_ctrl, &ddc_data);
+
+	hdcp_ctrl->init_data.ddc_ctrl->ddc_data = ddc_data;
+
+	rc = hdmi_ddc_read(hdcp_ctrl->init_data.ddc_ctrl);
 	if (rc) {
 		DEV_ERR("%s: %s: BSTATUS read failed\n", __func__,
 			HDCP_STATE_NAME);
@@ -979,9 +1006,12 @@ static int hdmi_hdcp_authentication_part2(struct hdmi_hdcp_ctrl *hdcp_ctrl)
 	ddc_data.retry = 5;
 	ddc_data.what = "KSV FIFO";
 	ddc_data.no_align = true;
+
+	hdcp_ctrl->init_data.ddc_ctrl->ddc_data = ddc_data;
+
 	cnt = 0;
 	do {
-		rc = hdmi_ddc_read(hdcp_ctrl->init_data.ddc_ctrl, &ddc_data);
+		rc = hdmi_ddc_read(hdcp_ctrl->init_data.ddc_ctrl);
 		if (rc) {
 			DEV_ERR("%s: %s: KSV FIFO read failed\n", __func__,
 				HDCP_STATE_NAME);

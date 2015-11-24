@@ -38,13 +38,13 @@
 #define MTU_BYTE 1500
 
 #define IPA_MAX_NUM_PIPES 0x14
-#define IPA_SYS_DESC_FIFO_SZ 0x800
+#define IPA_SYS_DESC_FIFO_SZ 0x2000
 #define IPA_SYS_TX_DATA_DESC_FIFO_SZ 0x1000
 #define IPA_LAN_RX_HEADER_LENGTH (2)
 #define IPA_QMAP_HEADER_LENGTH (4)
 #define IPA_DL_CHECKSUM_LENGTH (8)
 #define IPA_NUM_DESC_PER_SW_TX (2)
-#define IPA_GENERIC_RX_POOL_SZ 192
+#define IPA_GENERIC_RX_POOL_SZ 1000
 
 #define IPA_MAX_STATUS_STAT_NUM 30
 
@@ -1987,4 +1987,5 @@ void ipa_update_repl_threshold(enum ipa_client_type ipa_client);
 void ipa_flow_control(enum ipa_client_type ipa_client, bool enable,
 			uint32_t qmap_id);
 int ipa2_restore_suspend_handler(void);
+void ipa_sps_irq_control_all(bool enable);
 #endif /* _IPA_I_H_ */

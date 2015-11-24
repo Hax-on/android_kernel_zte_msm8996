@@ -29,7 +29,6 @@
 #include "mdss_mdp_cdm.h"
 
 #define MDSS_MDP_DEFAULT_INTR_MASK 0
-#define MDSS_MDP_PIXEL_RAM_SIZE (50 * 1024)
 
 #define PHASE_STEP_SHIFT	21
 #define PHASE_STEP_UNIT_SCALE   ((int) (1 << PHASE_STEP_SHIFT))
@@ -194,6 +193,7 @@ enum mdss_mdp_wb_ctl_type {
 
 enum mdss_mdp_bw_vote_mode {
 	MDSS_MDP_BW_MODE_SINGLE_LAYER,
+	MDSS_MDP_BW_MODE_SINGLE_IF,
 	MDSS_MDP_BW_MODE_MAX
 };
 
@@ -202,6 +202,27 @@ enum mdp_wb_blk_caps {
 	MDSS_MDP_WB_ROTATOR = BIT(1),
 	MDSS_MDP_WB_INTF = BIT(2),
 	MDSS_MDP_WB_UBWC = BIT(3),
+};
+
+/**
+ * enum perf_calc_vote_mode - enum to decide if mdss_mdp_get_bw_vote_mode
+ *		function needs an extra efficiency factor.
+ *
+ * @PERF_CALC_VOTE_MODE_PER_PIPE: used to check if efficiency factor is needed
+ *		based on the pipe properties.
+ * @PERF_CALC_VOTE_MODE_CTL: used to check if efficiency factor is needed based
+ *		on the controller properties.
+ * @PERF_CALC_VOTE_MODE_MAX: used to check if efficiency factor is need to vote
+ *		max MDP bandwidth.
+ *
+ * Depending upon the properties of each specific object (determined
+ * by this enum), driver decides if the mode to vote needs an
+ * extra factor.
+ */
+enum perf_calc_vote_mode {
+	PERF_CALC_VOTE_MODE_PER_PIPE,
+	PERF_CALC_VOTE_MODE_CTL,
+	PERF_CALC_VOTE_MODE_MAX,
 };
 
 struct mdss_mdp_perf_params {
@@ -257,6 +278,12 @@ struct mdss_mdp_ctl {
 	u32 slave_intf_num; /* ping-pong split */
 	u32 intf_type;
 
+	/*
+	 * false: for sctl in DUAL_LM_DUAL_DISPLAY
+	 * true: everything else
+	 */
+	bool is_master;
+
 	u32 opmode;
 	u32 flush_bits;
 	u32 flush_reg_data;
@@ -307,10 +334,26 @@ struct mdss_mdp_ctl {
 	struct work_struct recover_work;
 	struct work_struct remove_underrun_handler;
 
+	/*
+	 * This ROI is aligned to as per following guidelines and
+	 * sent to the panel driver.
+	 *
+	 * 1. DUAL_LM_DUAL_DISPLAY
+	 *    Panel = 1440x2560
+	 *    CTL0 = 720x2560 (LM0=720x2560)
+	 *    CTL1 = 720x2560 (LM1=720x2560)
+	 *    Both CTL's ROI will be (0-719)x(0-2599)
+	 * 2. DUAL_LM_SINGLE_DISPLAY
+	 *    Panel = 1440x2560
+	 *    CTL0 = 1440x2560 (LM0=720x2560 and LM1=720x2560)
+	 *    CTL0's ROI will be (0-1429)x(0-2599)
+	 * 3. SINGLE_LM_SINGLE_DISPLAY
+	 *    Panel = 1080x1920
+	 *    CTL0 = 1080x1920 (LM0=1080x1920)
+	 *    CTL0's ROI will be (0-1079)x(0-1919)
+	 */
 	struct mdss_rect roi;
 	struct mdss_rect roi_bkup;
-	u8 roi_changed;
-	u8 valid_roi;
 
 	bool cmd_autorefresh_en;
 	int autorefresh_frame_cnt;
@@ -340,7 +383,11 @@ struct mdss_mdp_mixer {
 	u8 params_changed;
 	u16 width;
 	u16 height;
+
+	bool valid_roi;
+	bool roi_changed;
 	struct mdss_rect roi;
+
 	u8 cursor_enabled;
 	u16 cursor_hotx;
 	u16 cursor_hoty;
@@ -703,6 +750,41 @@ enum mdss_mdp_clt_intf_event_flags {
 #define mfd_to_wb(mfd) (((struct mdss_overlay_private *)\
 				(mfd->mdp.private1))->wb)
 
+/**
+ * - mdss_mdp_is_roi_changed
+ * @mfd - pointer to mfd
+ *
+ * Function returns true if roi is changed for any layer mixer of a given
+ * display, false otherwise.
+ */
+static inline bool mdss_mdp_is_roi_changed(struct msm_fb_data_type *mfd)
+{
+	struct mdss_mdp_ctl *ctl;
+
+	if (!mfd)
+		return false;
+
+	ctl = mfd_to_ctl(mfd); /* returns master ctl */
+
+	return ctl->mixer_left->roi_changed ||
+	      (is_split_lm(mfd) ? ctl->mixer_right->roi_changed : false);
+}
+
+/**
+ * - mdss_mdp_is_both_lm_valid
+ * @main_ctl - pointer to a main ctl
+ *
+ * Function checks if both layer mixers are active or not. This can be useful
+ * when partial update is enabled on either MDP_DUAL_LM_SINGLE_DISPLAY or
+ * MDP_DUAL_LM_DUAL_DISPLAY .
+ */
+static inline bool mdss_mdp_is_both_lm_valid(struct mdss_mdp_ctl *main_ctl)
+{
+	return (main_ctl && main_ctl->is_master &&
+		main_ctl->mixer_left && main_ctl->mixer_left->valid_roi &&
+		main_ctl->mixer_right && main_ctl->mixer_right->valid_roi);
+}
+
 static inline struct mdss_mdp_ctl *mdss_mdp_get_split_ctl(
 	struct mdss_mdp_ctl *ctl)
 {
@@ -822,6 +904,19 @@ static inline u32 get_panel_width(struct mdss_mdp_ctl *ctl)
 	return width;
 }
 
+static inline bool mdss_mdp_req_init_restore_cfg(struct mdss_data_type *mdata)
+{
+	if (IS_MDSS_MAJOR_MINOR_SAME(mdata->mdp_rev,
+				MDSS_MDP_HW_REV_106) ||
+	    IS_MDSS_MAJOR_MINOR_SAME(mdata->mdp_rev,
+				MDSS_MDP_HW_REV_108) ||
+	    IS_MDSS_MAJOR_MINOR_SAME(mdata->mdp_rev,
+				MDSS_MDP_HW_REV_112))
+		return true;
+
+	return false;
+}
+
 static inline int mdss_mdp_panic_signal_support_mode(
 	struct mdss_data_type *mdata)
 {
@@ -869,13 +964,6 @@ static inline int mdss_mdp_get_wb_ctl_support(struct mdss_data_type *mdata,
 	 */
 	return rotator_session ? (mdata->nctl - mdata->nmixers_wb) :
 				(mdata->nctl - mdata->nwb);
-}
-
-static inline int mdss_mdp_get_pixel_ram_size(struct mdss_data_type *mdata)
-{
-	return (IS_MDSS_MAJOR_MINOR_SAME(mdata->mdp_rev,
-				MDSS_MDP_HW_REV_107)) ?
-						MDSS_MDP_PIXEL_RAM_SIZE : 0;
 }
 
 static inline bool mdss_mdp_is_nrt_vbif_client(struct mdss_data_type *mdata,
@@ -994,6 +1082,40 @@ static inline uint8_t pp_vig_csc_pipe_val(struct mdss_mdp_pipe *pipe)
 	}
 }
 
+/*
+ * when DUAL_LM_SINGLE_DISPLAY is used with 2 DSC encoders, DSC_MERGE is
+ * used during full frame updates. Now when we go from full frame update
+ * to right-only update, we need to disable DSC_MERGE. However, DSC_MERGE
+ * is controlled through DSC0_COMMON_MODE register which is double buffered,
+ * and this double buffer update is tied to LM0. Now for right-only update,
+ * LM0 will not get double buffer update signal. So DSC_MERGE is not disabled
+ * for right-only update which is wrong HW state and leads ping-pong timeout.
+ * Workaround for this is to use LM0->DSC0 pair for right-only update
+ * and disable DSC_MERGE.
+ *
+ * However using LM0->DSC0 pair for right-only update requires many changes
+ * at various levels of SW. To lower the SW impact and still support
+ * right-only partial update, keep SW state as it is but swap mixer register
+ * writes such that we instruct HW to use LM0->DSC0 pair.
+ *
+ * This function will return true if such a swap is needed or not.
+ */
+static inline bool mdss_mdp_is_lm_swap_needed(struct mdss_data_type *mdata,
+	struct mdss_mdp_ctl *mctl)
+{
+	if (!mdata || !mctl || !mctl->is_master ||
+	    !mctl->panel_data || !mctl->mfd)
+		return false;
+
+	return (is_dual_lm_single_display(mctl->mfd)) &&
+	       (mctl->panel_data->panel_info.partial_update_enabled) &&
+	       (mdss_has_quirk(mdata, MDSS_QUIRK_DSC_RIGHT_ONLY_PU)) &&
+	       (is_dsc_compression(&mctl->panel_data->panel_info)) &&
+	       (mctl->panel_data->panel_info.dsc_enc_total == 2) &&
+	       (!mctl->mixer_left->valid_roi) &&
+	       (mctl->mixer_right->valid_roi);
+}
+
 irqreturn_t mdss_mdp_isr(int irq, void *ptr);
 void mdss_mdp_irq_clear(struct mdss_data_type *mdata,
 		u32 intr_type, u32 intf_num);
@@ -1083,7 +1205,7 @@ int mdss_mdp_ctl_start(struct mdss_mdp_ctl *ctl, bool handoff);
 int mdss_mdp_ctl_stop(struct mdss_mdp_ctl *ctl, int panel_power_mode);
 int mdss_mdp_ctl_intf_event(struct mdss_mdp_ctl *ctl, int event, void *arg,
 	u32 flags);
-int mdss_mdp_get_prefetch_lines(struct mdss_mdp_ctl *ctl);
+int mdss_mdp_get_prefetch_lines(struct mdss_panel_info *pinfo);
 int mdss_mdp_perf_bw_check(struct mdss_mdp_ctl *ctl,
 		struct mdss_mdp_pipe **left_plist, int left_cnt,
 		struct mdss_mdp_pipe **right_plist, int right_cnt);
@@ -1221,9 +1343,8 @@ int mdss_mdp_wb_addr_setup(struct mdss_data_type *mdata,
 	u32 num_wb, u32 num_intf_wb);
 
 void mdss_mdp_pipe_clk_force_off(struct mdss_mdp_pipe *pipe);
-int mdss_mdp_pipe_fetch_halt(struct mdss_mdp_pipe *pipe);
+int mdss_mdp_pipe_fetch_halt(struct mdss_mdp_pipe *pipe, bool is_recovery);
 int mdss_mdp_pipe_panic_signal_ctrl(struct mdss_mdp_pipe *pipe, bool enable);
-void mdss_mdp_config_pipe_panic_lut(struct mdss_data_type *mdata);
 void mdss_mdp_bwcpanic_ctrl(struct mdss_data_type *mdata, bool enable);
 int mdss_mdp_pipe_destroy(struct mdss_mdp_pipe *pipe);
 int mdss_mdp_pipe_queue_data(struct mdss_mdp_pipe *pipe,
@@ -1297,7 +1418,7 @@ void mdss_mdp_pipe_calc_pixel_extn(struct mdss_mdp_pipe *pipe);
 int mdss_mdp_wb_set_secure(struct msm_fb_data_type *mfd, int enable);
 int mdss_mdp_wb_get_secure(struct msm_fb_data_type *mfd, uint8_t *enable);
 void mdss_mdp_ctl_restore(bool locked);
-int  mdss_mdp_ctl_reset(struct mdss_mdp_ctl *ctl);
+int  mdss_mdp_ctl_reset(struct mdss_mdp_ctl *ctl, bool is_recovery);
 int mdss_mdp_wait_for_xin_halt(u32 xin_id, bool is_vbif_nrt);
 void mdss_mdp_set_ot_limit(struct mdss_mdp_set_ot_params *params);
 int mdss_mdp_cmd_set_autorefresh_mode(struct mdss_mdp_ctl *ctl,
@@ -1319,5 +1440,9 @@ bool mdss_mdp_is_wb_mdp_intf(u32 num, u32 reg_index);
 struct mdss_mdp_writeback *mdss_mdp_wb_assign(u32 id, u32 reg_index);
 struct mdss_mdp_writeback *mdss_mdp_wb_alloc(u32 caps, u32 reg_index);
 void mdss_mdp_wb_free(struct mdss_mdp_writeback *wb);
+
+void mdss_dsc_parameters_calc(struct dsc_desc *dsc, int width, int height);
+void mdss_mdp_ctl_dsc_setup(struct mdss_mdp_ctl *ctl,
+	struct mdss_panel_info *pinfo);
 
 #endif /* MDSS_MDP_H */

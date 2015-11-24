@@ -19,10 +19,13 @@
 #include <linux/irqreturn.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/gpio.h>
+#include <linux/switch.h>
+#include <video/msm_dba.h>
 
 #include "mdss_panel.h"
 #include "mdss_dsi_cmd.h"
 #include "mdss_dsi_clk.h"
+#include "mdss_hdmi_edid.h"
 
 #define MMSS_SERDES_BASE_PHY 0x04f01000 /* mmss (De)Serializer CFG */
 
@@ -53,7 +56,7 @@
 #define MDSS_DSI_HW_REV_101_1		0x10010001	/* 8974Pro */
 #define MDSS_DSI_HW_REV_102		0x10020000	/* 8084    */
 #define MDSS_DSI_HW_REV_103		0x10030000	/* 8994    */
-#define MDSS_DSI_HW_REV_103_1		0x10030001	/* 8916/8936 */
+#define MDSS_DSI_HW_REV_103_1		0x10030001	/* 8916/8936/8937 */
 #define MDSS_DSI_HW_REV_104             0x10040000      /* 8996   */
 #define MDSS_DSI_HW_REV_104_1           0x10040001      /* 8996   */
 
@@ -469,6 +472,7 @@ struct mdss_dsi_ctrl_pdata {
 	int mdp_busy;
 	struct mutex mutex;
 	struct mutex cmd_mutex;
+	struct mutex cmdlist_mutex;
 	struct regulator *lab; /* vreg handle */
 	struct regulator *ibb; /* vreg handle */
 	struct mutex clk_lane_mutex;
@@ -479,7 +483,7 @@ struct mdss_dsi_ctrl_pdata {
 	bool mmss_clamp;
 	char dlane_swap;	/* data lane swap */
 	bool is_phyreg_enabled;
-
+	bool burst_mode_enabled;
 
 	struct dsi_buf tx_buf;
 	struct dsi_buf rx_buf;
@@ -508,6 +512,23 @@ struct mdss_dsi_ctrl_pdata {
 	struct mdss_dsi_debugfs_info *debugfs_info;
 
 	struct dsi_err_container err_cont;
+
+	struct switch_dev sdev;
+	bool hpd_state;
+	bool ds_registered;
+
+	struct msm_dba_reg_info dba_info;
+	struct msm_dba_ops dba_ops;
+	struct msm_dba_video_cfg dba_video_cfg;
+	void *dba_data;
+
+	void *edid_data;
+	u8 edid_buf[EDID_BLOCK_SIZE * 2];
+
+	struct fb_info *fbi;
+
+	struct workqueue_struct *workq;
+	struct delayed_work dba_work;
 };
 
 struct dsi_status_data {
@@ -583,6 +604,8 @@ void mdss_dsi_video_test_pattern(struct mdss_dsi_ctrl_pdata *ctrl);
 void mdss_dsi_panel_pwm_cfg(struct mdss_dsi_ctrl_pdata *ctrl);
 bool mdss_dsi_panel_pwm_enable(struct mdss_dsi_ctrl_pdata *ctrl);
 void mdss_dsi_ctrl_phy_restore(struct mdss_dsi_ctrl_pdata *ctrl);
+void mdss_dsi_phy_sw_reset(struct mdss_dsi_ctrl_pdata *ctrl);
+void mdss_dsi_phy_init(struct mdss_dsi_ctrl_pdata *ctrl);
 void mdss_dsi_ctrl_init(struct device *ctrl_dev,
 			struct mdss_dsi_ctrl_pdata *ctrl);
 void mdss_dsi_cmd_mdp_busy(struct mdss_dsi_ctrl_pdata *ctrl);
@@ -601,7 +624,7 @@ u32 mdss_dsi_panel_cmd_read(struct mdss_dsi_ctrl_pdata *ctrl, char cmd0,
 		char cmd1, void (*fxn)(int), char *rbuf, int len);
 int mdss_dsi_panel_init(struct device_node *node,
 		struct mdss_dsi_ctrl_pdata *ctrl_pdata,
-		bool cmd_cfg_cont_splash);
+		int ndx);
 int mdss_dsi_panel_timing_switch(struct mdss_dsi_ctrl_pdata *ctrl_pdata,
 			struct mdss_panel_timing *timing);
 
@@ -612,8 +635,11 @@ int mdss_panel_get_dst_fmt(u32 bpp, char mipi_mode, u32 pixel_packing,
 
 int mdss_dsi_register_recovery_handler(struct mdss_dsi_ctrl_pdata *ctrl,
 		struct mdss_intf_recovery *recovery);
-void mdss_dsi_panel_dsc_pps_send(struct mdss_dsi_ctrl_pdata *ctrl);
 void mdss_dsi_unregister_bl_settings(struct mdss_dsi_ctrl_pdata *ctrl_pdata);
+void mdss_dsi_panel_dsc_pps_send(struct mdss_dsi_ctrl_pdata *ctrl,
+				struct mdss_panel_info *pinfo);
+void mdss_dsi_dsc_config(struct mdss_dsi_ctrl_pdata *ctrl,
+	struct dsc_desc *dsc);
 
 static inline const char *__mdss_dsi_pm_name(enum dsi_pm_type module)
 {

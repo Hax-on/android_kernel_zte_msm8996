@@ -25,6 +25,9 @@
 #include <linux/usb/phy.h>
 #include <linux/usb/msm_hsusb.h>
 
+/* TCSR_PHY_CLK_SCHEME_SEL bit mask */
+#define PHY_CLK_SCHEME_SEL BIT(0)
+
 #define QUSB2PHY_PLL_STATUS	0x38
 #define QUSB2PHY_PLL_LOCK	BIT(5)
 
@@ -51,6 +54,9 @@
 #define QUSB2PHY_PORT_UTMI_CTRL2	0xC4
 #define UTMI_ULPI_SEL			BIT(7)
 #define UTMI_TEST_MUX_SEL		BIT(6)
+
+#define QUSB2PHY_PLL_TEST		0x04
+#define CLK_REF_SEL			BIT(7)
 
 #define QUSB2PHY_PORT_TUNE1             0x80
 #define QUSB2PHY_PORT_TUNE2             0x84
@@ -99,6 +105,7 @@ struct qusb_phy {
 	void __iomem		*qscratch_base;
 	void __iomem		*tune2_efuse_reg;
 	void __iomem		*ref_clk_base;
+	void __iomem		*tcsr_phy_clk_scheme_sel;
 
 	struct clk		*ref_clk_src;
 	struct clk		*ref_clk;
@@ -122,6 +129,7 @@ struct qusb_phy {
 	bool			suspended;
 	bool			ulpi_mode;
 	bool			rm_pulldown;
+	bool			dpdm_pulsing_enabled;
 
 	/* emulation targets specific */
 	void __iomem		*emu_phy_base;
@@ -312,14 +320,9 @@ static int qusb_phy_update_dpdm(struct usb_phy *phy, int value)
 	int ret = 0;
 	u32 reg;
 
-	dev_dbg(phy->dev, "%s value:%d rm_pulldown:%d\n", __func__,
-						value, qphy->rm_pulldown);
-
-	/*
-	 * Need only ahb2phy clock to access QC1 and QC2 registers. Hence
-	 * enable this.
-	 */
-	clk_prepare_enable(qphy->cfg_ahb_clk);
+	dev_dbg(phy->dev, "%s value:%d rm_pulldown:%d pulsing enabled %d\n",
+			__func__, value, qphy->rm_pulldown,
+			qphy->dpdm_pulsing_enabled);
 
 	switch (value) {
 	case POWER_SUPPLY_DP_DM_DPF_DMF:
@@ -334,13 +337,18 @@ static int qusb_phy_update_dpdm(struct usb_phy *phy, int value)
 		}
 
 		/* Clear QC1 and QC2 registers when rm_pulldown = 1 */
-		if (qphy->rm_pulldown) {
+		if (qphy->dpdm_pulsing_enabled && qphy->rm_pulldown) {
 			dev_dbg(phy->dev, "clearing qc1 and qc2 registers.\n");
+			ret = clk_prepare_enable(qphy->cfg_ahb_clk);
+			if (ret)
+				goto clk_error;
+
 			/* Clear qc1 and qc2 registers */
 			writel_relaxed(0x00, qphy->base + QUSB2PHY_PORT_QC1);
 			writel_relaxed(0x00, qphy->base + QUSB2PHY_PORT_QC2);
 			/* to make sure above write goes through */
 			mb();
+			clk_disable_unprepare(qphy->cfg_ahb_clk);
 		}
 		break;
 
@@ -348,11 +356,20 @@ static int qusb_phy_update_dpdm(struct usb_phy *phy, int value)
 		dev_dbg(phy->dev, "POWER_SUPPLY_DP_DM_DPR_DMR\n");
 		if (qphy->rm_pulldown) {
 			dev_dbg(phy->dev, "clearing qc1 and qc2 registers.\n");
-			/* Clear qc1 and qc2 registers */
-			writel_relaxed(0x00, qphy->base + QUSB2PHY_PORT_QC1);
-			writel_relaxed(0x00, qphy->base + QUSB2PHY_PORT_QC2);
-			/* to make sure above write goes through */
-			mb();
+			if (qphy->dpdm_pulsing_enabled) {
+				ret = clk_prepare_enable(qphy->cfg_ahb_clk);
+				if (ret)
+					goto clk_error;
+
+				/* Clear qc1 and qc2 registers */
+				writel_relaxed(0x00,
+						qphy->base + QUSB2PHY_PORT_QC1);
+				writel_relaxed(0x00,
+						qphy->base + QUSB2PHY_PORT_QC2);
+				/* to make sure above write goes through */
+				mb();
+				clk_disable_unprepare(qphy->cfg_ahb_clk);
+			}
 
 			ret = qusb_phy_enable_power(qphy, false, false);
 			if (ret >= 0) {
@@ -364,15 +381,30 @@ static int qusb_phy_update_dpdm(struct usb_phy *phy, int value)
 		break;
 
 	case POWER_SUPPLY_DP_DM_DP0P6_DMF:
+		if (!qphy->dpdm_pulsing_enabled)
+			break;
+
 		dev_dbg(phy->dev, "POWER_SUPPLY_DP_DM_DP0P6_DMF\n");
+		ret = clk_prepare_enable(qphy->cfg_ahb_clk);
+		if (ret)
+			goto clk_error;
+
 		/* Set DP to 0.6v and DM to High Z state */
 		writel_relaxed(VDP_SRC_EN, qphy->base + QUSB2PHY_PORT_QC1);
 		/* complete above write */
 		mb();
+		clk_disable_unprepare(qphy->cfg_ahb_clk);
 		break;
 
 	case POWER_SUPPLY_DP_DM_DP0P6_DM3P3:
+		if (!qphy->dpdm_pulsing_enabled)
+			break;
+
 		dev_dbg(phy->dev, "POWER_SUPPLY_DP_DM_DP0PHVDCP_36_DM3P3\n");
+		ret = clk_prepare_enable(qphy->cfg_ahb_clk);
+		if (ret)
+			goto clk_error;
+
 		/* Set DP to 0.6v */
 		writel_relaxed(VDP_SRC_EN, qphy->base + QUSB2PHY_PORT_QC1);
 		/* Set DM to 3.075v */
@@ -380,10 +412,18 @@ static int qusb_phy_update_dpdm(struct usb_phy *phy, int value)
 				qphy->base + QUSB2PHY_PORT_QC2);
 		/* complete above write */
 		mb();
+		clk_disable_unprepare(qphy->cfg_ahb_clk);
 		break;
 
 	case POWER_SUPPLY_DP_DM_DP_PULSE:
+		if (!qphy->dpdm_pulsing_enabled)
+			break;
+
 		dev_dbg(phy->dev, "POWER_SUPPLY_DP_DM_DP_PULSE\n");
+		ret = clk_prepare_enable(qphy->cfg_ahb_clk);
+		if (ret)
+			goto clk_error;
+
 		spin_lock_irqsave(&qphy->pulse_lock, flags);
 		/*Set DP to 3.075v, sleep for .25 ms */
 		reg = readl_relaxed(qphy->base + QUSB2PHY_PORT_QC2);
@@ -415,10 +455,18 @@ static int qusb_phy_update_dpdm(struct usb_phy *phy, int value)
 		 * DP/DM line.
 		 */
 		usleep_range(2000, 3000);
+		clk_disable_unprepare(qphy->cfg_ahb_clk);
 		break;
 
 	case POWER_SUPPLY_DP_DM_DM_PULSE:
+		if (!qphy->dpdm_pulsing_enabled)
+			break;
+
 		dev_dbg(phy->dev, "POWER_SUPPLY_DP_DM_DM_PULSE\n");
+		ret = clk_prepare_enable(qphy->cfg_ahb_clk);
+		if (ret)
+			goto clk_error;
+
 		spin_lock_irqsave(&qphy->pulse_lock, flags);
 		/* Set DM to 0.6v, sleep .25 ms */
 		reg = readl_relaxed(qphy->base + QUSB2PHY_PORT_QC1);
@@ -456,6 +504,7 @@ static int qusb_phy_update_dpdm(struct usb_phy *phy, int value)
 		 * DP/DM line.
 		 */
 		usleep_range(2000, 3000);
+		clk_disable_unprepare(qphy->cfg_ahb_clk);
 		break;
 	default:
 		ret = -EINVAL;
@@ -463,8 +512,7 @@ static int qusb_phy_update_dpdm(struct usb_phy *phy, int value)
 		break;
 	}
 
-	/* Disable ahb2phy clock as it enables above. */
-	clk_disable_unprepare(qphy->cfg_ahb_clk);
+clk_error:
 	return ret;
 }
 
@@ -605,7 +653,8 @@ MODULE_PARM_DESC(diagram_param, "USB eye diagram_param");
 static int qusb_phy_init(struct usb_phy *phy)
 {
 	struct qusb_phy *qphy = container_of(phy, struct qusb_phy, phy);
-	int ret;
+	int ret, reset_val = 0;
+	bool is_se_clk = true;
 
 	dev_dbg(phy->dev, "%s\n", __func__);
 
@@ -670,6 +719,9 @@ static int qusb_phy_init(struct usb_phy *phy)
 	if (qphy->ulpi_mode)
 		writel_relaxed(0x0, qphy->base + QUSB2PHY_PORT_UTMI_CTRL2);
 
+	/* save reset value to override based on clk scheme */
+	reset_val = readl_relaxed(qphy->base + QUSB2PHY_PLL_TEST);
+
 	if (qphy->qusb_phy_init_seq)
 		qusb_phy_write_seq(qphy->base, qphy->qusb_phy_init_seq,
 				qphy->init_seq_len, 0);
@@ -713,20 +765,43 @@ static int qusb_phy_init(struct usb_phy *phy)
 	/* Require to get phy pll lock successfully */
 	usleep_range(150, 160);
 
+	if (qphy->tcsr_phy_clk_scheme_sel) {
+		ret = readl_relaxed(qphy->tcsr_phy_clk_scheme_sel);
+		if (ret & PHY_CLK_SCHEME_SEL) {
+			pr_debug("%s:select single-ended clk src\n",
+				__func__);
+			is_se_clk = true;
+		} else {
+			pr_debug("%s:select differential clk src\n",
+				__func__);
+			is_se_clk = false;
+		}
+	}
+
+	if (!is_se_clk)
+		reset_val &= ~CLK_REF_SEL;
+	else
+		reset_val |= CLK_REF_SEL;
+
+	/* Turn on phy ref_clk if DIFF_CLK else select SE_CLK */
+	if (!is_se_clk && qphy->ref_clk_base)
+		writel_relaxed((readl_relaxed(qphy->ref_clk_base) |
+					QUSB2PHY_REFCLK_ENABLE),
+					qphy->ref_clk_base);
+	else
+		writel_relaxed(reset_val, qphy->base + QUSB2PHY_PLL_TEST);
+
+	/* Make sure that above write is completed to get PLL source clock */
+	wmb();
+
+	/* Required to get PHY PLL lock successfully */
+	usleep_range(100, 110);
+
 	if (!(readb_relaxed(qphy->base + QUSB2PHY_PLL_STATUS) &
 					QUSB2PHY_PLL_LOCK)) {
 		dev_err(phy->dev, "QUSB PHY PLL LOCK fails:%x\n",
 			readb_relaxed(qphy->base + QUSB2PHY_PLL_STATUS));
 		WARN_ON(1);
-	}
-
-	/* Turn on phy ref_clk */
-	if (qphy->ref_clk_base) {
-		writel_relaxed((readl_relaxed(qphy->ref_clk_base) |
-					QUSB2PHY_REFCLK_ENABLE),
-					qphy->ref_clk_base);
-		/* Make sure that above write is completed to get ref clk ON */
-		wmb();
 	}
 
 	return 0;
@@ -969,9 +1044,22 @@ static int qusb_phy_probe(struct platform_device *pdev)
 			dev_dbg(dev, "ref_clk_address is not available.\n");
 	}
 
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+			"tcsr_phy_clk_scheme_sel");
+	if (res) {
+		qphy->tcsr_phy_clk_scheme_sel = devm_ioremap_nocache(dev,
+				res->start, resource_size(res));
+		if (IS_ERR(qphy->tcsr_phy_clk_scheme_sel))
+			dev_dbg(dev, "err reading tcsr_phy_clk_scheme_sel\n");
+	}
+
+	qphy->dpdm_pulsing_enabled = of_property_read_bool(dev->of_node,
+					"qcom,enable-dpdm-pulsing");
+
 	qphy->ref_clk_src = devm_clk_get(dev, "ref_clk_src");
 	if (IS_ERR(qphy->ref_clk_src))
-		return PTR_ERR(qphy->ref_clk_src);
+		dev_dbg(dev, "clk get failed for ref_clk_src\n");
+
 	qphy->ref_clk = devm_clk_get(dev, "ref_clk");
 	if (IS_ERR(qphy->ref_clk))
 		dev_dbg(dev, "clk get failed for ref_clk\n");

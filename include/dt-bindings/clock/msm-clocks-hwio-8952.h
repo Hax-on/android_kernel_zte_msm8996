@@ -13,6 +13,7 @@
 #ifndef __MSM_CLOCKS_8952_HWIO_H
 #define __MSM_CLOCKS_8952_HWIO_H
 
+#define GPLL0_MODE			0x21000
 #define GPLL0_STATUS			0x2101C
 #define GPLL6_STATUS			0x3701C
 #define GPLL3_MODE			0x22000
@@ -339,6 +340,9 @@
 	},                                      \
 	.num_fmax = VDD_DIG_NUM
 
+# define OVERRIDE_FMAX1(clkname, l1, f1) \
+	clkname##_clk_src.c.fmax[VDD_DIG_##l1] = (f1)
+
 # define OVERRIDE_FMAX2(clkname, l1, f1, l2, f2) \
 	clkname##_clk_src.c.fmax[VDD_DIG_##l1] = (f1);  \
 	clkname##_clk_src.c.fmax[VDD_DIG_##l2] = (f2)
@@ -383,7 +387,7 @@
 	clkname##_clk_src.c.fmax[VDD_DIG_##l5] = (f5)
 
 #define OVERRIDE_FTABLE(clkname, ftable) \
-	clkname##_clk_src.freq_tbl = ftable##_thorium
+	clkname##_clk_src.freq_tbl = ftable##_8937
 
 enum vdd_dig_levels {
 	VDD_DIG_NONE,

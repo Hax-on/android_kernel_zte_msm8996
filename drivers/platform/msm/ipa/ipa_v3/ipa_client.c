@@ -1078,7 +1078,7 @@ int ipa3_request_gsi_channel(struct ipa_request_gsi_channel_params *params,
 	struct ipa_gsi_ep_config gsi_ep_cfg;
 	struct ipa_gsi_ep_config *gsi_ep_cfg_ptr = &gsi_ep_cfg;
 
-	IPADBG("ipa3_request_gsi_channel: entry\n");
+	IPADBG("entry\n");
 	if (params == NULL || out_params == NULL ||
 		!ipa3_is_legal_params(params)) {
 		IPAERR("bad parameters\n");
@@ -1202,7 +1202,7 @@ int ipa3_request_gsi_channel(struct ipa_request_gsi_channel_params *params,
 	ipa3_dec_client_disable_clks();
 
 	IPADBG("client %d (ep: %d) connected\n", params->client, ipa_ep_idx);
-	IPADBG("ipa3_request_gsi_channel: exit\n");
+	IPADBG("exit\n");
 
 	return 0;
 
@@ -1223,7 +1223,7 @@ int ipa3_set_usb_max_packet_size(
 	struct gsi_device_scratch dev_scratch;
 	enum gsi_status gsi_res;
 
-	IPADBG("ipa3_set_usb_max_packet_size: entry\n");
+	IPADBG("entry\n");
 
 	ipa3_inc_client_enable_clks();
 
@@ -1241,7 +1241,7 @@ int ipa3_set_usb_max_packet_size(
 
 	ipa3_dec_client_disable_clks();
 
-	IPADBG("ipa3_set_usb_max_packet_size: exit\n");
+	IPADBG("exit\n");
 	return 0;
 }
 
@@ -1251,7 +1251,7 @@ int ipa3_xdci_connect(u32 clnt_hdl, u8 xferrscidx, bool xferrscidx_valid)
 	int result = -EFAULT;
 	enum gsi_status gsi_res;
 
-	IPADBG("ipa3_xdci_connect: entry\n");
+	IPADBG("entry\n");
 	if (clnt_hdl >= ipa3_ctx->ipa_num_pipes  ||
 		ipa3_ctx->ep[clnt_hdl].valid == 0 ||
 		xferrscidx < 0 || xferrscidx > IPA_XFER_RSC_IDX_MAX) {
@@ -1280,7 +1280,7 @@ int ipa3_xdci_connect(u32 clnt_hdl, u8 xferrscidx, bool xferrscidx_valid)
 	if (!ep->keep_ipa_awake)
 		ipa3_dec_client_disable_clks();
 
-	IPADBG("ipa3_xdci_connect: exit\n");
+	IPADBG("exit\n");
 	return 0;
 
 write_chan_scratch_fail:
@@ -1298,7 +1298,10 @@ static bool ipa3_is_xdci_channel_empty(struct ipa3_ep_context *ep,
 		is_empty = (chan_info->rp == chan_info->wp);
 	} else {
 		/* For DL channel: */
-		if (chan_info->wp != (ep->gsi_mem_info.chan_ring_len - 1)) {
+		if (chan_info->wp !=
+		    (ep->gsi_mem_info.chan_ring_base_addr +
+		     ep->gsi_mem_info.chan_ring_len -
+		     GSI_CHAN_RE_SIZE_16B)) {
 			/*  if chan.WP != LINK TRB: chan.WP == evt.RP */
 			is_empty = (chan_info->wp == chan_info->evt_rp);
 		} else {
@@ -1574,11 +1577,13 @@ int ipa3_xdci_suspend(u32 ul_clnt_hdl, u32 dl_clnt_hdl,
 	if (!dl_data_pending) {
 		aggr_active_bitmap = ipa_read_reg(ipa3_ctx->mmio,
 				IPA_STATE_AGGR_ACTIVE_OFST);
-		if (aggr_active_bitmap & (1 << dl_clnt_hdl))
+		if (aggr_active_bitmap & (1 << dl_clnt_hdl)) {
+			IPADBG("DL data pending due to open aggr. frame\n");
 			dl_data_pending = true;
+		}
 	}
 	if (dl_data_pending) {
-		IPADBG("DL data pending, can't suspend\n");
+		IPAERR("DL data pending, can't suspend\n");
 		result = -EFAULT;
 		goto query_chan_info_fail;
 	}
@@ -1603,7 +1608,7 @@ int ipa3_xdci_suspend(u32 ul_clnt_hdl, u32 dl_clnt_hdl,
 	 */
 	is_empty = ipa3_is_xdci_channel_empty(dl_ep, &dl_gsi_chan_info);
 	if (!is_empty) {
-		IPADBG("DL data pending, can't suspend\n");
+		IPAERR("DL data pending, can't suspend\n");
 		/* Unsuspend the DL EP */
 		memset(&ep_cfg_ctrl, 0 , sizeof(struct ipa_ep_cfg_ctrl));
 		ep_cfg_ctrl.ipa_ep_suspend = false;

@@ -85,7 +85,7 @@ static bool is_valid_ep(u32 ep_suspend_data)
 	return false;
 }
 
-static int handle_interrupt(int irq_num)
+static int handle_interrupt(int irq_num, bool isr_context)
 {
 	struct ipa_interrupt_info interrupt_info;
 	struct ipa_interrupt_work_wrap *work_data;
@@ -121,7 +121,8 @@ static int handle_interrupt(int irq_num)
 		break;
 	}
 
-	if (interrupt_info.deferred_flag) {
+	/* Force defer processing if in ISR context. */
+	if (interrupt_info.deferred_flag || isr_context) {
 		work_data = kzalloc(sizeof(struct ipa_interrupt_work_wrap),
 				GFP_ATOMIC);
 		if (!work_data) {
@@ -150,7 +151,7 @@ fail_alloc_work:
 	return res;
 }
 
-static void ipa_process_interrupts(void)
+static void ipa_process_interrupts(bool isr_context)
 {
 	u32 reg;
 	u32 bmsk;
@@ -160,14 +161,21 @@ static void ipa_process_interrupts(void)
 	en = ipa_read_reg(ipa_ctx->mmio, IPA_IRQ_EN_EE_n_ADDR(ipa_ee));
 	reg = ipa_read_reg(ipa_ctx->mmio, IPA_IRQ_STTS_EE_n_ADDR(ipa_ee));
 	while (en & reg) {
+		/* Clear interrupt before processing to avoid
+		   clearing unhandled interrupts */
+		ipa_write_reg(ipa_ctx->mmio,
+				IPA_IRQ_CLR_EE_n_ADDR(ipa_ee), reg);
+
+		/* Process the interrupts */
 		bmsk = 1;
 		for (i = 0; i < IPA_IRQ_NUM_MAX; i++) {
 			if (en & reg & bmsk)
-				handle_interrupt(i);
+				handle_interrupt(i, isr_context);
 			bmsk = bmsk << 1;
 		}
-		ipa_write_reg(ipa_ctx->mmio,
-				IPA_IRQ_CLR_EE_n_ADDR(ipa_ee), reg);
+
+		/* Check pending interrupts that may have
+		   been raised since last read */
 		reg = ipa_read_reg(ipa_ctx->mmio,
 				IPA_IRQ_STTS_EE_n_ADDR(ipa_ee));
 	}
@@ -177,7 +185,7 @@ static void ipa_interrupt_defer(struct work_struct *work)
 {
 	IPADBG("processing interrupts in wq\n");
 	ipa_inc_client_enable_clks();
-	ipa_process_interrupts();
+	ipa_process_interrupts(false);
 	ipa_dec_client_disable_clks();
 	IPADBG("Done\n");
 }
@@ -199,7 +207,7 @@ static irqreturn_t ipa_isr(int irq, void *ctxt)
 		goto bail;
 	}
 
-	ipa_process_interrupts();
+	ipa_process_interrupts(true);
 
 bail:
 	ipa_active_clients_trylock_unlock(&flags);

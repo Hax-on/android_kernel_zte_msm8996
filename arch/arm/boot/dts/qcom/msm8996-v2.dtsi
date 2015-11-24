@@ -107,9 +107,10 @@
 
 	qcom,cpr-fuse-corners = <5>;
 	qcom,cpr-fuse-combos = <4>;
+	/delete-property/ qcom,cpr-speed-bins;
+	/delete-property/ qcom,cpr-speed-bin-corners;
 	qcom,cpr-corners = <19>;
 
-	qcom,ldo-headroom-voltage = <150000>;
 	qcom,ldo-max-voltage = <805000>;
 
 	qcom,cpr-corner-fmax-map = <1 2 6 11 19>;
@@ -172,6 +173,8 @@
 
 	qcom,cpr-fuse-corners = <5>;
 	qcom,cpr-fuse-combos = <4>;
+	/delete-property/ qcom,cpr-speed-bins;
+	/delete-property/ qcom,cpr-speed-bin-corners;
 	qcom,cpr-corners = <10>;
 
 	qcom,cpr-corner-fmax-map = <1 2 5 9 10>;
@@ -225,9 +228,10 @@
 
 	qcom,cpr-fuse-corners = <5>;
 	qcom,cpr-fuse-combos = <4>;
+	/delete-property/ qcom,cpr-speed-bins;
+	/delete-property/ qcom,cpr-speed-bin-corners;
 	qcom,cpr-corners = <18>;
 
-	qcom,ldo-headroom-voltage = <150000>;
 	qcom,ldo-max-voltage = <805000>;
 
 	qcom,cpr-corner-fmax-map = <1 3 5 11 18>;
@@ -341,6 +345,8 @@
 		<0 0 0 (-10000) (-65000)>;
 	qcom,cpr-floor-to-ceiling-max-range =
 		<0 130000 40000 85000 85000>;
+
+	/delete-property/ qcom,cpr-fused-closed-loop-voltage-adjustment-map;
 
 	/delete-property/ qcom,cpr-aging-max-voltage-adjustment;
 	/delete-property/ qcom,cpr-aging-ref-corner;
@@ -507,24 +513,6 @@
 			qcom,supply-enable-load = <0>;
 			qcom,supply-disable-load = <0>;
 		};
-
-		qcom,platform-supply-entry@2 {
-			reg = <2>;
-			qcom,supply-name = "vdda";
-			qcom,supply-min-voltage = <1250000>;
-			qcom,supply-max-voltage = <1250000>;
-			qcom,supply-enable-load = <18160>;
-			qcom,supply-disable-load = <1>;
-		};
-
-		qcom,platform-supply-entry@3 {
-			reg = <3>;
-			qcom,supply-name = "vcca";
-			qcom,supply-min-voltage = <925000>;
-			qcom,supply-max-voltage = <925000>;
-			qcom,supply-enable-load = <17000>;
-			qcom,supply-disable-load = <33>;
-		};
 	};
 };
 
@@ -550,24 +538,6 @@
 			qcom,supply-max-voltage = <0>;
 			qcom,supply-enable-load = <0>;
 			qcom,supply-disable-load = <0>;
-		};
-
-		qcom,platform-supply-entry@2 {
-			reg = <2>;
-			qcom,supply-name = "vdda";
-			qcom,supply-min-voltage = <1250000>;
-			qcom,supply-max-voltage = <1250000>;
-			qcom,supply-enable-load = <18160>;
-			qcom,supply-disable-load = <1>;
-		};
-
-		qcom,platform-supply-entry@3 {
-			reg = <3>;
-			qcom,supply-name = "vcca";
-			qcom,supply-min-voltage = <925000>;
-			qcom,supply-max-voltage = <925000>;
-			qcom,supply-enable-load = <17000>;
-			qcom,supply-disable-load = <33>;
 		};
 	};
 };

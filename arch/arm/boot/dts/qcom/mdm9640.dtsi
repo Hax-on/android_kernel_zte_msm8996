@@ -502,11 +502,16 @@
 		qcom,freq-step = <2>;
 		qcom,mx-restriction-temp = <5>;
 		qcom,mx-restriction-temp-hysteresis = <5>;
-		qcom,mx-retention-min = <3>;
+		qcom,mx-retention-min =
+			<RPM_SMD_REGULATOR_LEVEL_RETENTION_PLUS>;
 		vdd-mx-supply = <&pmd9635_l9_level>;
+		qcom,cx-retention-min =
+			<RPM_SMD_REGULATOR_LEVEL_RETENTION_PLUS>;
+		vdd-cx-supply = <&pmd9635_s5_level>;
 		qcom,vdd-restriction-temp = <5>;
 		qcom,vdd-restriction-temp-hysteresis = <10>;
 		vdd-dig-supply = <&pmd9635_s5_floor_level>;
+		qcom,cpr-temp-band-enable;
 
 		qcom,vdd-dig-rstr{
 			qcom,vdd-rstr-reg = "vdd-dig";
@@ -805,7 +810,7 @@
 	};
 
 	ssphy: ssphy@78000 {
-		compatible = "qcom,usb-ssphy-qmp";
+		compatible = "qcom,usb-ssphy-qmp-v1";
 		reg = <0x00078000 0x45c>,
 		     <0x01947244 0x4>;
 		reg-names = "qmp_phy_base",

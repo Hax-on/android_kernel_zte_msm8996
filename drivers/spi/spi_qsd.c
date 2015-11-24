@@ -48,6 +48,8 @@
 static int msm_spi_pm_resume_runtime(struct device *device);
 static int msm_spi_pm_suspend_runtime(struct device *device);
 static inline void msm_spi_dma_unmap_buffers(struct msm_spi *dd);
+static int get_local_resources(struct msm_spi *dd);
+static void put_local_resources(struct msm_spi *dd);
 
 static inline int msm_spi_configure_gsbi(struct msm_spi *dd,
 					struct platform_device *pdev)
@@ -302,8 +304,7 @@ static void msm_spi_clk_path_unvote(struct msm_spi *dd)
 
 static void msm_spi_clk_path_teardown(struct msm_spi *dd)
 {
-	if (dd->pdata->active_only)
-		msm_spi_clk_path_unvote(dd);
+	msm_spi_clk_path_unvote(dd);
 
 	if (dd->clk_path_vote.client_hdl) {
 		msm_bus_scale_unregister_client(dd->clk_path_vote.client_hdl);
@@ -356,7 +357,7 @@ static int msm_spi_clk_path_init_structs(struct msm_spi *dd)
 	paths[MSM_SPI_CLK_PATH_RESUME_VEC]  = (struct msm_bus_vectors) {
 		.src = dd->pdata->master_id,
 		.dst = MSM_BUS_SLAVE_EBI_CH0,
-		.ab  = MSM_SPI_CLK_PATH_AVRG_BW(dd),
+		.ab  = 0,
 		.ib  = MSM_SPI_CLK_PATH_BRST_BW(dd),
 	};
 
@@ -371,7 +372,7 @@ static int msm_spi_clk_path_init_structs(struct msm_spi *dd)
 	};
 
 	*dd->clk_path_vote.pdata = (struct msm_bus_scale_pdata) {
-		.active_only  = dd->pdata->active_only,
+		.active_only  = 0,
 		.name         = dev_name(dd->dev),
 		.num_usecases = 2,
 		.usecase      = usecases,
@@ -409,23 +410,20 @@ static int msm_spi_clk_path_postponed_register(struct msm_spi *dd)
 			/* log a success message if an error msg was logged */
 			dd->clk_path_vote.reg_err = false;
 			dev_info(dd->dev,
-				"msm_bus_scale_register_client(mstr-id:%d "
-				"actv-only:%d):0x%x",
-				dd->pdata->master_id, dd->pdata->active_only,
+			"msm_bus_scale_register_client(mstr-id:%d): 0x%x",
+				dd->pdata->master_id,
 				dd->clk_path_vote.client_hdl);
 		}
 
-		if (dd->pdata->active_only)
-			msm_spi_clk_path_vote(dd);
+		msm_spi_clk_path_vote(dd);
 	} else {
 		/* guard to log only one error on multiple failure */
 		if (!dd->clk_path_vote.reg_err) {
 			dd->clk_path_vote.reg_err = true;
 
 			dev_info(dd->dev,
-				"msm_bus_scale_register_client(mstr-id:%d "
-				"actv-only:%d):0",
-				dd->pdata->master_id, dd->pdata->active_only);
+				"msm_bus_scale_register_client(mstr-id:%d): 0",
+				dd->pdata->master_id);
 		}
 	}
 
@@ -451,8 +449,7 @@ static void msm_spi_clk_path_init(struct msm_spi *dd)
 	if (msm_spi_clk_path_postponed_register(dd))
 		return;
 
-	if (dd->pdata->active_only)
-		msm_spi_clk_path_vote(dd);
+	msm_spi_clk_path_vote(dd);
 }
 
 static int msm_spi_calculate_size(int *fifo_size,
@@ -555,7 +552,7 @@ static void msm_spi_read_word_from_fifo(struct msm_spi *dd)
 			   2 bytes: 0x00001234
 			   1 byte : 0x00000012
 			*/
-			shift = 8 * (dd->bytes_per_word - i - 1);
+			shift = BITS_PER_BYTE * i;
 			*dd->read_buf++ = (data_in & (0xFF << shift)) >> shift;
 			dd->rx_bytes_remaining--;
 		}
@@ -1098,7 +1095,7 @@ static void msm_spi_write_word_to_fifo(struct msm_spi *dd)
 			     dd->tx_bytes_remaining; i++) {
 			dd->tx_bytes_remaining--;
 			byte = *dd->write_buf++;
-			word |= (byte << (BITS_PER_BYTE * (3 - i)));
+			word |= (byte << (BITS_PER_BYTE * i));
 		}
 	} else
 		if (dd->tx_bytes_remaining > dd->bytes_per_word)
@@ -1322,8 +1319,10 @@ static void msm_spi_set_qup_io_modes(struct msm_spi *dd)
 	/* Turn on packing for data mover */
 	if (dd->mode == SPI_BAM_MODE)
 		spi_iom |= SPI_IO_M_PACK_EN | SPI_IO_M_UNPACK_EN;
-	else
+	else {
 		spi_iom &= ~(SPI_IO_M_PACK_EN | SPI_IO_M_UNPACK_EN);
+		spi_iom |= SPI_IO_M_OUTPUT_BIT_SHIFT_EN;
+	}
 
 	/*if (dd->mode == SPI_BAM_MODE) {
 		spi_iom |= SPI_IO_C_NO_TRI_STATE;
@@ -1527,6 +1526,20 @@ static inline void msm_spi_set_cs(struct spi_device *spi, bool set_flag)
 	struct msm_spi *dd = spi_master_get_devdata(spi->master);
 	u32 spi_ioc;
 	u32 spi_ioc_orig;
+	int rc;
+
+	rc = pm_runtime_get_sync(dd->dev);
+	if (rc < 0) {
+		dev_err(dd->dev, "Failure during runtime get");
+		return;
+	}
+
+	if (dd->pdata->is_shared) {
+		rc = get_local_resources(dd);
+		if (rc)
+			return;
+	}
+
 
 	if (!(spi->mode & SPI_CS_HIGH))
 		set_flag = !set_flag;
@@ -1540,6 +1553,10 @@ static inline void msm_spi_set_cs(struct spi_device *spi, bool set_flag)
 
 	if (spi_ioc != spi_ioc_orig)
 		writel_relaxed(spi_ioc, dd->base + SPI_IO_CONTROL);
+	if (dd->pdata->is_shared)
+		put_local_resources(dd);
+	pm_runtime_mark_last_busy(dd->dev);
+	pm_runtime_put_autosuspend(dd->dev);
 }
 
 static void reset_core(struct msm_spi *dd)
@@ -2213,8 +2230,6 @@ struct msm_spi_platform_data *msm_spi_dt_to_pdata(
 			&pdata->max_clock_speed,         DT_SGST, DT_U32,   0},
 		{"qcom,infinite-mode",
 			&pdata->infinite_mode,           DT_OPT,  DT_U32,   0},
-		{"qcom,active-only",
-			&pdata->active_only,             DT_OPT,  DT_BOOL,  0},
 		{"qcom,master-id",
 			&pdata->master_id,               DT_SGST, DT_U32,   0},
 		{"qcom,ver-reg-exists",
@@ -2631,7 +2646,7 @@ static int msm_spi_pm_suspend_runtime(struct device *device)
 	if (dd->pdata && !dd->pdata->is_shared)
 		put_local_resources(dd);
 
-	if (dd->pdata && !dd->pdata->active_only)
+	if (dd->pdata)
 		msm_spi_clk_path_unvote(dd);
 
 suspend_exit:
@@ -2662,8 +2677,7 @@ static int msm_spi_pm_resume_runtime(struct device *device)
 			dd->is_init_complete = true;
 	}
 	msm_spi_clk_path_init(dd);
-	if (!dd->pdata->active_only)
-		msm_spi_clk_path_vote(dd);
+	msm_spi_clk_path_vote(dd);
 
 	if (!dd->pdata->is_shared) {
 		ret = get_local_resources(dd);

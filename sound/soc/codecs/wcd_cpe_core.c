@@ -36,7 +36,7 @@
 
 #define CMI_CMD_TIMEOUT (10 * HZ)
 #define WCD_CPE_LSM_MAX_SESSIONS 1
-#define WCD_CPE_AFE_MAX_PORTS 2
+#define WCD_CPE_AFE_MAX_PORTS 4
 #define WCD_CPE_DRAM_SIZE 0x30000
 #define WCD_CPE_DRAM_OFFSET 0x50000
 #define AFE_SVC_EXPLICIT_PORT_START 1
@@ -69,14 +69,12 @@
 #define CPE_ERR_IRQ_CB(core) \
 	(core->cpe_cdc_cb->cpe_err_irq_control)
 
-#define AFE_OUT_BUF_SAMPLES 8
-
 /*
  * AFE output buffer size is always
- * AFE_OUT_BUF_SAMPLES * number of bytes per sample
+ * (sample_rate * number of bytes per sample/2*1000)
  */
-#define AFE_OUT_BUF_SIZE(bit_width) \
-	(AFE_OUT_BUF_SAMPLES * (bit_width / BITS_PER_BYTE))
+#define AFE_OUT_BUF_SIZE(bit_width, sample_rate) \
+	(((sample_rate) * (bit_width / BITS_PER_BYTE))/(2*1000))
 
 enum afe_port_state {
 	AFE_PORT_STATE_DEINIT = 0,
@@ -108,7 +106,15 @@ static struct wcd_cmi_afe_port_data afe_ports[WCD_CPE_AFE_MAX_PORTS + 1];
 static void wcd_cpe_svc_event_cb(const struct cpe_svc_notification *param);
 static int wcd_cpe_setup_irqs(struct wcd_cpe_core *core);
 static void wcd_cpe_cleanup_irqs(struct wcd_cpe_core *core);
+static ssize_t cpe_ftm_test_trigger(struct file *file,
+				     const char __user *user_buf,
+				     size_t count, loff_t *ppos);
 static u32 ramdump_enable;
+static u32 cpe_ftm_test_status;
+static const struct file_operations cpe_ftm_test_trigger_fops = {
+	.open = simple_open,
+	.write = cpe_ftm_test_trigger,
+};
 
 static int wcd_cpe_afe_svc_cmd_mode(void *core_handle,
 				    u8 mode);
@@ -372,13 +378,25 @@ static int wcd_cpe_enable_cpe_clks(struct wcd_cpe_core *core, bool enable)
 		return ret;
 	}
 
-	ret = core->cpe_cdc_cb->cpe_clk_en(core->codec, enable);
-	if (ret) {
-		dev_err(core->dev,
-			"%s: cpe_clk_en() failed, err = %d\n",
-			__func__, ret);
-		goto cpe_clk_fail;
+	if (!enable && core->cpe_clk_ref > 0)
+		core->cpe_clk_ref--;
+
+	/*
+	 * CPE clk will be enabled at the first time
+	 * and be disabled at the last time.
+	 */
+	if (core->cpe_clk_ref == 0) {
+		ret = core->cpe_cdc_cb->cpe_clk_en(core->codec, enable);
+		if (ret) {
+			dev_err(core->dev,
+				"%s: cpe_clk_en() failed, err = %d\n",
+				__func__, ret);
+			goto cpe_clk_fail;
+		}
 	}
+
+	if (enable)
+		core->cpe_clk_ref++;
 
 	return 0;
 
@@ -1650,6 +1668,22 @@ static int wcd_cpe_debugfs_init(struct wcd_cpe_core *core)
 		goto err_create_entry;
 	}
 
+	if (!debugfs_create_file("cpe_ftm_test_trigger", S_IWUSR,
+				dir, core, &cpe_ftm_test_trigger_fops)) {
+		dev_err(core->dev, "%s: Failed to create debugfs node %s\n",
+			__func__, "cpe_ftm_test_trigger");
+		rc = -ENODEV;
+		goto err_create_entry;
+	}
+
+	if (!debugfs_create_u32("cpe_ftm_test_status", S_IRUGO,
+				dir, &cpe_ftm_test_status)) {
+		dev_err(core->dev, "%s: Failed to create debugfs node %s\n",
+			__func__, "cpe_ftm_test_status");
+		rc = -ENODEV;
+		goto err_create_entry;
+	}
+
 err_create_entry:
 	debugfs_remove(dir);
 
@@ -1757,6 +1791,49 @@ done:
 	return rc;
 }
 
+static ssize_t cpe_ftm_test_trigger(struct file *file,
+				     const char __user *user_buf,
+				     size_t count, loff_t *ppos)
+{
+	struct wcd_cpe_core *core = file->private_data;
+	int ret = 0;
+
+	/* Enable the clks for cpe */
+	ret = wcd_cpe_enable_cpe_clks(core, true);
+	if (IS_ERR_VALUE(ret)) {
+		dev_err(core->dev,
+			"%s: CPE clk enable failed, err = %d\n",
+			__func__, ret);
+		goto done;
+	}
+
+	/* Get the CPE_STATUS */
+	ret = cpe_svc_ftm_test(core->cpe_handle, &cpe_ftm_test_status);
+	if (IS_ERR_VALUE(ret)) {
+		dev_err(core->dev,
+			"%s: CPE FTM test failed, err = %d\n",
+			__func__, ret);
+		if (ret == CPE_SVC_BUSY) {
+			cpe_ftm_test_status = 1;
+			ret = 0;
+		}
+	}
+
+	/* Disable the clks for cpe */
+	ret = wcd_cpe_enable_cpe_clks(core, false);
+	if (IS_ERR_VALUE(ret)) {
+		dev_err(core->dev,
+			"%s: CPE clk disable failed, err = %d\n",
+			__func__, ret);
+	}
+
+done:
+	if (ret < 0)
+		return ret;
+	else
+		return count;
+}
+
 static int wcd_cpe_validate_params(
 	struct snd_soc_codec *codec,
 	struct wcd_cpe_params *params)
@@ -1844,6 +1921,7 @@ struct wcd_cpe_core *wcd_cpe_init(const char *img_fname,
 	init_waitqueue_head(&core->ssr_entry.offline_poll_wait);
 	mutex_init(&core->ssr_lock);
 	core->cpe_users = 0;
+	core->cpe_clk_ref = 0;
 
 	/*
 	 * By default, during probe, it is assumed that
@@ -2695,7 +2773,7 @@ err_ret:
 
 static int wcd_cpe_send_param_connectport(struct wcd_cpe_core *core,
 		struct cpe_lsm_session *session,
-		void *data, struct cpe_lsm_ids *ids)
+		void *data, struct cpe_lsm_ids *ids, u16 port_id)
 {
 	struct cpe_lsm_param_connectport con_port_cmd;
 	struct cmi_hdr *msg_hdr = &con_port_cmd.hdr;
@@ -2717,7 +2795,7 @@ static int wcd_cpe_send_param_connectport(struct wcd_cpe_core *core,
 			       CPE_LSM_SESSION_CMD_SET_PARAMS_V2);
 
 	con_port_cmd.minor_version = 1;
-	con_port_cmd.afe_port_id = CPE_AFE_PORT_1_TX;
+	con_port_cmd.afe_port_id = port_id;
 	con_port_cmd.reserved = 0;
 
 	WCD_CPE_GRAB_LOCK(&session->lsm_lock, "lsm");
@@ -2939,7 +3017,7 @@ static int wcd_cpe_set_one_param(void *core_handle,
 		connectport_ids.param_id = LSM_PARAM_ID_CONNECT_TO_PORT;
 
 		rc = wcd_cpe_send_param_connectport(core, session, NULL,
-				       &connectport_ids);
+				       &connectport_ids, CPE_AFE_PORT_1_TX);
 		if (rc)
 			dev_err(core->dev,
 				"%s: send_param_connectport failed, err %d\n",
@@ -3017,7 +3095,7 @@ static int wcd_cpe_lsm_set_params(struct wcd_cpe_core *core,
 	ids.module_id = CPE_LSM_MODULE_ID_VOICE_WAKEUP;
 	ids.param_id = CPE_LSM_PARAM_ID_CONNECT_TO_PORT;
 	ret = wcd_cpe_send_param_connectport(core, session,
-					     NULL, &ids);
+					     NULL, &ids, CPE_AFE_PORT_1_TX);
 	if (ret)
 		dev_err(core->dev,
 			"%s: Failed to set connectPort, err=%d\n",
@@ -3162,6 +3240,58 @@ end_ret:
 }
 
 /*
+ * wcd_cpe_lsm_get_afe_out_port_id: get afe output port id
+ * @core_handle: handle to the CPE core
+ * @session: session for which port id needs to get
+ */
+static int wcd_cpe_lsm_get_afe_out_port_id(void *core_handle,
+					   struct cpe_lsm_session *session)
+{
+	struct wcd_cpe_core *core = core_handle;
+	struct snd_soc_codec *codec;
+	int rc = 0;
+
+	if (!core || !core->codec) {
+		pr_err("%s: Invalid handle to %s\n",
+			__func__,
+			(!core) ? "core" : "codec");
+		rc = -EINVAL;
+		goto done;
+	}
+
+	if (!session) {
+		dev_err(core->dev, "%s: Invalid session\n",
+			__func__);
+		rc = -EINVAL;
+		goto done;
+	}
+
+	if (!core->cpe_cdc_cb ||
+		!core->cpe_cdc_cb->get_afe_out_port_id) {
+		session->afe_out_port_id = WCD_CPE_AFE_OUT_PORT_2;
+		dev_dbg(core->dev,
+			"%s: callback not defined, default port_id = %d\n",
+			__func__, session->afe_out_port_id);
+		goto done;
+	}
+
+	codec = core->codec;
+	rc = core->cpe_cdc_cb->get_afe_out_port_id(codec,
+						   &session->afe_out_port_id);
+	if (rc) {
+		dev_err(core->dev,
+			"%s: failed to get port id, err = %d\n",
+			__func__, rc);
+		goto done;
+	}
+	dev_dbg(core->dev, "%s: port_id: %d\n", __func__,
+		session->afe_out_port_id);
+
+done:
+	return rc;
+}
+
+/*
  * wcd_cpe_cmd_lsm_start: send the start command to lsm
  * @core_handle: handle to the CPE core
  * @session: session for which start command to be sent
@@ -3172,12 +3302,25 @@ static int wcd_cpe_cmd_lsm_start(void *core_handle,
 {
 	struct cmi_hdr cmd_lsm_start;
 	struct wcd_cpe_core *core = core_handle;
+	struct cpe_lsm_ids ids;
 	int ret = 0;
 
 	ret = wcd_cpe_is_valid_lsm_session(core, session,
 					   __func__);
 	if (ret)
 		return ret;
+
+	/* Send connect to port */
+	ids.module_id = CPE_LSM_MODULE_FRAMEWORK;
+	ids.param_id = CPE_LSM_PARAM_ID_CONNECT_TO_PORT;
+	ret = wcd_cpe_send_param_connectport(core, session,
+					NULL, &ids, session->afe_out_port_id);
+	if (ret) {
+		dev_err(core->dev,
+			"%s: Failed to set connectPort, err=%d\n",
+			__func__, ret);
+		return ret;
+	}
 
 	WCD_CPE_GRAB_LOCK(&session->lsm_lock, "lsm");
 
@@ -3377,7 +3520,7 @@ static int wcd_cpe_lsm_config_lab_latency(
 			       PARAM_SIZE_LSM_LATENCY_SIZE,
 			       CPE_LSM_SESSION_CMD_SET_PARAMS_V2);
 
-	pr_debug("%s: Module 0x%x Param 0x%x size %ld pld_size 0x%x\n",
+	pr_debug("%s: Module 0x%x Param 0x%x size %zu pld_size 0x%x\n",
 		  __func__, lab_lat->param.module_id,
 		 lab_lat->param.param_id, PARAM_SIZE_LSM_LATENCY_SIZE,
 		 pld_size);
@@ -3427,7 +3570,7 @@ static int wcd_cpe_lsm_lab_control(
 			PARAM_SIZE_LSM_CONTROL_SIZE,
 			CPE_LSM_SESSION_CMD_SET_PARAMS_V2);
 
-	pr_debug("%s: Module 0x%x, Param 0x%x size %ld pld_size 0x%x\n",
+	pr_debug("%s: Module 0x%x, Param 0x%x size %zu pld_size 0x%x\n",
 		 __func__, lab_enable->param.module_id,
 		 lab_enable->param.param_id, PARAM_SIZE_LSM_CONTROL_SIZE,
 		 pld_size);
@@ -3694,6 +3837,7 @@ int wcd_cpe_get_lsm_ops(struct wcd_cpe_lsm_ops *lsm_ops)
 	lsm_ops->lsm_shmem_dealloc = wcd_cpe_cmd_lsm_shmem_dealloc;
 	lsm_ops->lsm_register_snd_model = wcd_cpe_lsm_reg_snd_model;
 	lsm_ops->lsm_deregister_snd_model = wcd_cpe_lsm_dereg_snd_model;
+	lsm_ops->lsm_get_afe_out_port_id = wcd_cpe_lsm_get_afe_out_port_id;
 	lsm_ops->lsm_start = wcd_cpe_cmd_lsm_start;
 	lsm_ops->lsm_stop = wcd_cpe_cmd_lsm_stop;
 	lsm_ops->lsm_lab_control = wcd_cpe_lsm_lab_control;
@@ -4102,7 +4246,8 @@ static int wcd_cpe_afe_cmd_port_cfg(void *core_handle,
 	port_cfg_cmd.bit_width = afe_cfg->bit_width;
 	port_cfg_cmd.num_channels = afe_cfg->num_channels;
 	port_cfg_cmd.sample_rate = afe_cfg->sample_rate;
-	port_cfg_cmd.buffer_size = AFE_OUT_BUF_SIZE(afe_cfg->bit_width);
+	port_cfg_cmd.buffer_size = AFE_OUT_BUF_SIZE(afe_cfg->bit_width,
+						    afe_cfg->sample_rate);
 
 	ret = wcd_cpe_cmi_send_afe_msg(core, afe_port_d, &port_cfg_cmd);
 	if (ret)

@@ -153,6 +153,8 @@ enum mdss_hw_quirk {
 	MDSS_QUIRK_BWCPANIC,
 	MDSS_QUIRK_ROTCDP,
 	MDSS_QUIRK_DOWNSCALE_HANG,
+	MDSS_QUIRK_DSC_RIGHT_ONLY_PU,
+	MDSS_QUIRK_DSC_2SLICE_PU_THRPUT,
 	MDSS_QUIRK_MAX,
 };
 
@@ -263,8 +265,10 @@ struct mdss_data_type {
 	u32 default_robust_lut;
 
 	/* values used when HW has panic/robust LUTs per pipe */
-	u32 default_panic_lut_per_pipe;
-	u32 default_robust_lut_per_pipe;
+	u32 default_panic_lut_per_pipe_linear;
+	u32 default_panic_lut_per_pipe_tile;
+	u32 default_robust_lut_per_pipe_linear;
+	u32 default_robust_lut_per_pipe_tile;
 
 	u32 has_decimation;
 	bool has_fixed_qos_arbiter_enabled;
@@ -300,6 +304,7 @@ struct mdss_data_type {
 	u32 smp_mb_cnt;
 	u32 smp_mb_size;
 	u32 smp_mb_per_pipe;
+	u32 pixel_ram_size;
 
 	u32 rot_block_size;
 
@@ -479,8 +484,11 @@ struct mdss_util_intf {
 	int (*get_iommu_domain)(u32 type);
 	int (*iommu_attached)(void);
 	int (*iommu_ctrl)(int enable);
+	void (*iommu_lock)(void);
+	void (*iommu_unlock)(void);
 	void (*bus_bandwidth_ctrl)(int enable);
 	int (*bus_scale_set_quota)(int client, u64 ab_quota, u64 ib_quota);
+	int (*panel_intf_status)(u32 disp_num, u32 intf_type);
 	struct mdss_panel_cfg* (*panel_intf_type)(int intf_val);
 };
 

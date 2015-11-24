@@ -146,11 +146,7 @@ int msm_vidc_s_ctrl(void *instance, struct v4l2_control *control)
 	if (!inst || !control)
 		return -EINVAL;
 
-	if (inst->session_type == MSM_VIDC_DECODER)
-		return msm_vdec_s_ctrl(instance, control);
-	if (inst->session_type == MSM_VIDC_ENCODER)
-		return msm_venc_s_ctrl(instance, control);
-	return -EINVAL;
+	return msm_comm_s_ctrl(instance, control);
 }
 EXPORT_SYMBOL(msm_vidc_s_ctrl);
 
@@ -161,11 +157,7 @@ int msm_vidc_g_ctrl(void *instance, struct v4l2_control *control)
 	if (!inst || !control)
 		return -EINVAL;
 
-	if (inst->session_type == MSM_VIDC_DECODER)
-		return msm_vdec_g_ctrl(instance, control);
-	if (inst->session_type == MSM_VIDC_ENCODER)
-		return msm_venc_g_ctrl(instance, control);
-	return -EINVAL;
+	return msm_comm_g_ctrl(instance, control);
 }
 EXPORT_SYMBOL(msm_vidc_g_ctrl);
 
@@ -451,13 +443,6 @@ int map_and_register_buf(struct msm_vidc_inst *inst, struct v4l2_buffer *b)
 		}
 		mutex_lock(&inst->registeredbufs.lock);
 		temp = get_registered_buf(inst, b, i, &plane);
-		if (temp && !is_dynamic_output_buffer_mode(b, inst)) {
-			dprintk(VIDC_DBG,
-				"This memory region has already been prepared\n");
-			rc = 0;
-			mutex_unlock(&inst->registeredbufs.lock);
-			goto exit;
-		}
 
 		if (temp && is_dynamic_output_buffer_mode(b, inst) && !i) {
 			/*
@@ -1198,6 +1183,8 @@ void *msm_vidc_open(int core_id, int session_type)
 		goto fail_bufq_output;
 	}
 
+	setup_event_queue(inst, &core->vdev[session_type].vdev);
+
 	mutex_lock(&core->lock);
 	list_add_tail(&inst->list, &core->instances);
 	mutex_unlock(&core->lock);
@@ -1211,10 +1198,10 @@ void *msm_vidc_open(int core_id, int session_type)
 	inst->debugfs_root =
 		msm_vidc_debugfs_init_inst(inst, core->debugfs_root);
 
-	setup_event_queue(inst, &core->vdev[session_type].vdev);
-
 	return inst;
 fail_init:
+	v4l2_fh_del(&inst->event_handler);
+	v4l2_fh_exit(&inst->event_handler);
 	vb2_queue_release(&inst->bufq[OUTPUT_PORT].vb2_bufq);
 
 	mutex_lock(&core->lock);
@@ -1224,10 +1211,7 @@ fail_init:
 fail_bufq_output:
 	vb2_queue_release(&inst->bufq[CAPTURE_PORT].vb2_bufq);
 fail_bufq_capture:
-	if (session_type == MSM_VIDC_DECODER)
-		msm_vdec_ctrl_deinit(inst);
-	else if (session_type == MSM_VIDC_ENCODER)
-		msm_venc_ctrl_deinit(inst);
+	msm_comm_ctrl_deinit(inst);
 	msm_smem_delete_client(inst->mem_client);
 fail_mem_client:
 	kfree(inst);
@@ -1339,10 +1323,7 @@ int msm_vidc_close(void *instance)
 	}
 	mutex_unlock(&inst->registeredbufs.lock);
 
-	if (inst->session_type == MSM_VIDC_DECODER)
-		msm_vdec_ctrl_deinit(inst);
-	else if (inst->session_type == MSM_VIDC_ENCODER)
-		msm_venc_ctrl_deinit(inst);
+	msm_comm_ctrl_deinit(inst);
 
 	cleanup_instance(inst);
 	if (inst->state != MSM_VIDC_CORE_INVALID &&

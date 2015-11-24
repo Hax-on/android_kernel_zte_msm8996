@@ -63,7 +63,7 @@ static void mdss_dsi_ctrl_phy_reset(struct mdss_dsi_ctrl_pdata *ctrl)
 	wmb();	/* maek sure reset cleared */
 }
 
-static void mdss_dsi_phy_sw_reset(struct mdss_dsi_ctrl_pdata *ctrl)
+void mdss_dsi_phy_sw_reset(struct mdss_dsi_ctrl_pdata *ctrl)
 {
 	struct mdss_dsi_ctrl_pdata *sctrl = NULL;
 	struct dsi_shared_data *sdata;
@@ -245,9 +245,13 @@ static void mdss_dsi_28nm_phy_config(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 	pd = &(((ctrl_pdata->panel_data).panel_info.mipi).dsi_phy_db);
 
 	/* Strength ctrl 0 for 28nm PHY*/
-	if ((ctrl_pdata->shared_data->hw_rev <= MDSS_DSI_HW_REV_103) &&
-		(ctrl_pdata->shared_data->hw_rev != MDSS_DSI_HW_REV_103))
+	if ((ctrl_pdata->shared_data->hw_rev <= MDSS_DSI_HW_REV_103_1) &&
+		(ctrl_pdata->shared_data->hw_rev != MDSS_DSI_HW_REV_103)) {
+		MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x0170, 0x5b);
 		MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x0184, pd->strength[0]);
+		/* make sure PHY strength ctrl is set */
+		wmb();
+	}
 
 	off = 0x0140;	/* phy timing ctrl 0 - 11 */
 	for (i = 0; i < 12; i++) {
@@ -255,12 +259,6 @@ static void mdss_dsi_28nm_phy_config(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 		wmb();
 		off += 4;
 	}
-
-	/* MMSS_DSI_0_PHY_DSIPHY_CTRL_1 */
-	MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x0174, 0x00);
-	/* MMSS_DSI_0_PHY_DSIPHY_CTRL_0 */
-	MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x0170, 0x5f);
-	wmb();
 
 	/* 4 lanes + clk lane configuration */
 	/* lane config n * (0 - 4) & DataPath setup */
@@ -275,8 +273,8 @@ static void mdss_dsi_28nm_phy_config(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 		}
 	}
 
-	/* MMSS_DSI_0_PHY_DSIPHY_CTRL_0 */
-	MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x0170, 0x5f);
+	/* MMSS_DSI_0_PHY_DSIPHY_CTRL_4 */
+	MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x0180, 0x0a);
 	wmb();
 
 	/* DSI_0_PHY_DSIPHY_GLBL_TEST_CTRL */
@@ -285,6 +283,11 @@ static void mdss_dsi_28nm_phy_config(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 		MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x01d4, 0x01);
 	else
 		MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x01d4, 0x00);
+	wmb();
+
+	/* MMSS_DSI_0_PHY_DSIPHY_CTRL_0 */
+	MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x0170, 0x5f);
+	/* make sure PHY lanes are powered on */
 	wmb();
 
 	off = 0x01b4;	/* phy BIST ctrl 0 - 5 */
@@ -1089,7 +1092,7 @@ static int mdss_dsi_ulps_config(struct mdss_dsi_ctrl_pdata *ctrl,
 	pinfo = &pdata->panel_info;
 	mipi = &pinfo->mipi;
 
-	if (!mdss_dsi_ulps_feature_enabled(pdata) ||
+	if (!mdss_dsi_ulps_feature_enabled(pdata) &&
 			!pinfo->ulps_suspend_enabled) {
 		pr_debug("%s: ULPS feature is not enabled\n", __func__);
 		return 0;
@@ -1446,8 +1449,18 @@ int mdss_dsi_pre_clkoff_cb(void *priv,
 	pdata = &ctrl->panel_data;
 
 	if ((clk & MDSS_DSI_LINK_CLK) && (new_state == MDSS_DSI_CLK_OFF)) {
-
-		rc = mdss_dsi_ulps_config(ctrl, 1);
+		/*
+		 * If ULPS feature is enabled, enter ULPS first.
+		 * However, when blanking the panel, we should enter ULPS
+		 * only if ULPS during suspend feature is enabled.
+		 */
+		if (pdata->panel_info.blank_state ==
+			MDSS_PANEL_BLANK_BLANK) {
+			if (pdata->panel_info.ulps_suspend_enabled)
+				mdss_dsi_ulps_config(ctrl, 1);
+		} else if (mdss_dsi_ulps_feature_enabled(pdata)) {
+			rc = mdss_dsi_ulps_config(ctrl, 1);
+		}
 		if (rc) {
 			pr_err("%s: failed enable ulps, rc = %d\n",
 			       __func__, rc);
@@ -1487,20 +1500,10 @@ int mdss_dsi_post_clkon_cb(void *priv,
 			mdss_dsi_read_hw_revision(ctrl);
 
 		/*
-		 * Phy software reset should not be done for:
-		 * 1.) Idle screen power collapse use-case. Issue a phy software
-		 *     reset only when unblanking the panel in this case.
-		 * 2.) When ULPS during suspend is enabled.
+		 * Phy and controller setup is needed if coming out of idle
+		 * power collapse with clamps enabled.
 		 */
-		if (pdata->panel_info.blank_state == MDSS_PANEL_BLANK_BLANK &&
-			!pdata->panel_info.ulps_suspend_enabled)
-			mdss_dsi_phy_sw_reset(ctrl);
-
-		/*
-		 * Phy and controller setup need not be done during bootup
-		 * when continuous splash screen is enabled.
-		 */
-		if (!pdata->panel_info.cont_splash_enabled) {
+		if (ctrl->mmss_clamp) {
 			mdss_dsi_phy_init(ctrl);
 			mdss_dsi_ctrl_setup(ctrl);
 		}
@@ -1537,11 +1540,13 @@ int mdss_dsi_post_clkon_cb(void *priv,
 		}
 	}
 	if (clk & MDSS_DSI_LINK_CLK) {
-		rc = mdss_dsi_ulps_config(ctrl, 0);
-		if (rc) {
-			pr_err("%s: failed to disable ulps, rc= %d\n",
-			       __func__, rc);
-			goto error;
+		if (ctrl->ulps) {
+			rc = mdss_dsi_ulps_config(ctrl, 0);
+			if (rc) {
+				pr_err("%s: failed to disable ulps, rc= %d\n",
+				       __func__, rc);
+				goto error;
+			}
 		}
 	}
 error:

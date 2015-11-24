@@ -110,6 +110,7 @@ void mdss_dsi_ctrl_init(struct device *ctrl_dev,
 	mutex_init(&ctrl->mutex);
 	mutex_init(&ctrl->cmd_mutex);
 	mutex_init(&ctrl->clk_lane_mutex);
+	mutex_init(&ctrl->cmdlist_mutex);
 	mdss_dsi_buf_alloc(ctrl_dev, &ctrl->tx_buf, SZ_4K);
 	mdss_dsi_buf_alloc(ctrl_dev, &ctrl->rx_buf, SZ_4K);
 	mdss_dsi_buf_alloc(ctrl_dev, &ctrl->status_buf, SZ_4K);
@@ -403,6 +404,11 @@ void mdss_dsi_host_init(struct mdss_panel_data *pdata)
 		data |= BIT(0);
 	MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x00cc,
 				data); /* DSI_EOT_PACKET_CTRL */
+	/*
+	 * DSI_HS_TIMER_CTRL -> timer resolution = 8 esc clk
+	 * HS TX timeout - 16136 (0x3f08) esc clk
+	 */
+	MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x00bc, 0x3fd08);
 
 
 	/* allow only ack-err-status  to generate interrupt */
@@ -1026,6 +1032,7 @@ static int mdss_dsi_read_status(struct mdss_dsi_ctrl_pdata *ctrl)
 int mdss_dsi_reg_status_check(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
 	int ret = 0;
+	struct mdss_dsi_ctrl_pdata *sctrl_pdata = NULL;
 
 	if (ctrl_pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
@@ -1037,7 +1044,28 @@ int mdss_dsi_reg_status_check(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 	mdss_dsi_clk_ctrl(ctrl_pdata, ctrl_pdata->dsi_clk_handle,
 			  MDSS_DSI_ALL_CLKS, MDSS_DSI_CLK_ON);
 
-	ret = mdss_dsi_read_status(ctrl_pdata);
+	sctrl_pdata = mdss_dsi_get_other_ctrl(ctrl_pdata);
+	if (!mdss_dsi_sync_wait_enable(ctrl_pdata)) {
+		ret = mdss_dsi_read_status(ctrl_pdata);
+	} else {
+		/*
+		 * Read commands to check ESD status are usually sent at
+		 * the same time to both the controllers. However, if
+		 * sync_wait is enabled, we need to ensure that the
+		 * dcs commands are first sent to the non-trigger
+		 * controller so that when the commands are triggered,
+		 * both controllers receive it at the same time.
+		 */
+		if (mdss_dsi_sync_wait_trigger(ctrl_pdata)) {
+			if (sctrl_pdata)
+				ret = mdss_dsi_read_status(sctrl_pdata);
+			ret = mdss_dsi_read_status(ctrl_pdata);
+		} else {
+			ret = mdss_dsi_read_status(ctrl_pdata);
+			if (sctrl_pdata)
+				ret = mdss_dsi_read_status(sctrl_pdata);
+		}
+	}
 
 	/*
 	 * mdss_dsi_read_status returns the number of bytes returned
@@ -1045,7 +1073,11 @@ int mdss_dsi_reg_status_check(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 	 * case returns zero.
 	 */
 	if (ret > 0) {
-		ret = ctrl_pdata->check_read_status(ctrl_pdata);
+		if (!mdss_dsi_sync_wait_enable(ctrl_pdata) ||
+			mdss_dsi_sync_wait_trigger(ctrl_pdata))
+			ret = ctrl_pdata->check_read_status(ctrl_pdata);
+		else if (sctrl_pdata)
+			ret = ctrl_pdata->check_read_status(sctrl_pdata);
 	} else {
 		pr_err("%s: Read status register returned error\n", __func__);
 	}
@@ -1057,21 +1089,22 @@ int mdss_dsi_reg_status_check(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 	return ret;
 }
 
-static void mdss_dsi_dsc_config(struct mdss_dsi_ctrl_pdata *ctrl,
-				struct dsc_desc *dsc)
+void mdss_dsi_dsc_config(struct mdss_dsi_ctrl_pdata *ctrl, struct dsc_desc *dsc)
 {
-	u32 data;
+	u32 data, offset;
+
+	if (dsc->pkt_per_line <= 0) {
+		pr_err("%s: Error: pkt_per_line cannot be negative or 0\n",
+			__func__);
+		return;
+	}
 
 	if (ctrl->panel_mode == DSI_VIDEO_MODE) {
 		MIPI_OUTP((ctrl->ctrl_base) +
 			MDSS_DSI_VIDEO_COMPRESSION_MODE_CTRL2, 0);
 		data = dsc->bytes_per_pkt << 16;
 		data |= (0x0b << 8);	/*  dtype of compressed image */
-		data |= (dsc->pkt_per_line - 1) << 6;
-		data |= dsc->eol_byte_num << 4;
-		data |= 1;	/* enable */
-		MIPI_OUTP((ctrl->ctrl_base) +
-			MDSS_DSI_VIDEO_COMPRESSION_MODE_CTRL, data);
+		offset = MDSS_DSI_VIDEO_COMPRESSION_MODE_CTRL;
 	} else {
 		/* strem 0 */
 		MIPI_OUTP((ctrl->ctrl_base) +
@@ -1082,12 +1115,23 @@ static void mdss_dsi_dsc_config(struct mdss_dsi_ctrl_pdata *ctrl,
 						dsc->bytes_in_slice);
 
 		data = DTYPE_DCS_LWRITE << 8;
-		data |= (dsc->pkt_per_line - 1) << 6;
-		data |= dsc->eol_byte_num << 4;
-		data |= 1;	/* enable */
-		MIPI_OUTP((ctrl->ctrl_base) +
-			MDSS_DSI_COMMAND_COMPRESSION_MODE_CTRL, data);
+		offset = MDSS_DSI_COMMAND_COMPRESSION_MODE_CTRL;
 	}
+
+	/*
+	 * pkt_per_line:
+	 * 0 == 1 pkt
+	 * 1 == 2 pkt
+	 * 2 == 4 pkt
+	 * 3 pkt is not support
+	 */
+	if (dsc->pkt_per_line == 4)
+		data |= (dsc->pkt_per_line - 2) << 6;
+	else
+		data |= (dsc->pkt_per_line - 1) << 6;
+	data |= dsc->eol_byte_num << 4;
+	data |= 1;	/* enable */
+	MIPI_OUTP((ctrl->ctrl_base) + offset, data);
 }
 
 static void mdss_dsi_mode_setup(struct mdss_panel_data *pdata)
@@ -1198,6 +1242,14 @@ static void mdss_dsi_mode_setup(struct mdss_panel_data *pdata)
 			data |= 0 << 16; /* Word count of the NULL packet */
 			data |= 0x1; /* Enable Null insertion */
 			MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x2b4, data);
+		}
+
+		/* Enable frame transfer in burst mode */
+		if (ctrl_pdata->shared_data->hw_rev >= MDSS_DSI_HW_REV_103) {
+			data = MIPI_INP(ctrl_pdata->ctrl_base + 0x1b8);
+			data = data | BIT(16);
+			MIPI_OUTP((ctrl_pdata->ctrl_base + 0x1b8), data);
+			ctrl_pdata->burst_mode_enabled = 1;
 		}
 
 		/* DSI_COMMAND_MODE_MDP_STREAM_CTRL */
@@ -1827,11 +1879,13 @@ static int mdss_dsi_cmd_dma_tx(struct mdss_dsi_ctrl_pdata *ctrl,
 	len = ALIGN(tp->len, 4);
 	ctrl->dma_size = ALIGN(tp->len, SZ_4K);
 
+	ctrl->mdss_util->iommu_lock();
 	if (ctrl->mdss_util->iommu_attached()) {
 		ret = mdss_smmu_dsi_map_buffer(tp->dmap, domain, ctrl->dma_size,
 			&(ctrl->dma_addr), tp->start, DMA_TO_DEVICE);
 		if (IS_ERR_VALUE(ret)) {
 			pr_err("unable to map dma memory to iommu(%d)\n", ret);
+			ctrl->mdss_util->iommu_unlock();
 			return -ENOMEM;
 		}
 		ctrl->dmap_iommu_map = true;
@@ -1936,6 +1990,7 @@ static int mdss_dsi_cmd_dma_tx(struct mdss_dsi_ctrl_pdata *ctrl,
 	ctrl->dma_addr = 0;
 	ctrl->dma_size = 0;
 end:
+	ctrl->mdss_util->iommu_unlock();
 	return ret;
 }
 
@@ -2280,21 +2335,30 @@ int mdss_dsi_cmdlist_commit(struct mdss_dsi_ctrl_pdata *ctrl, int from_mdp)
 	struct dcs_cmd_req *req;
 	struct mdss_panel_info *pinfo;
 	struct mdss_rect *roi = NULL;
+	bool use_iommu = false;
 	int ret = -EINVAL;
 	int rc = 0;
 	bool hs_req = false;
+	bool cmd_mutex_acquired = false;
 
 	if (mdss_get_sd_client_cnt())
 		return -EPERM;
 
 	if (from_mdp) {	/* from mdp kickoff */
-		mutex_lock(&ctrl->cmd_mutex);
+		if (!ctrl->burst_mode_enabled) {
+			mutex_lock(&ctrl->cmd_mutex);
+			cmd_mutex_acquired = true;
+		}
 		pinfo = &ctrl->panel_data.panel_info;
 		if (pinfo->partial_update_enabled)
 			roi = &pinfo->roi;
 	}
 
 	req = mdss_dsi_cmdlist_get(ctrl);
+	if (req && from_mdp && ctrl->burst_mode_enabled) {
+		mutex_lock(&ctrl->cmd_mutex);
+		cmd_mutex_acquired = true;
+	}
 
 	MDSS_XLOG(ctrl->ndx, from_mdp, ctrl->mdp_busy, current->pid,
 							XLOG_FUNC_ENTRY);
@@ -2302,8 +2366,11 @@ int mdss_dsi_cmdlist_commit(struct mdss_dsi_ctrl_pdata *ctrl, int from_mdp)
 	if (req && (req->flags & CMD_REQ_HS_MODE))
 		hs_req = true;
 
-	/* make sure dsi_cmd_mdp is idle */
-	mdss_dsi_cmd_mdp_busy(ctrl);
+	if (!ctrl->burst_mode_enabled ||
+		(from_mdp && ctrl->shared_data->cmd_clk_ln_recovery_en)) {
+		/* make sure dsi_cmd_mdp is idle */
+		mdss_dsi_cmd_mdp_busy(ctrl);
+	}
 
 	mdss_dsi_get_hw_revision(ctrl);
 
@@ -2361,6 +2428,7 @@ int mdss_dsi_cmdlist_commit(struct mdss_dsi_ctrl_pdata *ctrl, int from_mdp)
 				mutex_unlock(&ctrl->cmd_mutex);
 				return rc;
 			}
+			use_iommu = true;
 		}
 	}
 
@@ -2379,7 +2447,7 @@ int mdss_dsi_cmdlist_commit(struct mdss_dsi_ctrl_pdata *ctrl, int from_mdp)
 		mdss_dsi_set_tx_power_mode(1, &ctrl->panel_data);
 
 	if (!(req->flags & CMD_REQ_DMA_TPG)) {
-		if (ctrl->mdss_util->iommu_ctrl)
+		if (use_iommu)
 			ctrl->mdss_util->iommu_ctrl(0);
 
 		(void)mdss_dsi_bus_bandwidth_vote(ctrl->shared_data, false);
@@ -2403,8 +2471,8 @@ need_lock:
 		 */
 		if (!roi || (roi->w != 0 || roi->h != 0))
 			mdss_dsi_cmd_mdp_start(ctrl);
-
-		mutex_unlock(&ctrl->cmd_mutex);
+		if (cmd_mutex_acquired)
+			mutex_unlock(&ctrl->cmd_mutex);
 	} else {	/* from dcs send */
 		if (ctrl->shared_data->cmd_clk_ln_recovery_en &&
 				ctrl->panel_mode == DSI_CMD_MODE &&

@@ -35,6 +35,10 @@
 	status = "ok";
 };
 
+&qnand_1 {
+	status = "ok";
+};
+
 /* MPP pin 2 configs for SMB358 interrupt line */
 &pm8019_mpps {
 	mpp@a100 {
@@ -43,6 +47,32 @@
 		qcom,src-sel = <0>;	/* QPNP_PIN_SEL_FUNC_CONSTANT */
 		qcom,pull = <2>;	/* PULL UP 10KOHM */
 		qcom,master-en = <1>;
+	};
+};
+
+/* PMIC gpio for wlan power supply */
+&pm8019_gpios {
+	gpio@c200 {
+		qcom,mode = <1>;		/* Digital output */
+		qcom,output-type = <0>;		/* CMOS logic */
+		qcom,invert = <1>;		/* Output high */
+		qcom,vin-sel = <3>;		/* VPH_PWR */
+		qcom,src-sel = <0>;		/* Constant */
+		qcom,out-strength = <1>;	/* High drive strength */
+		qcom,master-en = <1>;		/* Enable GPIO */
+		status = "okay";
+	};
+};
+
+&pm8019_gpios {
+	gpio@c300 { /* GPIO 4 */
+		qcom,mode = <1>;		/* Digital output */
+		qcom,output-type = <0>;		/* CMOS logic */
+		qcom,invert = <0>;		/* Output high */
+		qcom,vin-sel = <0>;		/* VPH_PWR */
+		qcom,src-sel = <0>;		/* GPIO */
+		qcom,out-strength = <1>;	/* Low drive strength */
+		qcom,master-en = <1>;		/* Enable GPIO */
 	};
 };
 
@@ -59,6 +89,48 @@
 	};
 };
 
+&sdhc_1 {
+	vdd-io-supply = <&mdmfermium_l11>;
+	qcom,vdd-io-always-on;
+	qcom,vdd-io-voltage-level = <1800000 1800000>;
+	qcom,vdd-io-current-level = <0 30000>;
+
+	pinctrl-names = "active", "sleep";
+	pinctrl-0 = <&pmx_sdc1_clk_on &pmx_sdc1_cmd_on &pmx_sdc1_data_on
+						&sdc1_wlan_gpio_active>;
+	pinctrl-1 = <&pmx_sdc1_clk_off &pmx_sdc1_cmd_off &pmx_sdc1_data_off>;
+	qcom,nonremovable;
+	qcom,core_3_0v_support;
+	status = "ok";
+};
+
 &usb_otg {
 	vbus_otg-supply = <&smb358_otg_vreg>;
+};
+
+&sdhc_2 {
+	vdd-supply = <&sdcard_ext_vreg>;
+	qcom,vdd-voltage-level = <2850000 2850000>;
+	qcom,vdd-current-level = <15000 400000>;
+
+	vdd-io-supply = <&mdmfermium_l13>;
+	qcom,vdd-io-voltage-level = <1800000 2850000>;
+	qcom,vdd-io-current-level = <200 50000>;
+
+	#address-cells = <0>;
+	interrupt-parent = <&sdhc_2>;
+	interrupts = <0 1 2>;
+	#interrupt-cells = <1>;
+	interrupt-map-mask = <0xffffffff>;
+	interrupt-map = <0 &intc 0 125 0
+			1 &intc 0 221 0
+			2 &tlmm_pinmux 26 0>;
+	interrupt-names = "hc_irq", "pwr_irq", "status_irq";
+	cd-gpios = <&tlmm_pinmux 26 0x1>;
+
+	pinctrl-names = "active", "sleep";
+	pinctrl-0 = <&sdc2_clk_on &sdc2_cmd_on &sdc2_data_on &sdc2_cd_on>;
+	pinctrl-1 = <&sdc2_clk_off &sdc2_cmd_off &sdc2_data_off>;
+
+	status = "disabled";
 };

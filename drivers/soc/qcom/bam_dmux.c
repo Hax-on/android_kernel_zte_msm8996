@@ -1158,7 +1158,7 @@ int msm_bam_dmux_close(uint32_t id)
 	if (id >= BAM_DMUX_NUM_CHANNELS)
 		return -EINVAL;
 	DBG("%s: closing ch %d\n", __func__, id);
-	if (!bam_mux_initialized)
+	if (!bam_mux_initialized || !bam_ch_is_local_open(id))
 		return -ENODEV;
 
 	read_lock(&ul_wakeup_lock);
@@ -2290,6 +2290,7 @@ static int bam_init(void)
 	a2_props.summing_threshold = A2_SUMMING_THRESHOLD;
 	a2_props.constrained_logging = true;
 	a2_props.logging_number = 1;
+	a2_props.ipc_loglevel = 3;
 	if (satellite_mode)
 		a2_props.manage = SPS_BAM_MGR_DEVICE_REMOTE;
 	/* need to free on tear down */

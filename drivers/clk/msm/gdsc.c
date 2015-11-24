@@ -33,6 +33,7 @@
 #define HW_CONTROL_MASK		BIT(1)
 #define SW_COLLAPSE_MASK	BIT(0)
 #define GMEM_CLAMP_IO_MASK	BIT(0)
+#define BCR_BLK_ARES_BIT	BIT(0)
 
 /* Wait 2^n CXO cycles between all states. Here, n=2 (4 cycles). */
 #define EN_REST_WAIT_VAL	(0x2 << 20)
@@ -41,18 +42,48 @@
 
 #define TIMEOUT_US		100
 #define MAX_GDSCR_READS		100
+#define MAX_VOTABLE_GDSCR_READS	200
+
+struct gdsc {
+	struct regulator_dev	*rdev;
+	struct regulator_desc	rdesc;
+	void __iomem		*gdscr;
+	struct clk		**clocks;
+	int			clock_count;
+	bool			toggle_mem;
+	bool			toggle_periph;
+	bool			toggle_logic;
+	bool			resets_asserted;
+	bool			root_en;
+	bool			force_root_en;
+	int			root_clk_idx;
+	bool			no_status_check_on_disable;
+	bool			is_gdsc_enabled;
+	void __iomem		*domain_addr;
+	void __iomem		*hw_ctrl_addr;
+	void __iomem		*sw_reset_addr;
+};
 
 enum gdscr_status {
 	ENABLED,
 	DISABLED,
 };
 
-static int poll_gdsc_status(void __iomem *gdscr, enum gdscr_status status)
+static int poll_gdsc_status(struct gdsc *sc, enum gdscr_status status)
 {
+	void __iomem *gdscr;
 	int count;
 	u32 val;
 
-	for (count = MAX_GDSCR_READS; count > 0; count--) {
+	if (sc->hw_ctrl_addr) {
+		gdscr = sc->hw_ctrl_addr;
+		count = MAX_VOTABLE_GDSCR_READS;
+	} else {
+		gdscr = sc->gdscr;
+		count = MAX_GDSCR_READS;
+	}
+
+	for (; count > 0; count--) {
 		val = readl_relaxed(gdscr);
 		val &= PWR_ON_MASK;
 		switch (status) {
@@ -76,24 +107,6 @@ static int poll_gdsc_status(void __iomem *gdscr, enum gdscr_status status)
 	}
 	return -ETIMEDOUT;
 }
-struct gdsc {
-	struct regulator_dev	*rdev;
-	struct regulator_desc	rdesc;
-	void __iomem		*gdscr;
-	struct clk		**clocks;
-	int			clock_count;
-	bool			toggle_mem;
-	bool			toggle_periph;
-	bool			toggle_logic;
-	bool			resets_asserted;
-	bool			root_en;
-	bool			force_root_en;
-	int			root_clk_idx;
-	bool			no_status_check_on_disable;
-	bool			is_gdsc_enabled;
-	void __iomem		*domain_addr;
-	void __iomem		*hw_ctrl_addr;
-};
 
 static int gdsc_is_enabled(struct regulator_dev *rdev)
 {
@@ -126,6 +139,24 @@ static int gdsc_enable(struct regulator_dev *rdev)
 		clk_prepare_enable(sc->clocks[sc->root_clk_idx]);
 
 	if (sc->toggle_logic) {
+		if (sc->sw_reset_addr) {
+			regval = readl_relaxed(sc->sw_reset_addr);
+			regval |= BCR_BLK_ARES_BIT;
+			writel_relaxed(regval, sc->sw_reset_addr);
+			/*
+			 * BLK_ARES should be kept asserted for 1us before
+			 * being de-asserted.
+			 */
+			wmb();
+			udelay(1);
+
+			regval &= ~BCR_BLK_ARES_BIT;
+			writel_relaxed(regval, sc->sw_reset_addr);
+
+			/* Make sure de-assert goes through before continuing */
+			wmb();
+		}
+
 		if (sc->domain_addr) {
 			regval = readl_relaxed(sc->domain_addr);
 			regval &= ~GMEM_CLAMP_IO_MASK;
@@ -150,11 +181,7 @@ static int gdsc_enable(struct regulator_dev *rdev)
 		mb();
 		udelay(1);
 
-		if (sc->hw_ctrl_addr)
-			ret = poll_gdsc_status(sc->hw_ctrl_addr, ENABLED);
-		else
-			ret = poll_gdsc_status(sc->gdscr, ENABLED);
-
+		ret = poll_gdsc_status(sc, ENABLED);
 		if (ret) {
 			dev_err(&rdev->dev, "%s enable timed out: 0x%x\n",
 				sc->rdesc.name, regval);
@@ -164,8 +191,8 @@ static int gdsc_enable(struct regulator_dev *rdev)
 				hw_ctrl_regval =
 					readl_relaxed(sc->hw_ctrl_addr);
 				dev_err(&rdev->dev, "%s final state (%d us after timeout): 0x%x, GDS_HW_CTRL: 0x%x\n",
-					sc->rdesc.name, regval,
-					hw_ctrl_regval, TIMEOUT_US);
+					sc->rdesc.name, TIMEOUT_US, regval,
+					hw_ctrl_regval);
 			} else
 				dev_err(&rdev->dev, "%s final state: 0x%x (%d us after timeout)\n",
 					sc->rdesc.name, regval, TIMEOUT_US);
@@ -247,11 +274,7 @@ static int gdsc_disable(struct regulator_dev *rdev)
 			 */
 			udelay(TIMEOUT_US);
 		} else {
-			if (sc->hw_ctrl_addr)
-				ret = poll_gdsc_status(sc->hw_ctrl_addr,
-								DISABLED);
-			else
-				ret = poll_gdsc_status(sc->gdscr, DISABLED);
+			ret = poll_gdsc_status(sc, DISABLED);
 			if (ret)
 				dev_err(&rdev->dev, "%s disable timed out: 0x%x\n",
 					sc->rdesc.name, regval);
@@ -338,7 +361,7 @@ static int gdsc_set_mode(struct regulator_dev *rdev, unsigned int mode)
 		 */
 		mb();
 		udelay(1);
-		ret = poll_gdsc_status(sc->gdscr, ENABLED);
+		ret = poll_gdsc_status(sc, ENABLED);
 		if (ret) {
 			dev_err(&rdev->dev, "%s set_mode timed out: 0x%x\n",
 				sc->rdesc.name, regval);
@@ -400,6 +423,15 @@ static int gdsc_probe(struct platform_device *pdev)
 		sc->domain_addr = devm_ioremap(&pdev->dev, res->start,
 							resource_size(res));
 		if (sc->domain_addr == NULL)
+			return -ENOMEM;
+	}
+
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+							"sw_reset");
+	if (res) {
+		sc->sw_reset_addr = devm_ioremap(&pdev->dev, res->start,
+							resource_size(res));
+		if (sc->sw_reset_addr == NULL)
 			return -ENOMEM;
 	}
 
@@ -499,7 +531,7 @@ static int gdsc_probe(struct platform_device *pdev)
 		regval &= ~SW_COLLAPSE_MASK;
 		writel_relaxed(regval, sc->gdscr);
 
-		ret = poll_gdsc_status(sc->gdscr, ENABLED);
+		ret = poll_gdsc_status(sc, ENABLED);
 		if (ret) {
 			dev_err(&pdev->dev, "%s enable timed out: 0x%x\n",
 				sc->rdesc.name, regval);

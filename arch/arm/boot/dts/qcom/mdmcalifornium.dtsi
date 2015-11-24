@@ -39,6 +39,12 @@
 			reg = <0x88000000 0x6E00000>;
 			label = "mss_mem";
 		};
+
+		audio_mem: audio_region@0 {
+			compatible = "shared-dma-pool";
+			reusable;
+			size = <0 0x400000>;
+		 };
 	};
 
 	aliases {
@@ -69,6 +75,8 @@
 #include "msm-gdsc.dtsi"
 #include "mdmcalifornium-blsp.dtsi"
 #include "mdmcalifornium-bus.dtsi"
+#include "mdmcalifornium-coresight.dtsi"
+#include "mdmcalifornium-ion.dtsi"
 
 &soc {
 	#address-cells = <1>;
@@ -117,6 +125,52 @@
 		};
 	};
 
+	qcom,mss@4080000{
+		compatible = "qcom,pil-q6v55-mss";
+		reg = <0x4080000 0x100>,
+		      <0x194e000 0x400>,
+		      <0x4180000 0x040>,
+		      <0x1810000 0x004>;
+		reg-names = "qdsp6_base", "halt_base", "rmb_base",
+			    "restart_reg";
+
+		clocks = <&clock_gcc clk_xo>,
+			 <&clock_gcc clk_gcc_mss_cfg_ahb_clk>,
+			 <&clock_gcc clk_gcc_mss_q6_bimc_axi_clk>,
+			 <&clock_gcc clk_gcc_boot_rom_ahb_clk>,
+			 <&clock_gcc clk_gpll0_out_msscc>;
+		clock-names = "xo", "iface_clk", "bus_clk", "mem_clk",
+			      "gpll0_mss_clk";
+		qcom,proxy-clock-names = "xo";
+		qcom,active-clock-names = "iface_clk", "bus_clk", "mem_clk",
+					"gpll0_mss_clk";
+
+		interrupts = <0 24 1>;
+		vdd_cx-supply = <&pmdcalifornium_s5_level>;
+		vdd_cx-voltage = <RPM_SMD_REGULATOR_LEVEL_TURBO>;
+		vdd_mx-supply = <&pmdcalifornium_l9_level>;
+		vdd_mx-uV = <RPM_SMD_REGULATOR_LEVEL_TURBO>;
+		vdd_pll-supply = <&pmdcalifornium_l5>;
+		qcom,vdd_pll = <1800000>;
+		qcom,firmware-name = "modem";
+		qcom,pil-self-auth;
+		qcom,sysmon-id = <0>;
+		qcom,ssctl-instance-id = <0x12>;
+		qcom,override-acc;
+		qcom,qdsp6v61-1-1;
+		memory-region = <&mss_mem>;
+
+		/* GPIO inputs from mss */
+		qcom,gpio-err-fatal = <&smp2pgpio_ssr_smp2p_1_in 0 0>;
+		qcom,gpio-err-ready = <&smp2pgpio_ssr_smp2p_1_in 1 0>;
+		qcom,gpio-proxy-unvote = <&smp2pgpio_ssr_smp2p_1_in 2 0>;
+		qcom,gpio-stop-ack = <&smp2pgpio_ssr_smp2p_1_in 3 0>;
+
+		/* GPIO output to mss */
+		qcom,gpio-force-stop = <&smp2pgpio_ssr_smp2p_1_out 0 0>;
+
+	};
+
 	clock_gcc: qcom,gcc@1800000 {
 		compatible = "qcom,gcc-californium";
 		reg = <0x1800000 0x80000>,
@@ -158,7 +212,7 @@
 	restart@4ab000 {
 		compatible = "qcom,pshold";
 		reg = <0x4ab000 0x4>,
-		      <0x7b3000 0x4>;
+		      <0x0193d100 0x4>;
 		reg-names = "pshold-base", "tcsr-boot-misc-detect";
 	};
 
@@ -238,6 +292,12 @@
 		status = "disabled";
 	};
 
+	 bt_qca6174 {
+		compatible = "qca,qca6174";
+		qca,bt-reset-gpio = <&pmdcalifornium_gpios 8 0>; /* BT_EN */
+		qca,bt-vdd-pa-supply = <&rome_vreg>;
+	};
+
 	qcom,sps {
 		compatible = "qcom,msm_sps_4k";
 		qcom,pipe-attr-ee;
@@ -267,6 +327,7 @@
 		qcom,ipa-hw-mode = <0>; /* IPA hw type = Normal */
 		qcom,ee = <0>;
 		qcom,use-gsi;
+		qcom,use-rg10-limitation-mitigation;
 		qcom,use-ipa-tethering-bridge;
 		qcom,modem-cfg-emb-pipe-flt;
 		clock-names = "core_clk";
@@ -315,6 +376,25 @@
 		interrupts = <1 3 0>, <1 2 0>;
 		qcom,bark-time = <11000>;
 		qcom,pet-time = <10000>;
+	};
+
+	jtag_fuse: jtagfuse@5e01c {
+		compatible = "qcom,jtag-fuse-v2";
+		reg = <0xa601c 0x8>;
+		reg-names = "fuse-base";
+	};
+
+	jtag_mm0: jtagmm@842000 {
+		compatible = "qcom,jtag-mm";
+		reg = <0x842000 0x1000>,
+		      <0x840000 0x1000>;
+		reg-names = "etm-base","debug-base";
+
+		qcom,coresight-jtagmm-cpu = <&CPU0>;
+
+		clocks = <&clock_gcc clk_qdss_clk>,
+			 <&clock_gcc clk_qdss_a_clk>;
+		clock-names = "core_clk", "core_a_clk";
 	};
 
 	qcom,ipc-spinlock@1905000 {
@@ -505,6 +585,7 @@
 	qcom,ipc_router {
 		compatible = "qcom,ipc_router";
 		qcom,node-id = <1>;
+		qcom,default-peripheral = "modem";
 	};
 
 	qcom,ipc_router_modem_xprt {
@@ -536,112 +617,6 @@
 		#size-cells = <0>;
 		cell-index = <0>;
 		qcom,not-wakeup; /* Needed until Full-boot-chain enabled */
-	};
-
-	usb3: ssusb@8a00000 {
-		compatible = "qcom,dwc-usb3-msm";
-		reg = <0x08a00000 0xf8c00>,
-			<0x0007e000 0x400>;
-		reg-names = "core_base", "ahb2phy_base";
-		#address-cells = <1>;
-		#size-cells = <1>;
-		ranges;
-
-		interrupt-parent = <&usb3>;
-		interrupts = <0 1>;
-		#interrupt-cells = <1>;
-		interrupt-map-mask = <0x0 0xffffffff>;
-		interrupt-map = <0x0 0 &intc 0 202 0
-				 0x0 1 &intc 0 180 0>;
-		interrupt-names = "hs_phy_irq", "pwr_event_irq";
-		USB3_GDSC-supply = <&gdsc_usb30>;
-		vdda33-supply = <&pmdcalifornium_l10>;
-		vdda18-supply = <&pmdcalifornium_l5>;
-
-		qcom,msm-bus,name = "usb3";
-		qcom,msm-bus,num-cases = <2>;
-		qcom,msm-bus,num-paths = <1>;
-		qcom,msm-bus,vectors-KBps =
-					<61 512 0 0>,
-					<61 512 0 960000>;
-		qcom,power-collapse-on-cable-disconnect;
-		qcom,por-after-power-collapse;
-		qcom,lpm-to-suspend-delay-ms = <2000>;
-
-		clocks = <&clock_gcc clk_gcc_usb30_master_clk>,
-			 <&clock_gcc clk_gcc_sys_noc_usb3_axi_clk>,
-			 <&clock_gcc clk_gcc_usb30_mock_utmi_clk>,
-			 <&clock_gcc clk_gcc_usb30_sleep_clk>,
-			 <&clock_gcc clk_ln_bb_clk>,
-			 <&clock_gcc clk_cxo_dwc3_clk>,
-			 <&clock_gcc clk_gcc_usb_phy_cfg_ahb_clk>;
-
-		clock-names = "core_clk", "iface_clk", "utmi_clk", "sleep_clk",
-			      "ref_clk", "xo", "cfg_ahb_clk";
-
-		dwc3@8a00000 {
-			compatible = "snps,dwc3";
-			reg = <0x08a00000 0xcd00>;
-			interrupt-parent = <&intc>;
-			interrupts = <0 131 0>;
-			usb-phy = <&qusb_phy>, <&ssphy>;
-			snps,nominal-elastic-buffer;
-			snps,is-utmi-l1-suspend;
-			snps,hird-threshold = /bits/ 8 <0x0>;
-			snps,bus-suspend-enable;
-			snps,usb3-u1u2-disable;
-			snps,num-gsi-evt-buffs = <0x3>;
-		};
-	};
-
-	android_usb {
-		compatible = "qcom,android-usb";
-	};
-
-	qusb_phy: qusb@79000 {
-		compatible = "qcom,qusb2phy";
-		reg = <0x00079000 0x180>,
-		      <0x08af8800 0x400>;
-		reg-names = "qusb_phy_base",
-			    "qscratch_base";
-		vdd-supply = <&pmdcalifornium_l4>;
-		vdda18-supply = <&pmdcalifornium_l5>;
-		vdda33-supply = <&pmdcalifornium_l10>;
-		qcom,vdd-voltage-level = <0 928000 928000>;
-		qcom,qusb-tune = <0xa06393d5>;
-		phy_type = "utmi";
-
-		clocks = <&clock_gcc clk_ln_bb_clk>,
-			 <&clock_gcc clk_gcc_qusb_ref_clk>,
-			 <&clock_gcc clk_gcc_usb_phy_cfg_ahb_clk>,
-			 <&clock_gcc clk_gcc_qusb2a_phy_reset>;
-
-		clock-names = "ref_clk_src", "ref_clk", "cfg_ahb_clk",
-			"phy_reset";
-	};
-
-	ssphy: ssphy@78000 {
-		compatible = "qcom,usb-ssphy-qmp";
-		reg = <0x00078000 0x45c>,
-		      <0x01947244 0x4>;
-		reg-names = "qmp_phy_base",
-			    "vls_clamp_reg";
-		vdd-supply = <&pmdcalifornium_l4>;
-		vdda18-supply = <&pmdcalifornium_l5>;
-		qcom,vdd-voltage-level = <0 928000 928000>;
-		qcom,vbus-valid-override;
-
-		clocks = <&clock_gcc clk_gcc_usb3_aux_clk>,
-			 <&clock_gcc clk_gcc_usb3_pipe_clk>,
-			 <&clock_gcc clk_gcc_usb_phy_cfg_ahb_clk>,
-			 <&clock_gcc clk_gcc_usb3_phy_reset>,
-			 <&clock_gcc clk_gcc_usb3phy_phy_reset>,
-			 <&clock_gcc clk_ln_bb_clk>,
-			 <&clock_gcc clk_gcc_usb_ss_ref_clk>;
-
-		clock-names = "aux_clk", "pipe_clk", "cfg_ahb_clk",
-			      "phy_reset", "phy_phy_reset",
-			      "ref_clk_src", "ref_clk";
 	};
 
 	tsens0: tsens@4a9000 {
@@ -769,6 +744,7 @@
 #include "msm-pmdcalifornium-rpm-regulator.dtsi"
 #include "msm-pmdcalifornium.dtsi"
 #include "mdmcalifornium-regulator.dtsi"
+#include "mdmcalifornium-usb.dtsi"
 
 &pmdcalifornium_pon {
 	interrupts = <0x0 0x8 0x0>;

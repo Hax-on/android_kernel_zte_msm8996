@@ -102,7 +102,7 @@
 				qcom,decimation = <0>;
 				qcom,pre-div-channel-scaling = <0>;
 				qcom,calibration-type = "absolute";
-				qcom,scale-function = <3>;
+				qcom,scale-function = <16>;
 				qcom,hw-settle-time = <0>;
 				qcom,fast-avg-setup = <0>;
 				qcom,vadc-thermal-node;
@@ -295,6 +295,10 @@
 							"flash-fail",
 							"otst2",
 							"otst3";
+			};
+
+			smbcharger_charger_otg: qcom,smbcharger-boost-otg {
+				regulator-name = "smbcharger_charger_otg";
 			};
 		};
 

@@ -381,9 +381,7 @@ static inline void mdss_fb_update_notify_update(struct msm_fb_data_type *mfd)
 /* Function returns true for either any kind of dual display */
 static inline bool is_panel_split(struct msm_fb_data_type *mfd)
 {
-	return mfd &&
-	       (mfd->split_mode == MDP_DUAL_LM_DUAL_DISPLAY ||
-		mfd->split_mode == MDP_PINGPONG_SPLIT);
+	return mfd && mfd->panel_info && mfd->panel_info->is_split_display;
 }
 /* Function returns true, if Layer Mixer split is Set */
 static inline bool is_split_lm(struct msm_fb_data_type *mfd)
@@ -397,7 +395,10 @@ static inline bool is_pingpong_split(struct msm_fb_data_type *mfd)
 {
 	return mfd && (mfd->split_mode == MDP_PINGPONG_SPLIT);
 }
-
+static inline bool is_dual_lm_single_display(struct msm_fb_data_type *mfd)
+{
+	return mfd && (mfd->split_mode == MDP_DUAL_LM_SINGLE_DISPLAY);
+}
 static inline bool mdss_fb_is_power_off(struct msm_fb_data_type *mfd)
 {
 	return mdss_panel_is_power_off(mfd->panel_power_state);
@@ -446,4 +447,6 @@ int mdss_fb_async_position_update(struct fb_info *info,
 
 u32 mdss_fb_get_mode_switch(struct msm_fb_data_type *mfd);
 void mdss_fb_report_panel_dead(struct msm_fb_data_type *mfd);
+void mdss_panelinfo_to_fb_var(struct mdss_panel_info *pinfo,
+						struct fb_var_screeninfo *var);
 #endif /* MDSS_FB_H */

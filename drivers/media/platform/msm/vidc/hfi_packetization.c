@@ -558,6 +558,9 @@ static int get_hfi_extradata_index(enum hal_extradata_id index)
 	case HAL_EXTRADATA_YUV_STATS:
 		ret = HFI_PROPERTY_PARAM_VENC_YUVSTAT_INFO_EXTRADATA;
 		break;
+	case HAL_EXTRADATA_ROI_QP:
+		ret = HFI_PROPERTY_PARAM_VENC_ROI_QP_EXTRADATA;
+		break;
 	default:
 		dprintk(VIDC_WARN, "Extradata index not found: %d\n", index);
 		break;
@@ -2165,6 +2168,14 @@ static int create_3x_pkt_cmd_session_set_property(
 
 		pkt->size += sizeof(u32) + sizeof(struct
 				hfi_buffer_count_actual);
+		break;
+	}
+	case HAL_PARAM_VENC_H264_PIC_ORDER_CNT:
+	{
+		pkt->rg_property_data[0] =
+			HFI_PROPERTY_PARAM_VENC_H264_PICORDER_CNT_TYPE;
+		pkt->rg_property_data[1] = *(u32 *)pdata;
+		pkt->size += sizeof(u32) * 2;
 		break;
 	}
 	default:

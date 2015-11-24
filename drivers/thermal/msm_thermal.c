@@ -187,7 +187,7 @@ static struct kobj_attribute mx_enabled_attr;
 static struct attribute_group cx_attr_gp;
 static struct attribute_group gfx_attr_gp;
 static struct attribute_group mx_attr_group;
-static struct regulator *vdd_mx;
+static struct regulator *vdd_mx, *vdd_cx;
 static long *tsens_temp_at_panic;
 static u32 tsens_temp_print;
 static uint32_t bucket;
@@ -444,6 +444,39 @@ static ssize_t thermal_config_debugfs_write(struct file *file,
 			sensor_mgr_disable_threshold( \
 				&thresh[_id]); \
 		_flag = 0; \
+	} while (0)
+
+#define APPLY_VDD_RESTRICTION(vdd, level, name, ret)                   \
+	do {                                                              \
+		ret = regulator_set_voltage(vdd, level, INT_MAX);         \
+		if (ret) {                                                \
+			pr_err("Failed to vote %s to level %d, err %d\n", \
+			 #name, level, ret);                              \
+		} else {                                                  \
+			ret = regulator_enable(vdd);                      \
+			if (ret)                                          \
+				pr_err("Failed to enable %s, err %d\n",   \
+					#name, ret);                      \
+			else                                              \
+				pr_debug("Vote %s with level %d\n",       \
+					#name, level);                    \
+		}                                                         \
+	} while (0)
+
+#define REMOVE_VDD_RESTRICTION(vdd, name, ret)                             \
+	do {                                                                  \
+		ret = regulator_disable(vdd);                                 \
+		if (ret) {                                                    \
+			pr_err("Failed to disable %s, error %d\n",            \
+				#name, ret);                                  \
+		} else {                                                      \
+			ret = regulator_set_voltage(vdd, 0, INT_MAX);      \
+			if (ret)                                              \
+				pr_err("Failed to remove %s vote, error %d\n",\
+					#name, ret);                          \
+			else                                                  \
+				pr_debug("Remove voting to %s\n", #name);     \
+		}                                                             \
 	} while (0)
 
 static void uio_init(struct platform_device *pdev)
@@ -2546,50 +2579,37 @@ set_threshold_exit:
 
 static int apply_vdd_mx_restriction(void)
 {
-	int ret = 0;
+	int ret_mx = 0, ret_cx = 0;
 
 	if (mx_restr_applied)
 		goto done;
 
-	ret = regulator_set_voltage(vdd_mx, msm_thermal_info.vdd_mx_min,
-			INT_MAX);
-	if (ret) {
-		pr_err("Failed to add mx vote, error %d\n", ret);
-		goto done;
-	}
-
-	ret = regulator_enable(vdd_mx);
-	if (ret)
-		pr_err("Failed to vote for mx voltage %d, error %d\n",
-				msm_thermal_info.vdd_mx_min, ret);
-	else
+	APPLY_VDD_RESTRICTION(vdd_mx, msm_thermal_info.vdd_mx_min, mx, ret_mx);
+	if (vdd_cx)
+		APPLY_VDD_RESTRICTION(vdd_cx, msm_thermal_info.vdd_cx_min,
+			cx, ret_cx);
+	if (!ret_mx && !ret_cx)
 		mx_restr_applied = true;
 
 done:
-	return ret;
+	return (ret_mx | ret_cx);
 }
 
 static int remove_vdd_mx_restriction(void)
 {
-	int ret = 0;
+	int ret_mx = 0, ret_cx = 0;
 
 	if (!mx_restr_applied)
 		goto done;
 
-	ret = regulator_disable(vdd_mx);
-	if (ret) {
-		pr_err("Failed to disable mx voting, error %d\n", ret);
-		goto done;
-	}
-
-	ret = regulator_set_voltage(vdd_mx, 0, INT_MAX);
-	if (ret)
-		pr_err("Failed to remove mx vote, error %d\n", ret);
-	else
+	REMOVE_VDD_RESTRICTION(vdd_mx, mx, ret_mx);
+	if (vdd_cx)
+		REMOVE_VDD_RESTRICTION(vdd_cx, cx, ret_cx);
+	if (!ret_mx && !ret_cx)
 		mx_restr_applied = false;
 
 done:
-	return ret;
+	return (ret_mx | ret_cx);
 }
 
 static int do_vdd_mx(void)
@@ -3387,7 +3407,8 @@ static int __ref msm_thermal_cpu_callback(struct notifier_block *nfb,
 {
 	uint32_t cpu = (uintptr_t)hcpu;
 
-	if (action == CPU_UP_PREPARE || action == CPU_UP_PREPARE_FROZEN) {
+	switch (action & ~CPU_TASKS_FROZEN) {
+	case CPU_UP_PREPARE:
 		if (!cpumask_test_and_set_cpu(cpu, cpus_previously_online))
 			pr_debug("Total prev cores online tracked %u\n",
 				cpumask_weight(cpus_previously_online));
@@ -3398,11 +3419,32 @@ static int __ref msm_thermal_cpu_callback(struct notifier_block *nfb,
 				cpu);
 			return NOTIFY_BAD;
 		}
-	} else if (action == CPU_DOWN_PREPARE ||
-				action == CPU_DOWN_PREPARE_FROZEN) {
+		break;
+	case CPU_DOWN_PREPARE:
 		if (!cpumask_test_and_set_cpu(cpu, cpus_previously_online))
 			pr_debug("Total prev cores online tracked %u\n",
 				cpumask_weight(cpus_previously_online));
+		break;
+	case CPU_ONLINE:
+		if (core_control_enabled &&
+			(msm_thermal_info.core_control_mask & BIT(cpu)) &&
+			(cpus_offlined & BIT(cpu))) {
+			if (hotplug_task) {
+				pr_debug("Re-evaluate and hotplug CPU%d\n",
+					cpu);
+				complete(&hotplug_notify_complete);
+			} else {
+				/*
+				 * This will be auto-corrected next time
+				 * do_core_control() is called
+				 */
+				pr_err("CPU%d online, after thermal veto\n",
+					cpu);
+			}
+		}
+		break;
+	default:
+		break;
 	}
 
 	pr_debug("voting for CPU%d to be online\n", cpu);
@@ -5714,6 +5756,21 @@ static int probe_vdd_mx(struct device_node *node,
 		goto read_node_done;
 	}
 
+	key = "qcom,cx-retention-min";
+	ret = of_property_read_u32(node, key, &data->vdd_cx_min);
+	if (!ret) {
+		vdd_cx = devm_regulator_get(&pdev->dev, "vdd-cx");
+		if (IS_ERR_OR_NULL(vdd_cx)) {
+			ret = PTR_ERR(vdd_cx);
+			if (ret != -EPROBE_DEFER) {
+				pr_err(
+				"Could not get regulator: vdd-cx, err:%d\n",
+				ret);
+			}
+			goto read_node_done;
+		}
+	}
+
 	ret = sensor_mgr_init_threshold(&thresh[MSM_VDD_MX_RESTRICTION],
 			MONITOR_ALL_TSENS,
 			data->vdd_mx_temp_degC + data->vdd_mx_temp_hyst_degC,
@@ -6649,8 +6706,11 @@ static void thermal_mx_config_read(struct seq_file *m, void *data)
 		seq_printf(m, "threshold clear:%d degC\n",
 				msm_thermal_info.vdd_mx_temp_degC
 				+ msm_thermal_info.vdd_mx_temp_hyst_degC);
-		seq_printf(m, "retention value:%d\n",
+		seq_printf(m, "mx retention value:%d\n",
 				msm_thermal_info.vdd_mx_min);
+		if (vdd_cx)
+			seq_printf(m, "cx retention value:%d\n",
+				msm_thermal_info.vdd_cx_min);
 	}
 }
 
@@ -7039,6 +7099,7 @@ static int msm_thermal_dev_exit(struct platform_device *inp_dev)
 					r->device_handle[i] = NULL;
 				}
 			}
+			kfree(rails);
 		}
 		if (cx_phase_ctrl_enabled) {
 			sensor_mgr_remove_threshold(

@@ -310,11 +310,15 @@ static void __vbif_debug_bus(struct vbif_debug_bus *head,
 			/* make sure that test point is enabled */
 			wmb();
 			val = readl_relaxed(vbif_base + MMSS_VBIF_TEST_BUS_OUT);
-			if (dump_addr)
+			if (dump_addr) {
+				*dump_addr++ = head->block_bus_addr;
+				*dump_addr++ = i;
+				*dump_addr++ = j;
 				*dump_addr++ = val;
+			}
 			if (in_log)
-				pr_err("arb/xin id=%d index=%d val=0x%x\n",
-					i, j, val);
+				pr_err("testpoint:%x arb/xin id=%d index=%d val=0x%x\n",
+					head->block_bus_addr, i, j, val);
 		}
 	}
 }
@@ -354,8 +358,8 @@ static void mdss_dump_vbif_debug_bus(u32 bus_dump_flag,
 		list_size += (head->block_cnt * head->test_pnt_cnt);
 	}
 
-	/* will keep in 4 bytes each entry*/
-	list_size *= 4;
+	/* 4 bytes * 4 entries for each test point*/
+	list_size *= 16;
 
 	in_log = (bus_dump_flag & MDSS_DBG_DUMP_IN_LOG);
 	in_mem = (bus_dump_flag & MDSS_DBG_DUMP_IN_MEM);
@@ -392,7 +396,7 @@ static void mdss_dump_vbif_debug_bus(u32 bus_dump_flag,
 		wmb();
 
 		__vbif_debug_bus(head, vbif_base, dump_addr, in_log);
-		dump_addr += (head->block_cnt * head->test_pnt_cnt);
+		dump_addr += (head->block_cnt * head->test_pnt_cnt * 4);
 	}
 
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
@@ -509,7 +513,7 @@ static void mdss_dump_reg_by_blk(const char *blk_name)
 		return;
 
 	list_for_each_entry_safe(blk_base, tmp, &mdd->base_list, head) {
-		if (blk_base->name &&
+		if (strlen(blk_base->name) &&
 			!strcmp(blk_base->name, blk_name)) {
 			mdss_dump_reg_by_ranges(blk_base,
 				mdss_dbg_xlog.enable_reg_dump);
@@ -528,7 +532,7 @@ static void mdss_dump_reg_all(void)
 		return;
 
 	list_for_each_entry_safe(blk_base, tmp, &mdd->base_list, head) {
-		if (blk_base->name)
+		if (strlen(blk_base->name))
 			mdss_dump_reg_by_blk(blk_base->name);
 	}
 }
@@ -552,7 +556,7 @@ struct mdss_debug_base *get_dump_blk_addr(const char *blk_name)
 		return NULL;
 
 	list_for_each_entry_safe(blk_base, tmp, &mdd->base_list, head) {
-		if (blk_base->name &&
+		if (strlen(blk_base->name) &&
 			!strcmp(blk_base->name, blk_name))
 				return blk_base;
 	}

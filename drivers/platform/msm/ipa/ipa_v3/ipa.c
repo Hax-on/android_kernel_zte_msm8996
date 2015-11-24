@@ -3751,10 +3751,7 @@ fail_remap:
 fail_clk:
 	msm_bus_scale_unregister_client(ipa3_ctx->ipa_bus_hdl);
 fail_bus_reg:
-	if (ipa3_bus_scale_table) {
-		msm_bus_cl_clear_pdata(ipa3_bus_scale_table);
-		ipa3_bus_scale_table = NULL;
-	}
+	ipa3_bus_scale_table = NULL;
 fail_bind:
 	kfree(ipa3_ctx->ctrl);
 fail_mem_ctrl:
@@ -4028,20 +4025,20 @@ static int ipa_smmu_uc_cb_probe(struct device *dev)
 		return -EPROBE_DEFER;
 	}
 
-	ret = ipa3_arm_iommu_attach_device(cb->dev, cb->mapping);
-	if (ret) {
-		IPAERR("could not attach device ret=%d\n", ret);
-		return ret;
-	}
-
 	if (smmu_disable_htw) {
 		if (iommu_domain_set_attr(cb->mapping->domain,
 				DOMAIN_ATTR_COHERENT_HTW_DISABLE,
 				 &disable_htw)) {
 			IPAERR("couldn't disable coherent HTW\n");
-			ipa3_arm_iommu_detach_device(cb->dev);
 			return -EIO;
 		}
+	}
+
+
+	ret = ipa3_arm_iommu_attach_device(cb->dev, cb->mapping);
+	if (ret) {
+		IPAERR("could not attach device ret=%d\n", ret);
+		return ret;
 	}
 
 	cb->valid = true;

@@ -514,7 +514,12 @@ static struct msm_soc_info cpu_of_id[] = {
 	[270] = {MSM_CPU_8929, "MSM8229"},
 	[271] = {MSM_CPU_8929, "APQ8029"},
 
+	/* Cobalt ID */
+	[292] = {MSM_CPU_COBALT, "MSMCOBALT"},
+
+	/* Titanium ID */
 	[293] = {MSM_CPU_TITANIUM, "MSMTITANIUM"},
+
 	/* FERMIUM ID */
 	[290] = {MSM_CPU_FERMIUM, "MDMFERMIUM"},
 	[296] = {MSM_CPU_FERMIUM, "MDMFERMIUM"},
@@ -528,8 +533,9 @@ static struct msm_soc_info cpu_of_id[] = {
 	[285] = {MSM_CPU_CALIFORNIUM, "MDMCALIFORNIUM"},
 	[286] = {MSM_CPU_CALIFORNIUM, "MDMCALIFORNIUM"},
 
-	/*MSMTHORIUM ID  */
-	[294] = {MSM_CPU_THORIUM, "MSMTHORIUM"},
+	/*MSM8937 ID  */
+	[294] = {MSM_CPU_8937, "MSM8937"},
+	[295] = {MSM_CPU_8937, "APQ8937"},
 
 	/* Uninitialized IDs are not known to run Linux.
 	   MSM_CPU_UNKNOWN is set to 0 to ensure these IDs are
@@ -1223,9 +1229,13 @@ static void * __init setup_dummy_socinfo(void)
 		dummy_socinfo.id = 290;
 		strlcpy(dummy_socinfo.build_id, "mdmfermium - ",
 			sizeof(dummy_socinfo.build_id));
-	} else if (early_machine_is_msmthorium()) {
+	} else if (early_machine_is_msmcobalt()) {
+		dummy_socinfo.id = 292;
+		strlcpy(dummy_socinfo.build_id, "msmcobalt - ",
+			sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_msm8937()) {
 		dummy_socinfo.id = 294;
-		strlcpy(dummy_socinfo.build_id, "msmthorium - ",
+		strlcpy(dummy_socinfo.build_id, "msm8937 - ",
 			sizeof(dummy_socinfo.build_id));
 	}
 

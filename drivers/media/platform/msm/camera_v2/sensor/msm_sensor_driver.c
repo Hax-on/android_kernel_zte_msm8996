@@ -10,7 +10,7 @@
  * GNU General Public License for more details.
  */
 
-#define SENSOR_DRIVER_I2C "camera"
+#define SENSOR_DRIVER_I2C "i2c_camera"
 /* Header file declaration */
 #include "msm_sensor.h"
 #include "msm_sd.h"
@@ -119,6 +119,13 @@ static int32_t msm_sensor_driver_create_i2c_v4l_subdev
 	s_ctrl->sensordata->sensor_info->session_id = session_id;
 	s_ctrl->msm_sd.close_seq = MSM_SD_CLOSE_2ND_CATEGORY | 0x3;
 	msm_sd_register(&s_ctrl->msm_sd);
+	msm_sensor_v4l2_subdev_fops = v4l2_subdev_fops;
+#ifdef CONFIG_COMPAT
+	msm_sensor_v4l2_subdev_fops.compat_ioctl32 =
+		msm_sensor_subdev_fops_ioctl;
+#endif
+	s_ctrl->msm_sd.sd.devnode->fops =
+		&msm_sensor_v4l2_subdev_fops;
 	CDBG("%s:%d\n", __func__, __LINE__);
 	return rc;
 }
@@ -149,7 +156,7 @@ static int32_t msm_sensor_driver_create_v4l_subdev
 	s_ctrl->msm_sd.sd.entity.name = s_ctrl->msm_sd.sd.name;
 	s_ctrl->msm_sd.close_seq = MSM_SD_CLOSE_2ND_CATEGORY | 0x3;
 	msm_sd_register(&s_ctrl->msm_sd);
-	msm_sensor_v4l2_subdev_fops = v4l2_subdev_fops;
+	msm_cam_copy_v4l2_subdev_fops(&msm_sensor_v4l2_subdev_fops);
 #ifdef CONFIG_COMPAT
 	msm_sensor_v4l2_subdev_fops.compat_ioctl32 =
 		msm_sensor_subdev_fops_ioctl;
@@ -215,14 +222,11 @@ static int32_t msm_sensor_fill_eeprom_subdevid_by_name(
 				struct msm_sensor_ctrl_t *s_ctrl)
 {
 	int32_t rc = 0;
-	const char *eeprom_name;
 	struct device_node *src_node = NULL;
-	uint32_t val = 0, count = 0, eeprom_name_len;
-	int i;
+	uint32_t val = 0, eeprom_name_len;
 	int32_t *eeprom_subdev_id;
 	struct  msm_sensor_info_t *sensor_info;
 	struct device_node *of_node = s_ctrl->of_node;
-	const void *p;
 
 	if (!s_ctrl->sensordata->eeprom_name || !of_node)
 		return -EINVAL;
@@ -242,51 +246,32 @@ static int32_t msm_sensor_fill_eeprom_subdevid_by_name(
 	if (0 == eeprom_name_len)
 		return 0;
 
-	CDBG("Try to find eeprom subdev for %s\n",
-			s_ctrl->sensordata->eeprom_name);
-	p = of_get_property(of_node, "qcom,eeprom-src", &count);
-	if (!p || !count)
-		return 0;
+	src_node = of_parse_phandle(of_node, "qcom,eeprom-src", 0);
+	if (!src_node) {
+		pr_err("eeprom src node NULL\n");
+		return -EINVAL;
+	}
 
-	count /= sizeof(uint32_t);
-	for (i = 0; i < count; i++) {
-		eeprom_name = NULL;
-		src_node = of_parse_phandle(of_node, "qcom,eeprom-src", i);
-		if (!src_node) {
-			pr_err("eeprom src node NULL\n");
-			continue;
-		}
-		rc = of_property_read_string(src_node, "qcom,eeprom-name",
-			&eeprom_name);
-		if (rc < 0) {
-			pr_err("failed\n");
-			of_node_put(src_node);
-			continue;
-		}
-		if (strcmp(eeprom_name, s_ctrl->sensordata->eeprom_name))
-			continue;
+	rc = of_property_read_u32(src_node, "cell-index", &val);
+	if (rc < 0) {
+		pr_err("%s qcom,eeprom cell index %d, rc %d\n",
+			__func__, val, rc);
+		of_node_put(src_node);
+		return -EINVAL;
+	}
 
-		rc = of_property_read_u32(src_node, "cell-index", &val);
-
-		CDBG("%s qcom,eeprom cell index %d, rc %d\n", __func__,
-			val, rc);
-		if (rc < 0) {
-			pr_err("failed\n");
-			of_node_put(src_node);
-			continue;
-		}
 /*
   * by ZTE_YCM_20140728 yi.changming 400015
   */
 // --->		
 		msm_get_info_from_eeprom(s_ctrl,src_node);
 // <---	400015
-		*eeprom_subdev_id = val;
-		CDBG("Done. Eeprom subdevice id is %d\n", val);
-		of_node_put(src_node);
-		src_node = NULL;
-		break;
-	}
+
+	*eeprom_subdev_id = val;
+	CDBG("%s:%d Eeprom subdevice id is %d\n",
+		__func__, __LINE__, val);
+	of_node_put(src_node);
+	src_node = NULL;
 
 	return rc;
 }
@@ -1433,7 +1418,7 @@ static int __init msm_sensor_driver_init(void)
 {
 	int32_t rc = 0;
 
-	CDBG("Enter");
+	CDBG("%s Enter\n", __func__);
 /*
   * by ZTE_YCM_20140909 yi.changming 400006
   */
@@ -1442,17 +1427,15 @@ static int __init msm_sensor_driver_init(void)
 // <---400006
 
 	rc = platform_driver_register(&msm_sensor_platform_driver);
-	if (!rc) {
-		CDBG("probe success");
-		return rc;
-	} else {
-		CDBG("probe i2c");
-		rc = i2c_add_driver(&msm_sensor_driver_i2c);
-	}
+	if (rc)
+		pr_err("%s platform_driver_register failed rc = %d",
+			__func__, rc);
+	rc = i2c_add_driver(&msm_sensor_driver_i2c);
+	if (rc)
+		pr_err("%s i2c_add_driver failed rc = %d",  __func__, rc);
 
 	return rc;
 }
-
 
 static void __exit msm_sensor_driver_exit(void)
 {

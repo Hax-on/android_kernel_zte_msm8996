@@ -117,14 +117,16 @@ int socinfo_get_ffbm_flag(void);
 	of_flat_dt_is_compatible(of_get_flat_dt_root(), "qcom,msm8952")
 #define early_machine_is_msmtitanium()	\
 	of_flat_dt_is_compatible(of_get_flat_dt_root(), "qcom,msmtitanium")
-#define early_machine_is_msmthorium()	\
-	of_flat_dt_is_compatible(of_get_flat_dt_root(), "qcom,msmthorium")
+#define early_machine_is_msm8937()	\
+	of_flat_dt_is_compatible(of_get_flat_dt_root(), "qcom,msm8937")
 #define early_machine_is_msm8996()	\
 	of_flat_dt_is_compatible(of_get_flat_dt_root(), "qcom,msm8996")
 #define early_machine_is_msm8929()	\
 	of_flat_dt_is_compatible(of_get_flat_dt_root(), "qcom,msm8929")
 #define early_machine_is_mdmfermium()	\
 	of_flat_dt_is_compatible(of_get_flat_dt_root(), "qcom,mdmfermium")
+#define early_machine_is_msmcobalt()	\
+	of_flat_dt_is_compatible(of_get_flat_dt_root(), "qcom,msmcobalt")
 #else
 #define of_board_is_sim()		0
 #define of_board_is_rumi()		0
@@ -156,12 +158,13 @@ int socinfo_get_ffbm_flag(void);
 #define early_machine_is_fsm9010()	0
 #define early_machine_is_msm8952()	0
 #define early_machine_is_msmtitanium()	0
-#define early_machine_is_msmthorium()	0
+#define early_machine_is_msm8937()	0
 #define early_machine_is_msm8996()	0
 #define early_machine_is_msm8976() 0
 #define early_machine_is_msm8929()	0
 #define early_machine_is_mdmfermium()	0
 #define early_machine_is_mdmcalifornium()	0
+#define early_machine_is_msmcobalt()	0
 #endif
 
 #define PLATFORM_SUBTYPE_MDM	1
@@ -216,12 +219,13 @@ enum msm_cpu {
 	FSM_CPU_9010,
 	MSM_CPU_8952,
 	MSM_CPU_TITANIUM,
-	MSM_CPU_THORIUM,
+	MSM_CPU_8937,
 	MSM_CPU_8996,
 	MSM_CPU_8976,
 	MSM_CPU_8929,
 	MSM_CPU_FERMIUM,
 	MSM_CPU_CALIFORNIUM,
+	MSM_CPU_COBALT,
 };
 
 struct msm_soc_info {
