@@ -811,16 +811,6 @@
 		status = "okay";
 	};
 
-	gpio@cd00 { /* GPIO 14 - lcd_bklt_reg_en */
-		qcom,mode = <1>;	/* DIGITAL OUT */
-		qcom,output-type = <0>;		/* CMOS logic */
-		qcom,invert = <1>; 	/* output hight initially */
-		qcom,vin-sel = <2>;	/* 1.8 */
-		qcom,src-sel = <0>;	/* CONSTANT */
-		qcom,out-strength = <1>;	/* Low drive strength */
-		qcom,master-en = <1>;	/* ENABLE GPIO */
-		status = "okay";
-	};
 	gpio@c100 { /* GPIO 2*/
 		qcom,mode = <0>;
 		qcom,pull = <0>;
@@ -869,6 +859,8 @@
 		qcom,master-en = <1>;
 		status = "okay";
 	};
+
+	/* gpio@cd00 GPIO 14 deleted by usb */
 
 	gpio@ce00 { /* GPIO 15 */
 		qcom,mode = <1>;
