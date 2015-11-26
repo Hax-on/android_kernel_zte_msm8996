@@ -298,6 +298,9 @@ enum smbchg_wa {
 	SMBCHG_CC_ESR_WA = BIT(4),
 };
 
+#define DEFAULT_BATT_CAPACITY	50
+static int get_property_from_fg(struct smbchg_chip *chip,
+		enum power_supply_property prop, int *val);
 enum print_reason {
 	PR_REGISTER	= BIT(0),
 	PR_INTERRUPT	= BIT(1),
@@ -836,10 +839,15 @@ static void read_usb_type(struct smbchg_chip *chip, char **usb_type_name,
 #define BAT_TCC_REACHED_BIT		BIT(7)
 static int get_prop_batt_status(struct smbchg_chip *chip)
 {
-	int rc, status = POWER_SUPPLY_STATUS_DISCHARGING;
+	int capacity,rc, status = POWER_SUPPLY_STATUS_DISCHARGING;
 	u8 reg = 0, chg_type;
 	bool charger_present, chg_inhibit;
 
+	rc = get_property_from_fg(chip, POWER_SUPPLY_PROP_CAPACITY, &capacity);
+	if (rc) {
+		pr_smb(PR_STATUS, "Couldn't get capacity rc = %d\n", rc);
+		capacity = DEFAULT_BATT_CAPACITY;
+	}
 	charger_present = is_usb_present(chip) | is_dc_present(chip) |
 			  chip->hvdcp_3_det_ignore_uv;
 	if (!charger_present)
@@ -979,7 +987,6 @@ extern int enable_to_shutdown;    //ZTE add
 ///int enable_to_shutdown = 1;//ZTE add
 static int soft_cc_adjust_soc(struct smbchg_chip *chip);
 
-#define DEFAULT_BATT_CAPACITY	50
 static int get_prop_batt_capacity(struct smbchg_chip *chip)
 {
 	int capacity, rc;
