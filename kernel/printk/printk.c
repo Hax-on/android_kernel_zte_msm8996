@@ -1058,6 +1058,8 @@ static size_t print_time(u64 ts, long zte_ns, char *buf,
 
 	//rem_nsec = do_div(ts, 1000000000); //zte change
 
+    ts -= 60*sys_tz.tz_minuteswest;//zte_pm_20151126. copy tongchangda 8952-L, sync kernel&system log-time (twist kernel timestamp)
+
 	if (!buf)
 		return snprintf(NULL, 0, "[%5lu.000000] ", (unsigned long)ts);
 
