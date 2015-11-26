@@ -626,7 +626,7 @@ int socinfo_get_ffbm_flag(void)
 }
 EXPORT_SYMBOL(socinfo_get_ffbm_flag);
 
-///lkej add code for pv version
+//zte_pm_20151126 add  for pv version // boot add
 static int pv_flag = 0;
 
 void socinfo_set_pv_flag(int val)
