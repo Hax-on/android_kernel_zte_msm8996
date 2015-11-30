@@ -409,6 +409,13 @@
 
 };
 
+&dsi_dual_zte_samsung_5p5_wqhd_cmd {
+	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_dcs";
+	qcom,mdss-dsi-bl-min-level = <1>;
+	qcom,mdss-dsi-bl-max-level = <255>;
+	//qcom,cont-splash-enabled;
+	qcom,panel-supply-entries = <&dsi_panel_pwr_supply_no_labibb>;
+};
 &dsi_nt35597_dsc_cmd {
 	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_wled";
 	qcom,mdss-dsi-bl-min-level = <1>;
@@ -607,7 +614,7 @@
 
 &soc {
 	i2c@75ba000 {
-		synaptics@20 {
+		/*synaptics@20 {
 			compatible = "synaptics,dsx";
 			reg = <0x20>;
 			interrupt-parent = <&tlmm>;
@@ -622,21 +629,24 @@
 			synaptics,reset-gpio = <&tlmm 89 0x00>;
 			synaptics,irq-gpio = <&tlmm 125 0x2008>;
 			synaptics,disable-gpios;
-			synaptics,fw-name = "PR1702898-s3528t_00350002.img";
+			synaptics,fw-name = "PR1702898-s3528t_00350002.img";*/
 			/* Underlying clocks used by secure touch */
-			clock-names = "iface_clk", "core_clk";
+			/*clock-names = "iface_clk", "core_clk";
 			clocks = <&clock_gcc clk_gcc_blsp2_ahb_clk>,
 				 <&clock_gcc clk_gcc_blsp2_qup6_i2c_apps_clk>;
-		};
+		};*/
 	             gt1x-touchscreen@5d {
 			compatible = "goodix,gt1x";
 			reg = <0x5d>;
 			interrupt-parent = <&tlmm>;
-			interrupts = <13 0x2008>;
-			dvdd-supply = <&pm8994_l14>;
-			avdd-supply = <&pm8994_l22>;
+			interrupts = <125 0x2008>;
+			pinctrl-names = "pmx_ts_active","pmx_ts_suspend";
+			pinctrl-0 = <&ts_active>;
+			pinctrl-1 = <&ts_suspend>;
+			vdd_ana-supply= <&pm8994_l14>;
+			vcc_i2c-supply = <&pm8994_l22>;
 			//goodix,avdd-gpio = <&tlmm 98 0x00>;
-		       goodix,reset-gpio = <&tlmm 89 0x00>;
+		       goodix,rst-gpio = <&tlmm 89 0x00>;
 			goodix,irq-gpio = <&tlmm 125 0x00>;
 		};
 	};
@@ -796,16 +806,6 @@
 		status = "okay";
 	};
 
-	gpio@cd00 { /* GPIO 14 - lcd_bklt_reg_en */
-		qcom,mode = <1>;	/* DIGITAL OUT */
-		qcom,output-type = <0>;		/* CMOS logic */
-		qcom,invert = <1>; 	/* output hight initially */
-		qcom,vin-sel = <2>;	/* 1.8 */
-		qcom,src-sel = <0>;	/* CONSTANT */
-		qcom,out-strength = <1>;	/* Low drive strength */
-		qcom,master-en = <1>;	/* ENABLE GPIO */
-		status = "okay";
-	};
 	gpio@c100 { /* GPIO 2*/
 		qcom,mode = <0>;
 		qcom,pull = <0>;
@@ -854,6 +854,8 @@
 		qcom,master-en = <1>;
 		status = "okay";
 	};
+
+	/* gpio@cd00 GPIO 14 deleted by usb */
 
 	gpio@ce00 { /* GPIO 15 */
 		qcom,mode = <1>;

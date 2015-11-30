@@ -219,8 +219,7 @@
 			qcom,pmic-revid = <&pmi8994_revid>;
 			qcom,charge-unknown-battery;
 			qcom,bmd-pin-src = "bpd_thm";
-			qcom,enable-hvdcp-9v;
-			qcom,charging-timeout-mins = <1536>;
+			qcom,charging-timeout-mins = <768>;
 			qcom,precharging-timeout-mins = <24>;
 			qcom,force-aicl-rerun;
 			qcom,aicl-rerun-period-s = <180>;
@@ -327,6 +326,7 @@
 			qcom,bcl-lm-threshold-ma = <127>;
 			qcom,bcl-mh-threshold-ma = <405>;
 			qcom,fg-iterm-ma = <150>;
+			qcom,thermal-coefficients = [EC 85 75 4A FC 35];
 			qcom,fg-chg-iterm-ma = <150>;
 			qcom,cycle-counter-en;
 			qcom,capacity-learning-on;
@@ -608,10 +608,19 @@
 				qcom,mode = "pwm";
 				pwms = <&pmi8994_pwm_2 0 0>;
 				qcom,pwm-us = <1000>;
-				qcom,max-current = <12>;
+				qcom,start-idx = <0>;
+				qcom,idx-len = <10>;/*Attention: this value is not used*/
+				qcom,ramp-step-ms = <50>;
+				qcom,lut-flags = <31>;
+				qcom,pause-lo = <3000>;
+				qcom,pause-hi = <2000>;
+				qcom,duty-pcts = [00 05 0A 0F 14
+			                 19 1E 23 28 2D];
+				qcom,max-current = <6>;
 				qcom,default-state = "off";
 				linux,name = "green";
-				linux,default-trigger = "battery-full";
+				linux,default-trigger = "none"; /*battery-full*/
+				qcom,use-blink;
 			};
 
 			blue_led: qcom,rgb_2 {
@@ -620,10 +629,19 @@
 				qcom,mode = "pwm";
 				pwms = <&pmi8994_pwm_1 0 0>;
 				qcom,pwm-us = <1000>;
-				qcom,max-current = <12>;
+				qcom,start-idx = <0>;
+				qcom,idx-len = <10>;/*Attention: this value is not used*/
+				qcom,ramp-step-ms = <50>;
+				qcom,lut-flags = <31>;
+				qcom,pause-lo = <3000>;
+				qcom,pause-hi = <2000>;
+				qcom,duty-pcts = [00 05 0A 0F 14
+			                 19 1E 23 28 2D];
+				qcom,max-current = <6>;
 				qcom,default-state = "off";
 				linux,name = "blue";
-				linux,default-trigger = "boot-indication";
+				linux,default-trigger = "none"; /*boot-indication*/
+				qcom,use-blink;
 			};
 		};
 

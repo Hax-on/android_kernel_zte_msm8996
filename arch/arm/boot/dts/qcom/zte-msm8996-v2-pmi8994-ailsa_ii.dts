@@ -21,3 +21,12 @@
 	compatible = "qcom,msm8996-mtp", "qcom,msm8996", "qcom,mtp";
 	qcom,board-id = <100 0>;
 };
+&soc {
+        zte-hall {
+                compatible = "zte-hall";
+                hall_en{
+                        label = "hall_en";
+                        gpios = <&tlmm 124 0x0>;
+                };
+        };
+};

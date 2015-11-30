@@ -1088,7 +1088,7 @@ static int mdss_dsi_off(struct mdss_panel_data *pdata, int power_state)
 	}
 	mdss_dsi_clk_ctrl(ctrl_pdata, ctrl_pdata->dsi_clk_handle,
 			  MDSS_DSI_CORE_CLK, MDSS_DSI_CLK_OFF);
-
+	mdss_dsi_panel_3v_power(pdata, 0);
 panel_power_ctrl:
 	ret = mdss_dsi_panel_power_ctrl(pdata, power_state);
 	if (ret) {

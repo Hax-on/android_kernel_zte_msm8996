@@ -22,6 +22,7 @@
 #include <linux/sched.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
+#include <soc/qcom/socinfo.h>//zte_pm_20151126 for pv-hall
 
 struct boot_stats {
 	uint32_t bootloader_start;
@@ -104,3 +105,21 @@ int boot_stats_init(void)
 	return 0;
 }
 
+//zte_pm_20151126 add for pv-hall,set pv flag here, get in zte-hall.c
+#define SOCINFO_CMDLINE_PV_FLAG "androidboot.pv-version="
+#define SOCINFO_CMDLINE_PV_VERSION   "1"
+#define SOCINFO_CMDLINE_NON_PV_VERSION      "0"
+static int __init zte_pv_flag_init(char *ver)
+{
+	int is_pv_ver = 0;
+
+	if (!strncmp(ver, SOCINFO_CMDLINE_PV_VERSION, strlen(SOCINFO_CMDLINE_PV_VERSION)))
+	{
+		is_pv_ver = 1;
+	}
+    printk(KERN_ERR "pv flag: %d ", is_pv_ver);
+	socinfo_set_pv_flag(is_pv_ver);
+	return 0;
+}
+__setup(SOCINFO_CMDLINE_PV_FLAG, zte_pv_flag_init);
+//zte_pm_end
