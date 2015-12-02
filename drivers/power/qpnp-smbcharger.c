@@ -10,7 +10,7 @@
  * GNU General Public License for more details.
  */
 #define pr_fmt(fmt) "SMBCHG: %s: " fmt, __func__
-
+#define DEBUG //zte
 #include <linux/spmi.h>
 #include <linux/spinlock.h>
 #include <linux/gpio.h>
@@ -1017,7 +1017,7 @@ static int soft_cc_adjust_soc(struct smbchg_chip *chip);
 static int get_prop_batt_capacity(struct smbchg_chip *chip)
 {
 	int capacity, rc;
-
+return DEFAULT_BATT_CAPACITY;
 	if (chip->fake_battery_soc >= 0)
 		return chip->fake_battery_soc;
 
@@ -1029,7 +1029,7 @@ static int get_prop_batt_capacity(struct smbchg_chip *chip)
 	if(report_zero)
 	{
 		printk("%s.kernel is waiting for APP shutdown,as SOC==0. \n",__func__);
-		return 0;
+		//return 0;
 	}
 	if (capacity == 0)
 	{
@@ -1048,8 +1048,8 @@ static int get_prop_batt_capacity(struct smbchg_chip *chip)
 		*/
 		if (is_usb_present(chip)) {
 			capacity = soft_cc_adjust_soc(chip);
-			if (capacity == 0)
-				report_zero = true;
+			//if (capacity == 0)
+				//report_zero = true;
 		}
 	}
 	else
@@ -1057,7 +1057,10 @@ static int get_prop_batt_capacity(struct smbchg_chip *chip)
 
 	if((capacity >= 98) && (get_prop_batt_status(chip) == POWER_SUPPLY_STATUS_FULL))
 		return 100;
-
+if(capacity==0){
+	printk("ZTE remove shutdown\n");
+	capacity=1;
+}
 	return capacity;
 }
 
@@ -1065,7 +1068,7 @@ static int get_prop_batt_capacity(struct smbchg_chip *chip)
 static int get_prop_batt_temp(struct smbchg_chip *chip)
 {
 	int temp, rc;
-
+	return 200;
 	rc = get_property_from_fg(chip, POWER_SUPPLY_PROP_TEMP, &temp);
 	if (rc) {
 		pr_smb(PR_STATUS, "Couldn't get temperature rc = %d\n", rc);
@@ -7700,9 +7703,9 @@ static void update_heartbeat(struct work_struct *work)
 		unsigned long delta = jiffies - report_zero_jiffies;
 		pr_info("offcharging_flag=%d %ld=%ld-%ld\n",
 			offcharging_flag, delta, jiffies, report_zero_jiffies);
-		if ((offcharging_flag && time_after(jiffies,report_zero_jiffies+OFFCHG_FORCE_POWEROFF_DELTA )) ||
-			(!offcharging_flag && time_after(jiffies,report_zero_jiffies+NORMAL_FORCE_POWEROFF_DELTA )) )
-			kernel_power_off();
+		//if ((offcharging_flag && time_after(jiffies,report_zero_jiffies+OFFCHG_FORCE_POWEROFF_DELTA )) ||
+			//(!offcharging_flag && time_after(jiffies,report_zero_jiffies+NORMAL_FORCE_POWEROFF_DELTA )) )
+			//kernel_power_off();
 		}
 	}else
 		report_zero_jiffies = 0;

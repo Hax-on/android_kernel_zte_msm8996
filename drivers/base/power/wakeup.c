@@ -50,8 +50,8 @@ static void split_counters(unsigned int *cnt, unsigned int *inpr)
 }
 
 
-#ifndef DUMP_WAKELOCK //zte_pm_liyf_20151010, enable dump wakelock
-#define DUMP_WAKELOCK
+#ifdef DUMP_WAKELOCK //zte_pm_liyf_20151010, enable dump wakelock
+//#define DUMP_WAKELOCK
 #include <linux/delay.h>
 static bool dump_wakesouce_enable = true;
 #include <linux/module.h>
@@ -726,7 +726,7 @@ void pm_get_active_wakeup_sources(char *pending_wakeup_source, size_t max)
 	struct wakeup_source *ws, *last_active_ws = NULL;
 	int len = 0;
 	bool active = false;
-
+	return ;
 	rcu_read_lock();
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
 		if (ws->active) {
@@ -757,6 +757,8 @@ void pm_print_active_wakeup_sources(void)
 	struct wakeup_source *ws;
 	int active = 0;
 	struct wakeup_source *last_activity_ws = NULL;
+
+        return ;
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
@@ -816,6 +818,7 @@ static int dump_period = 60; // period is 2*dump_period seconds,In FTM mode,we s
 module_param(dump_period, int, 0644);
 void dump_wakeup_source_zte(void)
 {
+#if 0
 	struct wakeup_source *ws;
 
 	rcu_read_lock();
@@ -827,7 +830,7 @@ void dump_wakeup_source_zte(void)
 			}
 		}
 	rcu_read_unlock();
-
+#endif
 }
 
 static void dump_wakelock_handle(struct work_struct *work)

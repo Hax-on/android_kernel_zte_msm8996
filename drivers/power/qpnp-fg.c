@@ -11,7 +11,7 @@
  */
 
 #define pr_fmt(fmt)	"FG: %s: " fmt, __func__
-
+//#define DEBUG
 #include <linux/atomic.h>
 #include <linux/delay.h>
 #include <linux/kernel.h>
@@ -4540,6 +4540,10 @@ static int fg_batt_profile_init(struct fg_chip *chip)
 	bool tried_again = false, vbat_in_range, profiles_same;
 	u8 reg = 0;
 
+
+		rc = -ETIMEDOUT;
+		pr_err("profile loading timed out rc=%d\n", rc);
+		goto no_profile;
 wait:
 	fg_stay_awake(&chip->profile_wakeup_source);
 	ret = wait_for_completion_interruptible_timeout(&chip->batt_id_avail,

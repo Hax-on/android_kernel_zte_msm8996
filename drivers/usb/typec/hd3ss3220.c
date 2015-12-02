@@ -508,13 +508,14 @@ static int hd3ss3220_pinctrl_init(struct hd3ss3220_info *info)
 static int hd3ss3220_initialization(struct hd3ss3220_info *info)
 {
     int ret = 0;
-
+	u8 reg_val;
     /* do initialization here, before enable irq,
      * clear irq,
      * config DRP/UFP/DFP mode,
      * and etc..
      */
-
+    pr_debug("%s enter\n", __func__);
+    ret = hd3ss3220_read_reg(info->i2c, REG_MOD, &reg_val);
     return ret;
 }
 

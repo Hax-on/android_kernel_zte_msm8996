@@ -15,9 +15,9 @@
 &i2c_7 {
 
 	/* TI HD3SS3220 chip */
-	hd3ss3220@60 { /* slave id 0x61(ADDR Pin:H) or 0x60(ADDR Pin:L) */
+	hd3ss3220@47 { /* slave id 0x61(ADDR Pin:H) or 0x60(ADDR Pin:L) */
 		compatible = "ti,hd3ss3220";
-		reg = <0x60>;
+		reg = <0x47>;
 
 		/* Naming PM GPIO ( 14 ) */
 		hd3ss,irq_gpio = <&pm8994_gpios 14 0x2>;
@@ -35,7 +35,7 @@
 		qcom,vin-sel = <2>;		/* QPNP_PIN_VIN0 */
 		qcom,src-sel = <0>;		/* QPNP_PIN_SEL_FUNC_CONSTANT */
 		qcom,master-en = <1>;		/* Enable GPIO */
-		qcom,invert = <0>;   /* QPNP_PIN_INVERT_DISABLE */
+		qcom,invert = <1>;   /* MPP Enable */
 		status = "okay";
 	};
 
