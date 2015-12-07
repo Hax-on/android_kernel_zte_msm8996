@@ -11,7 +11,7 @@
  */
 
 #define pr_fmt(fmt)	"FG: %s: " fmt, __func__
-//#define DEBUG
+
 #include <linux/atomic.h>
 #include <linux/delay.h>
 #include <linux/kernel.h>
@@ -235,7 +235,7 @@ static struct fg_mem_setting settings[FG_MEM_SETTING_MAX] = {
 	SETTING(SOFT_COLD,       0x454,   0,      20),
 	SETTING(SOFT_HOT,        0x454,   1,      450),
 	SETTING(HARD_COLD,       0x454,   2,      0),
-	SETTING(HARD_HOT,        0x454,   3,      600),
+	SETTING(HARD_HOT,        0x454,   3,      550),
 	SETTING(RESUME_SOC,      0x45C,   1,      99),
 	SETTING(BCL_LM_THRESHOLD, 0x47C,   2,      50),
 	SETTING(BCL_MH_THRESHOLD, 0x47C,   3,      752),
@@ -4010,8 +4010,15 @@ static void set_resume_soc_work(struct work_struct *work)
 	if (is_input_present(chip) && !chip->resume_soc_lowered) {
 		if (!chip->charge_done)
 			goto done;
+		//ZTE MODIFY
+		if(chip->health == POWER_SUPPLY_HEALTH_GOOD)
+		{
+			resume_soc_raw = settings[FG_MEM_RESUME_SOC].value;
+		}
+		else
 		resume_soc_raw = get_monotonic_soc_raw(chip)
 			- (0xFF - settings[FG_MEM_RESUME_SOC].value);
+
 		if (resume_soc_raw > 0 && resume_soc_raw < FULL_SOC_RAW) {
 			rc = fg_set_resume_soc(chip, resume_soc_raw);
 			if (rc) {
@@ -4540,10 +4547,6 @@ static int fg_batt_profile_init(struct fg_chip *chip)
 	bool tried_again = false, vbat_in_range, profiles_same;
 	u8 reg = 0;
 
-
-		rc = -ETIMEDOUT;
-		pr_err("profile loading timed out rc=%d\n", rc);
-		goto no_profile;
 wait:
 	fg_stay_awake(&chip->profile_wakeup_source);
 	ret = wait_for_completion_interruptible_timeout(&chip->batt_id_avail,
