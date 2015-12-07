@@ -79,7 +79,10 @@ static int msm_proxy_rx_ch = 2;
 static int hdmi_rx_sample_rate = SAMPLING_RATE_48KHZ;
 static int msm_tert_mi2s_tx_ch = 2;
 static int msm_quat_mi2s_rx_ch = 2;
-
+// ZTE_chenjun
+static int mi2s_rx_bit_format = SNDRV_PCM_FORMAT_S16_LE;
+static int mi2s_rx_sample_rate = SAMPLING_RATE_48KHZ;
+//
 
 static bool codec_reg_done;
 
@@ -1142,6 +1145,50 @@ static int msm8996_hdmi_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 	return 0;
 }
 
+// ZTE_chenjun
+static int mi2s_rx_bit_format_get(struct snd_kcontrol *kcontrol,
+	struct snd_ctl_elem_value *ucontrol)
+{
+
+	switch (mi2s_rx_bit_format) {
+	case SNDRV_PCM_FORMAT_S24_LE:
+		ucontrol->value.integer.value[0] = 1;
+		break;
+
+	case SNDRV_PCM_FORMAT_S16_LE:
+	default:
+		ucontrol->value.integer.value[0] = 0;
+		break;
+	}
+
+	pr_debug("%s: mi2s_rx_bit_format = %d, ucontrol value = %ld\n",
+			__func__, mi2s_rx_bit_format,
+			ucontrol->value.integer.value[0]);
+
+	return 0;
+}
+
+static int mi2s_rx_bit_format_put(struct snd_kcontrol *kcontrol,
+	struct snd_ctl_elem_value *ucontrol)
+{
+	switch (ucontrol->value.integer.value[0]) {
+	case 1:
+		mi2s_rx_bit_format = SNDRV_PCM_FORMAT_S24_LE;
+		break;
+	case 0:
+	default:
+		mi2s_rx_bit_format = SNDRV_PCM_FORMAT_S16_LE;
+		break;
+	}
+
+	pr_debug("%s: ucontrol value = %ld, mi2s_rx_bit_format = %d\n",
+			__func__, ucontrol->value.integer.value[0],
+			mi2s_rx_bit_format);
+
+	return 0;
+}
+//
+
 static int msm_tx_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 				     struct snd_pcm_hw_params *params)
 {
@@ -1199,7 +1246,7 @@ static struct snd_soc_ops msm8996_mi2s_be_ops = {
 };
 
 
-static int msm_rx_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
+static int msm_quat_mi2s_rx_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 				     struct snd_pcm_hw_params *params)
 {
 	struct snd_interval *rate = hw_param_interval(params,
@@ -1207,10 +1254,14 @@ static int msm_rx_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 	struct snd_interval *channels = hw_param_interval(params,
 					SNDRV_PCM_HW_PARAM_CHANNELS);
 
-	pr_debug("%s: channel:%d\n", __func__, msm_quat_mi2s_rx_ch);
-	pr_err("[LHS]%s: channel:%d\n", __func__, msm_quat_mi2s_rx_ch);
-	rate->min = rate->max = SAMPLING_RATE_48KHZ;
+	param_set_mask(params, SNDRV_PCM_HW_PARAM_FORMAT,
+				mi2s_rx_bit_format);
+	rate->min = rate->max = mi2s_rx_sample_rate;
 	channels->min = channels->max = msm_quat_mi2s_rx_ch;
+	pr_err("%s: format = %d rate = %d, channels = %d\n",
+			__func__, params_format(params), params_rate(params),
+			msm_quat_mi2s_rx_ch);
+
 	return 0;
 }
 
@@ -1222,9 +1273,21 @@ static int msm8996_quat_mi2s_snd_startup(struct snd_pcm_substream *substream)
 
 	pr_debug("%s: substream = %s  stream = %d\n", __func__,
 		 substream->name, substream->stream);
-	pr_err("[LHS] %s in substream = %s  stream = %d\n", __func__,
-		 substream->name, substream->stream);
+
+	if (SNDRV_PCM_FORMAT_S24_LE == mi2s_rx_bit_format)
+	{   
+	    mi2s_rx_clk.clk_freq_in_hz = Q6AFE_LPASS_IBIT_CLK_3_P072_MHZ;
+	}
+	else
+	{         
+	    mi2s_rx_clk.clk_freq_in_hz = Q6AFE_LPASS_IBIT_CLK_1_P536_MHZ;
+	}
+
 	mi2s_rx_clk.enable = 1;
+
+pr_err("%s:rate(%d):bit_format(%d):clk(%d)\n", __func__, 
+           mi2s_rx_sample_rate, mi2s_rx_bit_format, mi2s_rx_clk.clk_freq_in_hz);
+
 	ret = afe_set_lpass_clock_v2(AFE_PORT_ID_QUATERNARY_MI2S_RX,
 				&mi2s_rx_clk);
 	if (ret < 0) {
@@ -1243,8 +1306,6 @@ static void msm8996_quat_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 	int ret = 0;
 
 	pr_debug("%s: substream = %s  stream = %d\n", __func__,
-		substream->name, substream->stream);
-	pr_err("[LHS] %s in substream = %s  stream = %d\n", __func__,
 		substream->name, substream->stream);
 
 	mi2s_rx_clk.enable = 0;
@@ -1429,6 +1490,8 @@ static const struct snd_kcontrol_new msm_snd_controls[] = {
 // chenjun
 	SOC_ENUM_EXT("Codec MCLK Switch", msm_snd_enum[0], codec_mclk_get,
 			codec_mclk_put),
+	SOC_ENUM_EXT("MI2S_RX Format", msm_snd_enum[9],
+			mi2s_rx_bit_format_get, mi2s_rx_bit_format_put),
 //
 };
 
@@ -2877,7 +2940,7 @@ static struct snd_soc_dai_link msm8996_common_be_dai_links[] = {
 		.no_pcm = 1,
 		.dpcm_playback = 1,
 		.be_id = MSM_BACKEND_DAI_QUATERNARY_MI2S_RX,
-		.be_hw_params_fixup = msm_rx_be_hw_params_fixup,
+		.be_hw_params_fixup = msm_quat_mi2s_rx_be_hw_params_fixup,
 		.ops = &msm8996_quat_mi2s_be_ops,
 		.ignore_suspend = 1,
 		.ignore_pmdown_time = 1,
