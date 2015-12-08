@@ -45,6 +45,11 @@
 #include "../touchscreen_fw.h"
 #include <linux/proc_fs.h>
 
+#include <linux/rtc.h>
+#include <linux/of_device.h>
+#include <linux/of_gpio.h>
+#include <linux/fb.h>
+
 #ifdef KERNEL_ABOVE_2_6_38
 #include <linux/input/mt.h>
 #endif
@@ -143,11 +148,15 @@ static int touch_moudle;
 extern char *syna_file_name;
 struct synaptics_rmi4_data *syn_ts;
 extern struct synaptics_rmi4_fwu_handle *fwu;
-extern  int fwu_get_device_config_id(void);
+extern struct i2c_client *global_client;
 
+extern  int fwu_get_device_config_id(void);
 #if defined(CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_FW_UPDATE)
 int syna_update_flag = 0;
+extern int syna_fwupdate_init(struct i2c_client *client);
+extern int syna_fwupdate_deinit(struct i2c_client *client);
 extern int syna_get_fw_ver(struct i2c_client *client, char *pfwfile);
+extern int fwu_start_reflash(void);
 #endif
 
 static int synaptics_rmi4_check_status(struct synaptics_rmi4_data *rmi4_data,
@@ -3885,10 +3894,106 @@ proc_read_val(struct file *file, char __user *page, size_t size, loff_t *ppos)
 	return len;
 }
 
+ssize_t proc_write_val(struct file *file, const char  __user *buffer,
+		   size_t count, loff_t *off)
+
+{
+	unsigned long val,ret;
+	ret=copy_from_user(&val, buffer, 1);
+
+
+#if defined(CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_FW_UPDATE)
+	syna_update_flag = 0;
+	if(touch_moudle>=SYN_MOUDLE_NUM_MAX)
+	{
+		printk("touchscreen moudle unknow!");
+		syna_update_flag = 1;
+		return -EINVAL;
+	}
+	//disable_irq(syn_ts->i2c_client->irq);
+	if(fwu_start_reflash())
+	{
+		enable_irq(syn_ts->i2c_client->irq);
+		syna_update_flag = 1;
+		pr_info("syna fw update fail! \n" );
+		return -EINVAL;
+	}
+	
+	//enable_irq(syn_ts->i2c_client->irq);
+	
+	syna_update_flag = 2;
+	pr_info("syna fw update Ok! \n" );
+#endif
+
+	return -EINVAL;
+}
+
+
 static const struct file_operations proc_ops = {
     .owner = THIS_MODULE,
     .read = proc_read_val,
+    .write = proc_write_val,
 };
+
+
+ static int synaptics_rmi4_pinctrl_init(struct synaptics_rmi4_data *rmi4_data)
+{
+	int retval;
+	rmi4_data->ts_pinctrl = devm_pinctrl_get(&(rmi4_data->i2c_client->dev));
+	if (IS_ERR_OR_NULL(rmi4_data->ts_pinctrl)) {
+		dev_dbg(&rmi4_data->i2c_client->dev,
+			"Target does not use pinctrl\n");
+		retval = PTR_ERR(rmi4_data->ts_pinctrl);
+		rmi4_data->ts_pinctrl = NULL;
+		return retval;
+	}
+
+	rmi4_data->gpio_state_active
+		= pinctrl_lookup_state(rmi4_data->ts_pinctrl, "pmx_ts_active");
+	if (IS_ERR_OR_NULL(rmi4_data->gpio_state_active)) {
+		dev_dbg(&rmi4_data->i2c_client->dev,
+			"Can not get ts default pinstate\n");
+		retval = PTR_ERR(rmi4_data->gpio_state_active);
+		rmi4_data->ts_pinctrl = NULL;
+		return retval;
+	}
+
+	rmi4_data->gpio_state_suspend
+		= pinctrl_lookup_state(rmi4_data->ts_pinctrl, "pmx_ts_suspend");
+	if (IS_ERR_OR_NULL(rmi4_data->gpio_state_suspend)) {
+		dev_dbg(&rmi4_data->i2c_client->dev,
+			"Can not get ts sleep pinstate\n");
+		retval = PTR_ERR(rmi4_data->gpio_state_suspend);
+		rmi4_data->ts_pinctrl = NULL;
+		return retval;
+	}
+
+	return 0;
+}
+
+static int synpatics_rmi4_pinctrl_select(struct synaptics_rmi4_data *rmi4_data,
+						bool on)
+{
+	struct pinctrl_state *pins_state;
+	int ret;
+
+	pins_state = on ? rmi4_data->gpio_state_active
+		: rmi4_data->gpio_state_suspend;
+	if (!IS_ERR_OR_NULL(pins_state)) {
+		ret = pinctrl_select_state(rmi4_data->ts_pinctrl, pins_state);
+		if (ret) {
+			dev_err(&rmi4_data->i2c_client->dev,
+				"can not set %s pins\n",
+				on ? "pmx_ts_active" : "pmx_ts_suspend");
+			return ret;
+		}
+	} else
+		dev_err(&rmi4_data->i2c_client->dev,
+			"not a valid '%s' pinstate\n",
+				on ? "pmx_ts_active" : "pmx_ts_suspend");
+
+	return 0;
+}
 
 static int synaptics_rmi4_probe(struct platform_device *pdev)
 {
@@ -3924,6 +4029,7 @@ static int synaptics_rmi4_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
+       	rmi4_data->i2c_client = global_client;
 	rmi4_data->pdev = pdev;
 	rmi4_data->current_page = MASK_8BIT;
 	rmi4_data->hw_if = hw_if;
@@ -3966,6 +4072,13 @@ static int synaptics_rmi4_probe(struct platform_device *pdev)
 				"%s: Failed to set up GPIO's\n",
 				__func__);
 		goto err_set_gpio;
+	}
+	
+	retval = synaptics_rmi4_pinctrl_init(rmi4_data);
+	if (!retval && rmi4_data->ts_pinctrl) {
+		retval = synpatics_rmi4_pinctrl_select(rmi4_data, true);
+		if (retval < 0)
+			printk("pzh:synaptics_rmi4_probe---Failed to select pin to active state");
 	}
 
 	if (hw_if->ui_hw_init) {
@@ -4049,6 +4162,8 @@ static int synaptics_rmi4_probe(struct platform_device *pdev)
 			goto err_sysfs;
 		}
 	}
+	
+	syna_fwupdate_init(global_client);
 
 	rmi4_data->rb_workqueue =
 			create_singlethread_workqueue("dsx_rebuild_workqueue");
@@ -4130,9 +4245,11 @@ err_set_gpio:
 
 err_enable_reg:
 	synaptics_rmi4_get_reg(rmi4_data, false);
+	
 
 err_get_reg:
 	kfree(rmi4_data);
+
 	printk("pzh:leave synaptics_rmi4_probe---due to error\n");
 
 	return retval;
@@ -4144,6 +4261,10 @@ static int synaptics_rmi4_remove(struct platform_device *pdev)
 	struct synaptics_rmi4_data *rmi4_data = platform_get_drvdata(pdev);
 	const struct synaptics_dsx_board_data *bdata =
 			rmi4_data->hw_if->board_data;
+	
+#if defined(CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_FW_UPDATE)
+			syna_fwupdate_deinit(global_client);
+#endif
 
 #ifdef FB_READY_RESET
 	cancel_work_sync(&rmi4_data->reset_work);

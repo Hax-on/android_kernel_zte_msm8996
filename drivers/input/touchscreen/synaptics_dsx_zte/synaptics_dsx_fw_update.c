@@ -44,10 +44,10 @@
 #include "synaptics_dsx_core.h"
 
 #define FW_IMAGE_NAME "synaptics/startup_fw_update.img"
-/*
+
 #define DO_STARTUP_FW_UPDATE
-*/
-/*
+
+
 #ifdef DO_STARTUP_FW_UPDATE
 #ifdef CONFIG_FB
 #define WAIT_FOR_FB_READY
@@ -55,7 +55,7 @@
 #define FB_READY_TIMEOUT_S 30
 #endif
 #endif
-*/
+
 #define FORCE_UPDATE false
 #define DO_LOCKDOWN false
 
@@ -3400,7 +3400,7 @@ exit:
 	return retval;
 }
 
-static int fwu_start_reflash(void)
+ int fwu_start_reflash(void)
 {
 	int retval = 0;
 	enum flash_area flash_area;
@@ -4268,6 +4268,58 @@ exit:
 	return retval;
 }
 
+static char fwname[128];
+
+//upgrade from app.bin
+static ssize_t syna_fwupdate_store(struct device *dev,
+					struct device_attribute *attr,
+						const char *buf, size_t count)
+{
+	//struct i2c_client *client = syna_i2c_client;
+
+	memset(fwname, 0, sizeof(fwname));
+	sprintf(fwname, "%s", buf);
+	fwname[count-1] = '\0';
+	syna_file_name=fwname;
+
+	fwu->force_update = false;
+	if(0 == fwu_start_reflash())
+		pr_info("%s: update success \n", __func__);
+	else
+		pr_info("%s: update fail  \n", __func__);
+
+	return count;
+}
+
+static DEVICE_ATTR(synafwupdate, S_IRUGO|S_IWUSR, NULL, syna_fwupdate_store);
+
+
+static ssize_t syna_force_fwupdate_store(struct device *dev,
+						struct device_attribute *attr,
+							const char *buf, size_t count)
+{
+	//char fwname[128];
+	//struct i2c_client *client = syna_i2c_client;
+	memset(fwname, 0, sizeof(fwname));
+	sprintf(fwname, "%s", buf);
+	fwname[count-1] = '\0';
+
+	syna_file_name=fwname;
+
+	fwu->force_update = true;
+
+	if(0 == fwu_start_reflash())
+		pr_info("%s: update success \n", __func__);
+	else
+		pr_info("%s: update fail  \n", __func__);
+
+	return count;
+}
+
+static DEVICE_ATTR(synafwupdate_force, S_IRUGO|S_IWUSR, NULL, syna_force_fwupdate_store);
+extern struct kobject *firmware_kobj;
+
+
 static void synaptics_rmi4_fwu_attn(struct synaptics_rmi4_data *rmi4_data,
 		unsigned char intr_mask)
 {
@@ -4278,6 +4330,62 @@ static void synaptics_rmi4_fwu_attn(struct synaptics_rmi4_data *rmi4_data,
 		fwu_read_flash_status();
 
 	return;
+}
+
+int syna_fwupdate_init(struct i2c_client *client)
+{
+	int ret;
+	struct kobject * fts_fw_kobj=NULL;
+
+
+	if (!client)
+		return 0;
+
+	//syna_i2c_client = client;
+	//fw_update_mode = false;
+
+	fts_fw_kobj = kobject_get(firmware_kobj);
+	if (fts_fw_kobj == NULL) {
+		fts_fw_kobj = kobject_create_and_add("firmware", NULL);
+		if (fts_fw_kobj == NULL) {
+			pr_err("%s: subsystem_register failed\n", __func__);
+			ret = -ENOMEM;
+			return ret;
+		}
+	}
+
+ 	ret=sysfs_create_file(fts_fw_kobj, &dev_attr_synafwupdate.attr);
+	if (ret) {
+		pr_err("%s: sysfs_create_file failed\n", __func__);
+		return ret;
+	}
+	
+	ret=sysfs_create_file(fts_fw_kobj, &dev_attr_synafwupdate_force.attr);
+	if (ret) {
+		pr_err("%s: sysfs_create_file failed\n", __func__);
+		return ret;
+	}	
+
+	pr_info("%s:synaptics firmware update init succeed!\n", __func__);
+	return 0;
+
+}
+
+
+int syna_fwupdate_deinit(struct i2c_client *client)
+{
+	struct kobject * fts_fw_kobj=NULL;
+
+	fts_fw_kobj = kobject_get(firmware_kobj);
+	if ( !firmware_kobj ){
+		printk("%s: error get kobject\n", __func__);
+		return -1;
+	}
+	
+	sysfs_remove_file(firmware_kobj, &dev_attr_synafwupdate.attr);
+	//	kobject_del(virtual_key_kobj);
+
+	return 0;
 }
 
 static int synaptics_rmi4_fwu_init(struct synaptics_rmi4_data *rmi4_data)

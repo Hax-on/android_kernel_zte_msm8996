@@ -312,6 +312,9 @@ struct rmi_config_id {
  * @sleep_enable: pointer to sleep enable function
  */
 struct synaptics_rmi4_data {
+	struct pinctrl *ts_pinctrl;
+	struct pinctrl_state *gpio_state_active;
+	struct pinctrl_state *gpio_state_suspend;
 	struct platform_device *pdev;
 	struct input_dev *input_dev;
 	struct i2c_client *i2c_client;
