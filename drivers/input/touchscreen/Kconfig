@@ -1147,4 +1147,7 @@ config TOUCHSCREEN_GT1X_ZTE
           If unsure, say N.
 
 source "drivers/input/touchscreen/gt1x_zte/Kconfig"
+
+source "drivers/input/touchscreen/synaptics_dsx_zte/Kconfig"
+
 endif

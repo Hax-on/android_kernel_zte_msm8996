@@ -614,28 +614,36 @@
 
 &soc {
 	i2c@75ba000 {
-		/*synaptics@20 {
-			compatible = "synaptics,dsx";
+		synaptics@20 {
+			compatible = "synaptics,dsx-i2c";
 			reg = <0x20>;
 			interrupt-parent = <&tlmm>;
 			interrupts = <125 0x2008>;
-			vdd-supply = <&pm8994_l14>;
-			avdd-supply = <&pm8994_l22>;
+			vdd_ana-supply = <&pm8994_l14>;
+			vcc_i2c-supply= <&pm8994_l22>;
+			synaptics,pwr-reg-name = "vdd_ana";
+			synaptics,bus-reg-name = "vcc_i2c";
 			pinctrl-names = "pmx_ts_active", "pmx_ts_suspend";
 			pinctrl-0 = <&ts_active>;
 			pinctrl-1 = <&ts_suspend>;
-			synaptics,display-coords = <0 0 1599 2559>;
-			synaptics,panel-coords = <0 0 1599 2703>;
+			//synaptics,display-coords = <0 0 1599 2559>;
+			//synaptics,panel-coords = <0 0 1599 2703>;
 			synaptics,reset-gpio = <&tlmm 89 0x00>;
 			synaptics,irq-gpio = <&tlmm 125 0x2008>;
-			synaptics,disable-gpios;
-			synaptics,fw-name = "PR1702898-s3528t_00350002.img";*/
+			synaptics,irq-on-state = <0>;
+			synaptics,irq-flags = <0x2008>; /* IRQF_ONESHOT | IRQF_TRIGGER_LOW */
+			synaptics,power-delay-ms = <200>;		
+			synaptics,reset-delay-ms = <200>;	
+			synaptics,reset-on-state = <0>;		
+			synaptics,reset-active-ms = <20>;
+			//synaptics,disable-gpios;
+			//synaptics,fw-name = "PR1702898-s3528t_00350002.img";
 			/* Underlying clocks used by secure touch */
-			/*clock-names = "iface_clk", "core_clk";
-			clocks = <&clock_gcc clk_gcc_blsp2_ahb_clk>,
-				 <&clock_gcc clk_gcc_blsp2_qup6_i2c_apps_clk>;
-		};*/
-	             gt1x-touchscreen@5d {
+			//clock-names = "iface_clk", "core_clk";
+			//clocks = <&clock_gcc clk_gcc_blsp2_ahb_clk>,
+			//	 <&clock_gcc clk_gcc_blsp2_qup6_i2c_apps_clk>;
+		};
+	            /* gt1x-touchscreen@5d {
 			compatible = "goodix,gt1x";
 			reg = <0x5d>;
 			interrupt-parent = <&tlmm>;
@@ -648,7 +656,7 @@
 			//goodix,avdd-gpio = <&tlmm 98 0x00>;
 		       goodix,rst-gpio = <&tlmm 89 0x00>;
 			goodix,irq-gpio = <&tlmm 125 0x00>;
-		};
+		};*/
 	};
 
 	gen-vkeys {
@@ -669,7 +677,7 @@
 			label = "volume_up";
 			gpios = <&pm8994_gpios 2 0x1>;
 			linux,input-type = <1>;
-			linux,code = <115>;
+			linux,code = <114>;
 			gpio-key,wakeup;
 			debounce-interval = <15>;
 		};
@@ -677,7 +685,7 @@
 			label = "volume_down";
 			gpios = <&pm8994_gpios 3 0x1>;
 			linux,input-type = <1>;
-			linux,code = <114>;
+			linux,code = <115>;
 			gpio-key,wakeup;
 			debounce-interval = <15>;
 		};
