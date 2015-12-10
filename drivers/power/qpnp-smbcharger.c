@@ -1405,6 +1405,7 @@ static int smbchg_charging_en(struct smbchg_chip *chip, bool en)
 #define CURRENT_1500_MA		1500
 #define SUSPEND_CURRENT_MA	2
 #define ICL_OVERRIDE_BIT	BIT(2)
+#define USBIN_MODE_CHG_HC	BIT(0)   //ZTE HC MODE
 static int smbchg_usb_suspend(struct smbchg_chip *chip, bool suspend)
 {
 	int rc;
@@ -1430,6 +1431,7 @@ static int smbchg_dc_suspend(struct smbchg_chip *chip, bool suspend)
 
 #define IL_CFG			0xF2
 #define DCIN_INPUT_MASK	SMB_MASK(4, 0)
+#define USBIN_INPUT_500mA	0x04
 static int smbchg_set_dc_current_max(struct smbchg_chip *chip, int current_ma)
 {
 	int i;
@@ -1681,10 +1683,19 @@ static int smbchg_set_usb_current_max(struct smbchg_chip *chip,
 				pr_err("Couldn't set CHGPTH_CFG rc = %d\n", rc);
 				goto out;
 			}
+		#if 0
 			rc = smbchg_masked_write(chip,
 					chip->usb_chgpth_base + CMD_IL,
 					USBIN_MODE_CHG_BIT | USB51_MODE_BIT,
 					USBIN_LIMITED_MODE | USB51_500MA);
+		#else
+			//ZTE add.For PC USB or who request 500mA USB input current , enable ICL_OVERRIDE
+			rc = smbchg_masked_write(chip,	chip->usb_chgpth_base + CMD_IL,
+					ICL_OVERRIDE_BIT|USBIN_MODE_CHG_HC,ICL_OVERRIDE_BIT|USBIN_MODE_CHG_HC);
+			rc = smbchg_sec_masked_write(chip,  chip->usb_chgpth_base + IL_CFG,
+					USBIN_INPUT_MASK, USBIN_INPUT_500mA);
+			pr_smb(PR_STATUS, "ZTE HC in 500mA.\n");
+		#endif
 			if (rc < 0) {
 				pr_err("Couldn't set CMD_IL rc = %d\n", rc);
 				goto out;
