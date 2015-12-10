@@ -50,13 +50,18 @@ static void split_counters(unsigned int *cnt, unsigned int *inpr)
 }
 
 
-#ifdef DUMP_WAKELOCK //zte_pm_liyf_20151010, enable dump wakelock
-//#define DUMP_WAKELOCK
+#ifndef DUMP_WAKELOCK //zte_pm_liyf_20151010, enable dump wakelock
+#define DUMP_WAKELOCK
+#endif
+
+#ifdef DUMP_WAKELOCK 
+#include <linux/timer.h>
 #include <linux/delay.h>
-static bool dump_wakesouce_enable = true;
 #include <linux/module.h>
 static int ws_debug_mask = 0; //ZTE_PM_LHX show when the wake_lock is actived and deactived. echo 1 > /sys/module/wakeup/parameters/ws_debug_mask
 module_param(ws_debug_mask, int, 0644);
+static void zte_dumplock_timer_func(unsigned long dummy);
+static DEFINE_TIMER(dumplock_timer, zte_dumplock_timer_func, 0, 0);
 #endif
 
 /* A preserved old value of the events counter. */
@@ -726,7 +731,7 @@ void pm_get_active_wakeup_sources(char *pending_wakeup_source, size_t max)
 	struct wakeup_source *ws, *last_active_ws = NULL;
 	int len = 0;
 	bool active = false;
-	return ;
+
 	rcu_read_lock();
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
 		if (ws->active) {
@@ -757,8 +762,6 @@ void pm_print_active_wakeup_sources(void)
 	struct wakeup_source *ws;
 	int active = 0;
 	struct wakeup_source *last_activity_ws = NULL;
-
-        return ;
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
@@ -814,11 +817,10 @@ bool pm_wakeup_pending(void)
 
 //zte_pm_liyf_20151010
 #ifdef DUMP_WAKELOCK
-static int dump_period = 60; // period is 2*dump_period seconds,In FTM mode,we should set it as 5 to make the period as 10s
+static int dump_period = 120; // period is dump_period seconds,In FTM mode,we should set it to 10s
 module_param(dump_period, int, 0644);
 void dump_wakeup_source_zte(void)
 {
-#if 0
 	struct wakeup_source *ws;
 
 	rcu_read_lock();
@@ -830,20 +832,14 @@ void dump_wakeup_source_zte(void)
 			}
 		}
 	rcu_read_unlock();
-#endif
+
 }
 
-static void dump_wakelock_handle(struct work_struct *work)
+static void zte_dumplock_timer_func(unsigned long dummy)
 {
-	while(1) {
-		if(dump_wakesouce_enable)
-			dump_wakeup_source_zte();
-		msleep(2*dump_period*1000);
-		}
+    dump_wakeup_source_zte();
+    mod_timer(&dumplock_timer, jiffies + msecs_to_jiffies(dump_period*1000));
 }
-
-static struct workqueue_struct *dump_wakelock_wq;
-static DECLARE_WORK(dump_wakelock_work, dump_wakelock_handle);
 #endif
 //zte_pm_liyf_20151010_end
 
@@ -937,17 +933,6 @@ void pm_wakep_autosleep_enabled(bool set)
 	ktime_t now = ktime_get();
 
 	rcu_read_lock();
-
-	#ifdef DUMP_WAKELOCK //zte_pm_liyf_20151010
-	if(set)
-	{
-		dump_wakesouce_enable = true;
-	}
-	else
-	{
-		dump_wakesouce_enable = false;
-	}
-	#endif
 
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
 		spin_lock_irq(&ws->lock);
@@ -1084,14 +1069,7 @@ static int __init wakeup_sources_debugfs_init(void)
 			pr_info("ZTE_PM set dump wakesource period to 10s  in FTM mode");
 	    }
 	#endif		
-		dump_wakelock_wq = create_singlethread_workqueue("wakelock_dump");
-		if (dump_wakelock_wq == NULL) {
-			pr_info("zte_pm fail to create dump_wakelock_wq \n");
-		}
-		else
-		{
-			queue_work(dump_wakelock_wq, &dump_wakelock_work);
-		}
+    mod_timer(&dumplock_timer, jiffies + msecs_to_jiffies(dump_period*1000));
 #endif
 //zte_pm_liyf_20151010_end
 
