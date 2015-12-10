@@ -3419,8 +3419,18 @@ exit:
 	mutex_lock(&rmi4_data->rmi4_exp_init_mutex);
 
 	pr_notice("%s: Start of reflash process\n", __func__);
-
-	if (fwu->image == NULL) {
+	
+	if(fwu->force_update){
+		if(!syna_file_name){
+			printk("syna fw name is null\n");
+			return -1;
+		}
+		if(!strcmp(syna_file_name,""))	{
+			printk("%s file_name is null\n",__func__);
+			return -1;
+		}
+		snprintf(fwu->image_name, MAX_IMAGE_NAME_LEN, "%s", syna_file_name);
+	}else if (fwu->image == NULL) {
 		retval = secure_memcpy(fwu->image_name, MAX_IMAGE_NAME_LEN,
 				FW_IMAGE_NAME, sizeof(FW_IMAGE_NAME),
 				sizeof(FW_IMAGE_NAME));
@@ -3430,6 +3440,7 @@ exit:
 					__func__);
 			goto exit;
 		}
+	}//++++2015-12-10-pzh
 		dev_dbg(rmi4_data->pdev->dev.parent,
 				"%s: Requesting firmware image %s\n",
 				__func__, fwu->image_name);
@@ -3449,8 +3460,7 @@ exit:
 				__func__, (unsigned int)fw_entry->size);
 
 		fwu->image = fw_entry->data;
-	}
-
+ //}----2015-12-10-pzh
 	retval = fwu_parse_image_info();
 	if (retval < 0)
 		goto exit;

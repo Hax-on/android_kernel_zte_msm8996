@@ -31,6 +31,7 @@
 #define SYN_JIAGUAN_FW_NAME	""
 #define SYN_MUDONG_FW_NAME	"" 
 #define SYN_EACHOPTO_FW_NAME	"" 
+#define SYN_SAMSUNG_FW_NAME  "" 
 
 #define FTC_TPK_FW_NAME		""
 #define FTC_TURLY_FW_NAME	"" 
@@ -260,6 +261,7 @@ enum TOUCH_MOUDLE
 	MUDONG,
 	EACHOPTO,		
 	AVC,	
+	SAMSUNG,
 	UNKNOW=0xff
 };
 #define SYN_MOUDLE_NUM_MAX 15

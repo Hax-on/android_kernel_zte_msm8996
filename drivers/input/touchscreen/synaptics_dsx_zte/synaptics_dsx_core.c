@@ -143,6 +143,8 @@ SYN_JUNDA_FW_NAME,
 SYN_JIAGUAN_FW_NAME,
 SYN_MUDONG_FW_NAME,
 SYN_EACHOPTO_FW_NAME
+SYN_SAMSUNG_FW_NAME	
+
 };
 static int touch_moudle;
 extern char *syna_file_name;
@@ -3778,6 +3780,9 @@ static void synaptics_get_configid(
 	case 'Q':
 		sprintf(p_chip_type,"S2333(0x%x)", ts->config_id.chip_type);
 		break;
+	case 'P':
+		sprintf(p_chip_type,"S3718(0x%x)", ts->config_id.chip_type);
+		break;
 	default:
 		sprintf(p_chip_type,"unknown(0x%x)", ts->config_id.chip_type);
 		break;
@@ -3835,6 +3840,10 @@ static void synaptics_get_configid(
 		sprintf(p_sensor, "JUNDA(0x%x)",ts->config_id.sensor);
 		touch_moudle=JUNDA;
 		break;
+	case 'H':
+		sprintf(p_sensor, "SAMSUNG(0x%x)",ts->config_id.sensor);
+		touch_moudle=SAMSUNG;
+		break;
 	default:
 		sprintf(p_sensor, "unknown(0x%x)",ts->config_id.sensor);
 		touch_moudle=UNKNOW;
@@ -3862,6 +3871,7 @@ proc_read_val(struct file *file, char __user *page, size_t size, loff_t *ppos)
 	char chiptype[16], sensor[16];
 	int fw_ver=0;
 	int ready_fw_ver=-1;
+	printk("pzh:Enter proc_read_val");
 	if ( syn_ts == NULL)
 		return -1;
     if (*ppos)      // ADB call again
@@ -4028,6 +4038,8 @@ static int synaptics_rmi4_probe(struct platform_device *pdev)
 				__func__);
 		return -ENOMEM;
 	}
+
+	syn_ts=rmi4_data;
 
        	rmi4_data->i2c_client = global_client;
 	rmi4_data->pdev = pdev;
