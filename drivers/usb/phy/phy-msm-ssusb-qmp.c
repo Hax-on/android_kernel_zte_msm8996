@@ -522,11 +522,11 @@ static int configure_phy_regs(struct usb_phy *uphy,
 }
 
 /* for ssusb phy eye diagram test, 2/4 */
-#define QSERDES_USB3_TX_DRV_LVL            0x20C
+#define QSERDES_USB3_TX_DRV_LVL            0x22C
 #define MSM8996_TX_SWING_MASK              0x1F
 #define MSM8996_TX_SWING_ENABLE_BIT        0x20  /* Bit5 should be set to 1 for effect */
 
-#define QSERDES_USB3_TX_EMP_POST1_LVL      0x208
+#define QSERDES_USB3_TX_EMP_POST1_LVL      0x218
 #define MSM8996_DEEMPHASIS_MASK            0x1F
 #define MSM8996_DEEMPHASIS_ENABLE_BIT      0x20  /* Bit5 should be set to 1 for effect */
 
