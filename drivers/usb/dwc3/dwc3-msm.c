@@ -2338,8 +2338,7 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 		dev_dbg(mdwc->dev, "%s: notify xceiv event with val:%d\n",
 							__func__, val->intval);
 
-		break;
-
+		//break;
 		/*
 		 * Now otg_sm_work() state machine waits for USB cable status.
 		 * Hence here it makes sure that schedule resume work only if
@@ -2645,6 +2644,7 @@ static int dwc3_msm_get_clk_gdsc(struct dwc3_msm *mdwc)
 	return 0;
 }
 
+/*
 static void fake_plugin(struct dwc3_msm *mdwc)
 {
 	pr_info("usb %s\n", __func__);
@@ -2658,7 +2658,7 @@ static void fake_plugin(struct dwc3_msm *mdwc)
 	msleep(500);
 	power_supply_changed(&mdwc->usb_psy);
 	dwc3_ext_event_notify(mdwc);
-}
+}*/
 
 static int dwc3_msm_probe(struct platform_device *pdev)
 {
@@ -3017,7 +3017,7 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		dwc3_ext_event_notify(mdwc);
 	}
 
-	fake_plugin(mdwc);
+	//fake_plugin(mdwc);
 	return 0;
 
 put_dwc3:
