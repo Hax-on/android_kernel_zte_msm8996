@@ -10,6 +10,7 @@
  * GNU General Public License for more details.
  */
 #define pr_fmt(fmt) "SMBCHG: %s: " fmt, __func__
+#define ZTE_DEBUG 0
 
 #include <linux/spmi.h>
 #include <linux/spinlock.h>
@@ -7767,6 +7768,10 @@ static void update_heartbeat(struct work_struct *work)
 		pr_err("pmic fatal error:the_chip=null\n!!");
 		return;
 	}
+
+#ifdef  ZTE_DEBUG
+	dump_regs(chip);
+#endif
 
 		temp		=	get_prop_batt_temp(chip)/10;
 		voltage		=	get_prop_batt_voltage_now(chip)/1000;
