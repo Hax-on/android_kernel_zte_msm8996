@@ -26,6 +26,7 @@
 struct ak8157_priv {
 	struct i2c_client *i2c;
 	int rstn;
+	int rstn_tmp;
 };
 #if 1
 struct ak8157_priv ak8157_i2c;
@@ -143,9 +144,33 @@ static int ak8157_i2c_probe(struct i2c_client *i2c,
 	gpio_direction_output(ak8157->rstn, 1);
     	pr_err("[LHS]%s(): reset success! \n",__func__);
 #endif
+
+// ZTE_chenjun:TEMP
+#if 1
+    ak8157->rstn_tmp = of_get_named_gpio(i2c->dev.of_node, 
+					      "ak8157,rstn-gpio-tmp", 0);
+	if (!gpio_is_valid(ak8157->rstn_tmp)){  
+		pr_err("%s error ak8157 rstn_tmp ret=%d\n", __func__, ak8157->rstn_tmp);
+		return -EINVAL;
+	}
+
+	ret = gpio_request(ak8157->rstn_tmp, "ak8157_rstn_pin_tmp");
+	if (ret < 0) {
+		pr_err("%s(): ak8157_rstn_pin_tmp request failed %d\n",
+				__func__, ret);
+		return ret;
+	}
+
+	gpio_direction_output(ak8157->rstn_tmp, 0);
+	usleep_range(1000, 1005);
+	gpio_direction_output(ak8157->rstn_tmp, 1);
+    	pr_err("[LHS]%s(): reset tmp success! \n",__func__);
+#endif
+
     	ak8157_config_init(i2c);
     	ak8157_i2c.i2c= i2c;
 	ak8157_i2c.rstn=ak8157->rstn;
+	ak8157_i2c.rstn_tmp=ak8157->rstn_tmp;
 	return ret;
 }
 

@@ -64,7 +64,8 @@ struct ak4490_priv {
 	int nDSDSel;
 	int pdn_gpio;
 	int ldoen_gpio;
-	int smute_gpio;
+	int isl_sw_pwr_gpio;
+	int isl_ldo_pwr_gpio;
 	int isl_mute_gpio;
 	int isl_sel_gpio;
 	int isl_dir_gpio;
@@ -963,10 +964,17 @@ static int ak4490_populate_dt_pdata(struct device *dev,
 		return -EINVAL;
 	}
 
-	ak4490->smute_gpio = of_get_named_gpio(dev->of_node,
-					      "ak4490,smute-gpio", 0);
-	if (!gpio_is_valid(ak4490->smute_gpio)){
-		dev_err(dev, "%s error smute_gpio pmi mpp 4\n", __func__);
+	ak4490->isl_sw_pwr_gpio = of_get_named_gpio(dev->of_node,
+					      "qcom,isl-sw-pwr-gpio", 0);
+	if (!gpio_is_valid(ak4490->isl_sw_pwr_gpio)){
+		dev_err(dev, "%s error isl_sw_pwr_gpio pmi gpios 10\n", __func__);
+		return -EINVAL;
+	}
+
+	ak4490->isl_ldo_pwr_gpio = of_get_named_gpio(dev->of_node,
+					      "ak4490,isl-ldo-pwr-gpio", 0);
+	if (!gpio_is_valid(ak4490->isl_ldo_pwr_gpio)){
+		dev_err(dev, "%s error isl_ldo_pwr_gpio pmi mpp 4\n", __func__);
 		return -EINVAL;
 	}
 
@@ -991,6 +999,32 @@ static int ak4490_populate_dt_pdata(struct device *dev,
 static int ak4490_initial_gpio(struct ak4490_priv *ak4490)
 {
 	int ret = 0;
+
+	ret = gpio_request(ak4490->isl_sw_pwr_gpio, "isl_sw_pwr_gpio");
+	if (ret < 0) {
+		pr_err("%s(): isl_sw_pwr_gpio request failed %d\n",
+				__func__, ret);
+		return ret;
+	}
+	ret = gpio_direction_output(ak4490->isl_sw_pwr_gpio, 1);
+	if (ret < 0) {
+		pr_err("%s(): isl_sw_pwr_gpio direction failed %d\n",
+				__func__, ret);
+		return ret;
+	}
+
+	ret = gpio_request(ak4490->isl_ldo_pwr_gpio, "isl_ldo_pwr_gpio");
+	if (ret < 0) {
+		pr_err("%s(): isl_ldo_pwr_gpio request failed %d\n",
+				__func__, ret);
+		return ret;
+	}
+	ret = gpio_direction_output(ak4490->isl_ldo_pwr_gpio, 1);
+	if (ret < 0) {
+		pr_err("%s(): isl_ldo_pwr_gpio direction failed %d\n",
+				__func__, ret);
+		return ret;
+	}
 
 	ret = gpio_request(ak4490->ldoen_gpio, "ak4490_ldo_gpio");
 	if (ret < 0) {
@@ -1020,20 +1054,6 @@ static int ak4490_initial_gpio(struct ak4490_priv *ak4490)
 				__func__, ret);
 		return ret;
 	}
-
-	ret = gpio_request(ak4490->smute_gpio, "ak4490_smute_gpio");
-	if (ret < 0) {
-		pr_err("%s(): ak4490_smute_gpio request failed %d\n",
-				__func__, ret);
-		return ret;
-	}
-	ret = gpio_direction_output(ak4490->smute_gpio, 0);
-	if (ret < 0) {
-		pr_err("%s(): ak4490_smute_gpio direction failed %d\n",
-				__func__, ret);
-		return ret;
-	}
-
 	
 	ret = gpio_request(ak4490->isl_sel_gpio, "ak4490_isl_sel_gpio");
 	if (ret < 0) {
@@ -1278,6 +1298,12 @@ static int ak4490_i2c_probe(struct i2c_client *i2c,
 		pr_err("[LHS]%s Parsing DT failed99(%d)", __func__, ret);
 		return ret;
 	}
+
+   ret = ak4490_initial_gpio(ak4490);
+	if (ret){
+		pr_info("%s fail to set gpio%d\n", __func__, ret);
+	}
+
 	ak4490->regmap = devm_regmap_init_i2c(i2c, &ak4490_regmap_config);
 	if (IS_ERR(ak4490->regmap))
 		{
@@ -1296,11 +1322,6 @@ static int ak4490_i2c_probe(struct i2c_client *i2c,
 
 	pr_err("[LHS]%s dev name--------sungang %s\n", __func__, dev_name(&i2c->dev));
 
-   ret = ak4490_initial_gpio(ak4490);
-	if (ret){
-		pr_info("%s fail to set gpio%d\n", __func__, ret);
-	}
-
 	//ak4490_initial_mclk(i2c);
 	
 	ret = snd_soc_register_codec(&i2c->dev,
@@ -1309,8 +1330,7 @@ static int ak4490_i2c_probe(struct i2c_client *i2c,
 		kfree(ak4490);
 		akdbgprt("\t[AK4490 Error!] %s(%d)\n",__FUNCTION__,__LINE__);
 	}
-	pr_err("[LHS]%s leave ret=%d", __func__, ret);
-	pr_info("%s leave ret=%d", __func__, ret);
+	pr_err("[LHS]%s leave ret=%d\n", __func__, ret);
 	return ret;
 }
 

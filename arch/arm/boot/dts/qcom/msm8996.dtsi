@@ -35,6 +35,7 @@
 		pci-domain0 = &pcie0;
 		pci-domain1 = &pcie1;
 		pci-domain2 = &pcie2;
+		i2c3 = &i2c_3;
 		i2c6 = &i2c_6;
 		i2c7 = &i2c_7;
 		i2c8 = &i2c_8;
@@ -375,6 +376,42 @@
 		qcom,summing-threshold = <0x10>;
 	};
 
+	i2c_3: i2c@7577000 { /* BLSP1 QUP3 */
+		compatible = "qcom,i2c-msm-v2";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reg = <0x7577000  0x1000>;
+		reg-names = "qup_phys_addr";
+		interrupt-names = "qup_irq";
+		interrupts = <0 97 0>;
+		dmas = <&dma_blsp1 16 64 0x20000020 0x20>,
+			<&dma_blsp1 17 32 0x20000020 0x20>;
+		dma-names = "tx", "rx";
+		qcom,master-id = <86>;
+		qcom,clk-freq-out = <400000>;
+		qcom,clk-freq-in  = <19200000>;
+		clock-names = "iface_clk", "core_clk";
+		clocks = <&clock_gcc clk_gcc_blsp1_ahb_clk>,
+			 <&clock_gcc clk_gcc_blsp1_qup3_i2c_apps_clk>;
+		pinctrl-names = "i2c_active", "i2c_sleep";
+		pinctrl-0 = <&i2c_3_active>;
+		pinctrl-1 = <&i2c_3_sleep>;
+		ak4490@10 {
+                        compatible = "ak4490";
+                        reg = <0x10>;
+                        ak4490,ldoen-gpio = <&tlmm 93 0>;
+                        ak4490,pdn-gpio = <&pmi8994_gpios 1 0>;
+                        qcom,isl-sw-pwr-gpio = <&pmi8994_gpios 10 0>;
+                        ak4490,isl-ldo-pwr-gpio = <&pmi8994_mpps 4 0>;
+                        ak4490,hifi_sel_gpio = <&pm8994_mpps 2 0>;
+                        ak4490,hifi_mute_gpio = <&pm8994_mpps 4 0>;
+                };
+		isl98608@29 {
+                        compatible = "isl98608";
+                        reg = <0x29>;
+                };
+	};
+
 	i2c_6: i2c@757a000 { /* BLSP1 QUP6 */
 		compatible = "qcom,i2c-msm-v2";
 		#address-cells = <1>;
@@ -395,23 +432,11 @@
 		pinctrl-names = "i2c_active", "i2c_sleep";
 		pinctrl-0 = <&i2c_6_active>;
 		pinctrl-1 = <&i2c_6_sleep>;
-        isl98608@29 {
-                        compatible = "isl98608";
-                        reg = <0x29>;
-                };
-				ak4490@10 {
-                        compatible = "ak4490";
-                        reg = <0x10>;
-                        ak4490,ldoen-gpio = <&tlmm 93 0>;
-                        ak4490,pdn-gpio = <&pmi8994_gpios 1 0>;
-                        ak4490,smute-gpio = <&pmi8994_mpps 4 0>;
-                        ak4490,hifi_sel_gpio = <&pm8994_mpps 2 0>;
-                        ak4490,hifi_mute_gpio = <&pm8994_mpps 4 0>;
-                };
-       ak8157@11 {
+		ak8157@11 {
                         compatible = "ak8157";
                         reg = <0x11>;
-                        ak8157,rstn-gpio = <&pm8994_gpios 12 0>;
+                        ak8157,rstn-gpio = <&pm8994_gpios 1 0>;
+                        ak8157,rstn-gpio-tmp = <&pm8994_gpios 12 0>;
                 };
 	};
 
