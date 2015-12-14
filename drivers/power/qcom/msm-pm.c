@@ -422,17 +422,17 @@ static bool (*execute[MSM_PM_SLEEP_MODE_NR])(bool idle) = {
 };
 //zte jiangfeng add
 #ifdef ZTE_GPIO_DEBUG
-/*
-extern int msm_dump_gpios(struct seq_file *m, int curr_len, char *gpio_buffer);
-extern int pmic_dump_pins(struct seq_file *m, int curr_len, char *gpio_buffer);
+
+extern int msm_dump_gpios(struct seq_file *s, int curr_len, char *gpio_buffer);
+//extern int pmic_dump_pins(struct seq_file *s, int curr_len, char *gpio_buffer);
 static char *gpio_sleep_status_info;
 
-int print_gpio_buffer(struct seq_file *m)
+int print_gpio_buffer(struct seq_file *s)
 {
 	if (gpio_sleep_status_info)
-		seq_printf(m, gpio_sleep_status_info);
+		seq_printf(s, gpio_sleep_status_info);
 	else
-		seq_printf(m, "Device haven't suspended yet!\n");
+		seq_printf(s, "Device haven't suspended yet!\n");
 
 	return 0;
 }
@@ -446,7 +446,7 @@ int free_gpio_buffer(void)
 	return 0;
 }
 EXPORT_SYMBOL(free_gpio_buffer);
-*/
+
 #endif
 
 #ifndef ZTE_PM_NOTIFY_MODEM_APP_SUSPENDED
@@ -739,7 +739,6 @@ zte_pm_before_powercollapse called before enter PowerCollapse from suspend,which
 */
 void zte_pm_before_powercollapse(void)
 {
-/*
 #ifdef ZTE_GPIO_DEBUG
 	int curr_len = 0;//Default not open the gpio dump,too much logs...
 
@@ -751,21 +750,16 @@ void zte_pm_before_powercollapse(void)
 			} else {
 				gpio_sleep_status_info = kmalloc(25000, GFP_KERNEL);
 				if (!gpio_sleep_status_info) {
-					pr_err("[PM] kmalloc memory failed in %s\n",
-						__func__);
+					pr_err("[PM] kmalloc memory failed in %s\n",__func__);
 					break;
 				}
 			}
-
-			curr_len = msm_dump_gpios(NULL, curr_len,	gpio_sleep_status_info);
-			curr_len = pmic_dump_pins(NULL, curr_len,
-							gpio_sleep_status_info);
+			curr_len = msm_dump_gpios(NULL, curr_len, gpio_sleep_status_info);
+			//curr_len = pmic_dump_pins(NULL, curr_len,gpio_sleep_status_info);
 		}
 	}
 	while(0);
-
 #endif
-*/
 
 #if 1
 #ifdef ZTE_PM_NOTIFY_MODEM_APP_SUSPENDED
