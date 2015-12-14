@@ -1684,7 +1684,7 @@ static int smbchg_set_usb_current_max(struct smbchg_chip *chip,
 				pr_err("Couldn't set CHGPTH_CFG rc = %d\n", rc);
 				goto out;
 			}
-		#if 0
+		#if 1//No-HC mode  Qualcomm normal
 			rc = smbchg_masked_write(chip,
 					chip->usb_chgpth_base + CMD_IL,
 					USBIN_MODE_CHG_BIT | USB51_MODE_BIT,
@@ -5416,6 +5416,7 @@ static int smbchg_dp_dm(struct smbchg_chip *chip, int val)
 	int rc = 0;
 	int target_icl_vote_ma;
 
+	pr_info("ZTE_CHG:val=%d",val);
 	switch (val) {
 	case POWER_SUPPLY_DP_DM_PREPARE:
 		if (!is_hvdcp_present(chip)) {
