@@ -1,3 +1,4 @@
+
 /*
  * Synaptics DSX touchscreen driver
  *
@@ -74,7 +75,7 @@
 
 #define REPORT_FORCE
 #define MAX_FORCE 255
-#define FORCE_ADDR 0x041a
+//#define FORCE_ADDR 0x041a
 
 #define F12_DATA_15_WORKAROUND
 
@@ -149,7 +150,8 @@ SYN_SAMSUNG_FW_NAME
 static int touch_moudle;
 extern char *syna_file_name;
 struct synaptics_rmi4_data *syn_ts;
-extern struct synaptics_rmi4_fwu_handle *fwu;
+//extern struct synaptics_rmi4_fwu_handle *fwu;
+extern unsigned char get_configID_addr;
 extern struct i2c_client *global_client;
 
 extern  int fwu_get_device_config_id(void);
@@ -1139,7 +1141,7 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 
 #ifdef REPORT_FORCE
 	retval = synaptics_rmi4_reg_read(rmi4_data,
-			FORCE_ADDR,
+			rmi4_data->force_data_addr,
 			&force,
 			sizeof(force));
 	if (retval < 0)
@@ -1765,7 +1767,11 @@ static int synaptics_rmi4_f11_init(struct synaptics_rmi4_data *rmi4_data,
 			__func__, fhandler->fn_number,
 			rmi4_data->sensor_max_x,
 			rmi4_data->sensor_max_y);
-
+	
+       printk("synaptics_rmi4_f11_init---max x = %d max y = %d\n",
+			rmi4_data->sensor_max_x,
+			rmi4_data->sensor_max_y);//pzh
+	   
 	rmi4_data->max_touch_width = MAX_F11_TOUCH_WIDTH;
 
 	if (bdata->swap_axes) {
@@ -2312,6 +2318,10 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 				((unsigned int)ctrl_8->max_y_coord_msb << 8);
 
 		rmi4_data->max_touch_width = MAX_F12_TOUCH_WIDTH;
+		
+		printk("synaptics_rmi4_f12_init---query_5->ctrl8_is_present----max x = %d max y = %d\n",
+			rmi4_data->sensor_max_x,
+			rmi4_data->sensor_max_y);//pzh
 	} else {
 		rmi4_data->wedge_sensor = true;
 
@@ -2329,6 +2339,10 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 		rmi4_data->sensor_max_y =
 				((unsigned int)ctrl_31->max_y_coord_lsb << 0) |
 				((unsigned int)ctrl_31->max_y_coord_msb << 8);
+
+		printk("synaptics_rmi4_f12_init---else---max x = %d max y = %d\n",
+					rmi4_data->sensor_max_x,
+					rmi4_data->sensor_max_y);//pzh
 
 		rmi4_data->max_touch_width = MAX_F12_TOUCH_WIDTH;
 	}
@@ -2916,6 +2930,20 @@ flash_prog_mode:
 
 	memset(rmi4_data->intr_mask, 0x00, sizeof(rmi4_data->intr_mask));
 
+#ifdef REPORT_FORCE	
+	switch(rmi4_data->firmware_id){
+	case 2104638:
+		rmi4_data->force_data_addr = 0x0419;
+		break;
+	case 2029006:
+		rmi4_data->force_data_addr = 0x041a;
+		break;
+	default:
+		break;
+	}
+	
+	printk("force_data_addr  = 0x%04x\n", rmi4_data->force_data_addr);
+#endif
 	/*
 	 * Map out the interrupt bit masks for the interrupt sources
 	 * from the registered function handlers.
@@ -2985,6 +3013,11 @@ static void synaptics_rmi4_set_params(struct synaptics_rmi4_data *rmi4_data)
 	input_set_abs_params(rmi4_data->input_dev,
 			ABS_MT_POSITION_Y, 0,
 			rmi4_data->sensor_max_y, 0, 0);
+	
+	printk("synaptics_rmi4_set_params---max x = %d max y = %d\n",
+					rmi4_data->sensor_max_x,
+					rmi4_data->sensor_max_y);//pzh
+	
 #ifdef REPORT_2D_W
 	input_set_abs_params(rmi4_data->input_dev,
 			ABS_MT_TOUCH_MAJOR, 0,
@@ -3739,7 +3772,7 @@ static void synaptics_get_configid(
 	if ( !ts )
 		return;
 
-	ret = synaptics_rmi4_reg_read(ts, 0x13, (char *)&ts->config_id, 4);
+	ret = synaptics_rmi4_reg_read(ts, get_configID_addr, (char *)&ts->config_id, 4);
 	if (ret < 0){
 		pr_err("%s: failed to get ts f34.ctrl_base\n",__func__);
 	}	
