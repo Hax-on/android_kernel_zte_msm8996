@@ -1105,7 +1105,7 @@ panel_power_ctrl:
 	ctrl_pdata->cur_max_pkt_size = 0;
 end:
 	mutex_unlock(&ctrl_pdata->mutex);
-	pr_debug("%s-:\n", __func__);
+	printk("LCD %s-:\n", __func__);
 
 	return ret;
 }
@@ -1325,7 +1325,7 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 				  MDSS_DSI_ALL_CLKS, MDSS_DSI_CLK_OFF);
 
 end:
-	printk("%s-:\n", __func__);
+	printk("LCD %s-:\n", __func__);
 	return ret;
 }
 
