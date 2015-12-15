@@ -711,7 +711,8 @@ static struct device_attribute attrs[] = {
 };
 
 //static struct synaptics_rmi4_fwu_handle *fwu;
-  struct synaptics_rmi4_fwu_handle *fwu;
+  static struct synaptics_rmi4_fwu_handle *fwu;
+unsigned char get_configID_addr;
 
 DECLARE_COMPLETION(fwu_remove_complete);
 
@@ -2255,6 +2256,7 @@ static int fwu_get_device_config_id(void)
 				fwu->f34_fd.ctrl_base_addr,
 				fwu->config_id,
 				config_id_size);
+	get_configID_addr=fwu->f34_fd.ctrl_base_addr;
 	if (retval < 0)
 		return retval;
 
