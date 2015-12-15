@@ -25,6 +25,11 @@
 
 #include "mdss_dsi.h"
 
+#include "mdss_panel.h"
+#include <linux/proc_fs.h>
+
+static struct proc_dir_entry * d_entry;
+static char  module_name[50]={"0"};
 #define DT_CMD_HDR 6
 #define MIN_REFRESH_RATE 30
 #define DEFAULT_MDP_TRANSFER_TIME 14000
@@ -48,6 +53,46 @@ static char dsc_rc_range_max_qp[] = {4, 4, 5, 6, 7, 7, 7, 8, 9, 10, 11,
 			 12, 13, 13, 15};
 static char dsc_rc_range_bpg_offset[] = {2, 0, 0, -2, -4, -6, -8, -8,
 			-8, -10, -10, -12, -12, -12, -12};
+//-->ZTE_TZB add start, 20150923
+ssize_t mdss_dsi_panel_lcd_read_proc(struct file *file, char __user *page, size_t size, loff_t *ppos)
+{
+	int len = 0;
+	printk("%s:---enter---\n",__func__);
+	
+    if (*ppos)      // ADB call again
+    {
+        return 0;
+    }	
+	len = sprintf(page, "%s\n", module_name);
+	*ppos += len;
+	return len;
+}
+static const struct file_operations proc_ops = {
+    .owner = THIS_MODULE,
+    .read = mdss_dsi_panel_lcd_read_proc,
+    .write = NULL,
+};
+
+void  mdss_dsi_panel_lcd_proc(struct device_node *node)
+{	
+	const char * panel_name ;	
+
+	d_entry=proc_create("msm_lcd", 0664, NULL, &proc_ops);
+	if (d_entry==NULL) {
+		printk("proc_create ts_information failed!\n");
+	}	
+	panel_name = of_get_property(node,
+		"qcom,mdss-dsi-panel-name", NULL);
+	if (!panel_name){
+		pr_info("LCD %s:%d, panel name not found!\n",
+						__func__, __LINE__);
+		strcpy(module_name,"0");
+	}else{
+		pr_info("LCD%s: Panel Name = %s\n", __func__, panel_name);
+		strcpy(module_name,panel_name);
+	}
+}
+//-->ZTE_TZB add end, 20150923
 
 void mdss_dsi_panel_pwm_cfg(struct mdss_dsi_ctrl_pdata *ctrl)
 {
@@ -2790,6 +2835,6 @@ int mdss_dsi_panel_init(struct device_node *node,
 	ctrl_pdata->switch_mode = mdss_dsi_panel_switch_mode;
 
 	mdss_dsi_ctrl_init_dba(ctrl_pdata, ndx);
-
+	mdss_dsi_panel_lcd_proc(node);
 	return 0;
 }
