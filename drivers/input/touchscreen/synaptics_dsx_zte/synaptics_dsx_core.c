@@ -1144,6 +1144,7 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 			rmi4_data->force_data_addr,
 			&force,
 			sizeof(force));
+       force=force*2;//pzh
 	if (retval < 0)
 		return 0;
 
@@ -2933,7 +2934,7 @@ flash_prog_mode:
 #ifdef REPORT_FORCE	
 	switch(rmi4_data->firmware_id){
 	case 2104638:
-		rmi4_data->force_data_addr = 0x0419;
+		rmi4_data->force_data_addr = 0x041a;
 		break;
 	case 2029006:
 		rmi4_data->force_data_addr = 0x041a;
