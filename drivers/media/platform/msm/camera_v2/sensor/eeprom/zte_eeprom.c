@@ -205,6 +205,49 @@ MODULE_Map_Table S5K3L2_MODULE_MAP[] = {
     { S5K3L2_SENSOR_INFO_MODULE_ID_MCNEX_2,		"mcnex_2_s5k3l2","mcnex_2_s5k3l2",NULL},
 };
 
+#define OV8856_SENSOR_INFO_MODULE_ID_SUNNY		0x01
+#define OV8856_SENSOR_INFO_MODULE_ID_TRULY		0x02
+#define OV8856_SENSOR_INFO_MODULE_ID_A_KERR		0x03
+#define OV8856_SENSOR_INFO_MODULE_ID_LITEARRAY	0x04
+#define OV8856_SENSOR_INFO_MODULE_ID_DARLING		0x05
+#define OV8856_SENSOR_INFO_MODULE_ID_QTECH		0x06
+
+#define OV8856_SENSOR_INFO_MODULE_ID_OFLIM		0x07
+#define OV8856_SENSOR_INFO_MODULE_ID_FOXCONN		0x11
+#define OV8856_SENSOR_INFO_MODULE_ID_IMPORTEK		0x12
+#define OV8856_SENSOR_INFO_MODULE_ID_ALTEK	       0x13
+#define OV8856_SENSOR_INFO_MODULE_ID_ABICO		0x14
+#define OV8856_SENSOR_INFO_MODULE_ID_LITE_ON		0x15
+
+#define OV8856_SENSOR_INFO_MODULE_ID_CHICONNY		0x16
+#define OV8856_SENSOR_INFO_MODULE_ID_PRIMAX		0x17
+#define OV8856_SENSOR_INFO_MODULE_ID_SHARP		0x21
+#define OV8856_SENSOR_INFO_MODULE_ID_MCNEX   	0x31
+
+
+MODULE_Map_Table OV8856_MODULE_MAP[] = {
+    { OV8856_SENSOR_INFO_MODULE_ID_SUNNY	,	"sunny_ov8856","sunny_ov8856",NULL},
+    { OV8856_SENSOR_INFO_MODULE_ID_TRULY,		"truly_ov8856","truly_ov8856",NULL},
+    { OV8856_SENSOR_INFO_MODULE_ID_A_KERR,	"a_kerr_ov8856","a_kerr_ov8856",NULL},
+    { OV8856_SENSOR_INFO_MODULE_ID_LITEARRAY,	"litearray_ov8856","litearray_ov8856",NULL},
+    { OV8856_SENSOR_INFO_MODULE_ID_DARLING,	"darling_ov8856","darling_tov8856",NULL},
+    { OV8856_SENSOR_INFO_MODULE_ID_QTECH,		"qtech_ov8856","qtech_ov8856",NULL},
+
+    { OV8856_SENSOR_INFO_MODULE_ID_OFLIM	,	"oflim_ov8856","oflim_ov8856",NULL},
+    { OV8856_SENSOR_INFO_MODULE_ID_FOXCONN,		"foxconn_ov8856","foxconn_ov8856",NULL},
+    { OV8856_SENSOR_INFO_MODULE_ID_IMPORTEK,	"importek_ov8856","importek_ov8856",NULL},
+    { OV8856_SENSOR_INFO_MODULE_ID_ALTEK,	"altek_ov8856","altek_ov8856",NULL},
+    { OV8856_SENSOR_INFO_MODULE_ID_ABICO,	"abico_ov8856","abico_ov8856",NULL},
+    { OV8856_SENSOR_INFO_MODULE_ID_LITE_ON,		"lite_on_ov8856","lite_on_ov8856",NULL},
+
+    { OV8856_SENSOR_INFO_MODULE_ID_CHICONNY	,	"chiconny_ov8856","chiconny_ov8856",NULL},
+    { OV8856_SENSOR_INFO_MODULE_ID_PRIMAX,		"primax_ov8856","primax_ov8856",NULL},
+    { OV8856_SENSOR_INFO_MODULE_ID_SHARP,	"sharp_ov8856","sharp_ov8856",NULL},
+    { OV8856_SENSOR_INFO_MODULE_ID_MCNEX,	"mcnex_ov8856","mcnex_ov8856",NULL},
+
+};
+
+
 DEFINE_MSM_MUTEX(msm_eeprom_mutex);
 #ifdef CONFIG_COMPAT
 static struct v4l2_file_operations msm_eeprom_v4l2_subdev_fops;
@@ -1421,6 +1464,126 @@ static int s5k3l2_read_eeprom_memory(struct msm_eeprom_ctrl_t *e_ctrl,
 	return rc;
 }
 
+void ov8856_read_eeprom_init(struct msm_eeprom_ctrl_t *e_ctrl)
+{
+	uint16_t temp;
+	e_ctrl->i2c_client.i2c_func_tbl->i2c_read(&(e_ctrl->i2c_client),0x5000,&temp,
+		MSM_CAMERA_I2C_BYTE_DATA);
+	pr_err("%s:0x5000 temp=0x%X",__func__,temp);
+	
+	e_ctrl->i2c_client.i2c_func_tbl->i2c_read(&(e_ctrl->i2c_client),0x5001,&temp,
+		MSM_CAMERA_I2C_BYTE_DATA);
+	pr_err("%s:0x5001 temp=0x%X",__func__,temp);
+
+	e_ctrl->i2c_client.i2c_func_tbl->i2c_write(&(e_ctrl->i2c_client),0x0100,0x01,
+		MSM_CAMERA_I2C_BYTE_DATA);
+	
+	e_ctrl->i2c_client.i2c_func_tbl->i2c_write(&(e_ctrl->i2c_client),0x5001,(0x00&0x08)|(temp&(~0x08)),
+		MSM_CAMERA_I2C_BYTE_DATA);
+	
+	e_ctrl->i2c_client.i2c_func_tbl->i2c_write(&(e_ctrl->i2c_client),0x3d84,0xc0,
+		MSM_CAMERA_I2C_BYTE_DATA);
+		e_ctrl->i2c_client.i2c_func_tbl->i2c_read(&(e_ctrl->i2c_client),0x3d84,&temp,
+		MSM_CAMERA_I2C_BYTE_DATA);
+	e_ctrl->i2c_client.i2c_func_tbl->i2c_write(&(e_ctrl->i2c_client),0x3d88,0x70,
+		MSM_CAMERA_I2C_BYTE_DATA);
+	e_ctrl->i2c_client.i2c_func_tbl->i2c_write(&(e_ctrl->i2c_client),0x3d89,0x10,
+		MSM_CAMERA_I2C_BYTE_DATA);
+	e_ctrl->i2c_client.i2c_func_tbl->i2c_write(&(e_ctrl->i2c_client),0x3d8a,0x72,
+		MSM_CAMERA_I2C_BYTE_DATA);
+	e_ctrl->i2c_client.i2c_func_tbl->i2c_write(&(e_ctrl->i2c_client),0x3d8b,0x0a,
+		MSM_CAMERA_I2C_BYTE_DATA);
+	e_ctrl->i2c_client.i2c_func_tbl->i2c_write(&(e_ctrl->i2c_client),0x3d81,0x01,
+		MSM_CAMERA_I2C_BYTE_DATA);	
+	udelay(5);
+}
+
+void ov8856_read_eeprom_end(struct msm_eeprom_ctrl_t *e_ctrl)
+{
+	uint16_t temp;
+	e_ctrl->i2c_client.i2c_func_tbl->i2c_read(&(e_ctrl->i2c_client),0x5001,&temp,
+		MSM_CAMERA_I2C_BYTE_DATA);
+	pr_err("%s:0x5001 temp=0x%X",__func__,temp);
+	
+	e_ctrl->i2c_client.i2c_func_tbl->i2c_write(&(e_ctrl->i2c_client),0x5001,(0x08&0x08)|(temp&(~0x08)),
+		MSM_CAMERA_I2C_BYTE_DATA);
+	e_ctrl->i2c_client.i2c_func_tbl->i2c_write(&(e_ctrl->i2c_client),0x0100,0x00,
+		MSM_CAMERA_I2C_BYTE_DATA);
+}
+
+int32_t ov8856_check_module_info_group(struct msm_eeprom_ctrl_t *e_ctrl)
+{
+	uint16_t temp;
+	   
+	e_ctrl->i2c_client.i2c_func_tbl->i2c_read(&(e_ctrl->i2c_client),0x7010,&temp,
+			MSM_CAMERA_I2C_BYTE_DATA);
+	CDBG("%s:temp=0x%X",__func__,temp);
+	if((temp&0xC0) == 0x40)
+	{
+		return Group_One;
+	}else if((temp&0x30) == 0x10)
+	{
+		return Group_Two;
+	}
+	return Invlid_Group;
+}
+
+static int ov8856_read_eeprom_memory(struct msm_eeprom_ctrl_t *e_ctrl,
+			      struct msm_eeprom_memory_block_t *block)
+{
+	int rc = 0;
+	struct msm_eeprom_memory_map_t *emap = block->map;
+	struct msm_eeprom_board_info *eb_info;
+	uint8_t *memptr = block->mapdata;
+	uint16_t  sensor_module_id = 0;
+	int32_t group_number;
+	uint32_t module_id_addr;
+	int i;
+	if (!e_ctrl) {
+		pr_err("%s e_ctrl is NULL", __func__);
+		return -EINVAL;
+	}
+	pr_err("%s begin", __func__);
+	eb_info = e_ctrl->eboard_info;
+	e_ctrl->i2c_client.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+
+	//init before read eeprom
+	ov8856_read_eeprom_init(e_ctrl);
+
+	group_number = ov8856_check_module_info_group(e_ctrl);
+	switch(group_number){
+		case Group_One:
+			module_id_addr = 0x7011;
+			break;
+		case Group_Two:
+			module_id_addr = 0x7019;
+			break;
+		default:
+			break;
+		}
+	if(module_id_addr!=0){
+		e_ctrl->i2c_client.i2c_func_tbl->i2c_read(&(e_ctrl->i2c_client),module_id_addr,&sensor_module_id,
+			MSM_CAMERA_I2C_BYTE_DATA);
+		pr_err("sensor_module_id =0x%X\n",sensor_module_id);
+		parse_module_name(e_ctrl,OV8856_MODULE_MAP,
+			sizeof(OV8856_MODULE_MAP)/sizeof(MODULE_Map_Table),sensor_module_id);
+	}
+	for (i = 0; i< block->num_map; i++) {
+		e_ctrl->i2c_client.addr_type = emap[i].mem.addr_t;
+		rc = e_ctrl->i2c_client.i2c_func_tbl->i2c_read_seq(
+				&(e_ctrl->i2c_client), emap[i].mem.addr,
+				memptr, emap[i].mem.valid_size);
+		if (rc < 0) {
+			pr_err("%s: read failed\n", __func__);
+			return rc;
+		}
+		memptr += emap[i].mem.valid_size;
+	}
+	ov8856_read_eeprom_end(e_ctrl);
+	pr_err("%s end", __func__);
+	return rc;
+}
+
 static int zte_eeprom_generate_map(struct device_node *of,
 				       struct msm_eeprom_memory_block_t *data)
 {
@@ -1485,6 +1648,8 @@ static const struct of_device_id zte_eeprom_dt_match[] = {
 // <---000064
 	{ .compatible = "zte,eeprom-imx214", .data = (void *)imx214_read_eeprom_memory },
 	{ .compatible = "zte,eeprom-s5k3l2", .data = (void *)s5k3l2_read_eeprom_memory },
+	{ .compatible = "zte,eeprom-ov8856", .data = (void *)ov8856_read_eeprom_memory },
+
 	{ }
 };
 
