@@ -268,6 +268,8 @@ enum usb_id_state {
  * @bool enable_streaming: Indicates whether streaming to be enabled by default.
  * @bool enable_axi_prefetch: Indicates whether AXI Prefetch interface is used
 		for improving data performance.
+ * @bool enable_sdp_typec_current_limit: Indicates whether type-c current for
+		sdp charger to be limited.
  */
 struct msm_otg_platform_data {
 	int *phy_init_seq;
@@ -308,6 +310,7 @@ struct msm_otg_platform_data {
 	bool emulation;
 	bool enable_streaming;
 	bool enable_axi_prefetch;
+	bool enable_sdp_typec_current_limit;
 	struct clk *system_clk;
 };
 
@@ -317,6 +320,7 @@ struct msm_otg_platform_data {
 #define PHY_HOST_MODE			BIT(2)
 #define PHY_CHARGER_CONNECTED		BIT(3)
 #define PHY_VBUS_VALID_OVERRIDE		BIT(4)
+#define DEVICE_IN_SS_MODE		BIT(5)
 
 #define USB_NUM_BUS_CLOCKS      3
 
@@ -529,6 +533,8 @@ struct msm_otg {
 
 struct ci13xxx_platform_data {
 	u8 usb_core_id;
+	int *tlmm_init_seq;
+	int tlmm_seq_count;
 	/*
 	 * value of 2^(log2_itc-1) will be used as the interrupt threshold
 	 * (ITC), when log2_itc is between 1 to 7.
@@ -598,16 +604,6 @@ struct msm_usb_host_platform_data {
 	int ext_hub_reset_gpio;
 	bool is_uicc;
 	int pm_qos_latency;
-};
-
-/**
- * struct msm_hsic_peripheral_platform_data: HSIC peripheral
- * platform data.
- * @core_clk_always_on_workaround: Don't disable core_clk when
- *                                 HSIC enters LPM.
- */
-struct msm_hsic_peripheral_platform_data {
-	bool core_clk_always_on_workaround;
 };
 
 /**

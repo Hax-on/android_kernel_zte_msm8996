@@ -17,6 +17,7 @@
 #include <linux/msm-bus.h>
 #include <linux/msm-bus-board.h>
 #include <linux/msm_gsi.h>
+#include <linux/elf.h>
 #include "ipa_i.h"
 
 #define IPA_V3_0_CLK_RATE_SVS (75 * 1000 * 1000UL)
@@ -86,8 +87,8 @@
 /* Resource Group index*/
 #define IPA_GROUP_UL		(0)
 #define IPA_GROUP_DL		(1)
+#define IPA_GROUP_DPL		IPA_GROUP_DL
 #define IPA_GROUP_DIAG		(2)
-#define IPA_GROUP_DPL		IPA_GROUP_DIAG
 #define IPA_GROUP_DMA		(3)
 #define IPA_GROUP_IMM_CMD	IPA_GROUP_DMA
 #define IPA_GROUP_Q6ZIP		(4)
@@ -141,9 +142,9 @@ static const struct rsrc_min_max ipa3_rsrc_src_grp_config
 };
 static const struct rsrc_min_max ipa3_rsrc_dst_grp_config
 			[IPA_RSRC_GRP_TYPE_DST_MAX][IPA_GROUP_MAX] = {
-		/*UL	DL	DIAG	DMA  Q6zip_gen Q6zip_eng*/
+		/*UL	DL/DPL	DIAG	DMA  Q6zip_gen Q6zip_eng*/
 	[IPA_RSRC_GRP_TYPE_DST_DATA_SECTORS] = {
-		{2, 2}, {3, 3}, {1, 1}, {1, 1}, {3, 3}, {3, 3} },
+		{2, 2}, {3, 3}, {0, 0}, {2, 2}, {3, 3}, {3, 3} },
 	[IPA_RSRC_GRP_TYPE_DST_DATA_SECTOR_LISTS] = {
 		{0, 255}, {0, 255}, {0, 255}, {0, 255}, {0, 255}, {0, 255} },
 	[IPA_RSRC_GRP_TYPE_DST_DPS_DMARS] = {
@@ -551,7 +552,7 @@ int ipa3_suspend_resource_sync(enum ipa_rm_resource_name resource)
 
 	/* before gating IPA clocks do TAG process */
 	ipa3_ctx->tag_process_before_gating = true;
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_RESOURCE(ipa3_rm_resource_str(resource));
 
 	return 0;
 }
@@ -774,11 +775,11 @@ int ipa3_cfg_route(struct ipa3_route *route)
 		return -EPERM;
 	}
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	ipa3_ctx->ctrl->ipa3_cfg_route(route);
 
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 
 	return 0;
 }
@@ -834,6 +835,7 @@ int ipa3_get_ep_mapping(enum ipa_client_type client)
 
 	switch (ipa3_ctx->ipa_hw_type) {
 	case IPA_HW_v3_0:
+	case IPA_HW_v3_1:
 		hw_type_index = IPA_3_0;
 		break;
 	default:
@@ -884,6 +886,7 @@ int ipa_get_ep_group(enum ipa_client_type client)
 
 	switch (ipa3_ctx->ipa_hw_type) {
 	case IPA_HW_v3_0:
+	case IPA_HW_v3_1:
 		hw_type_index = IPA_3_0;
 		break;
 	default:
@@ -1015,6 +1018,7 @@ void ipa_init_ep_flt_bitmap(void)
 
 	switch (ipa3_ctx->ipa_hw_type) {
 	case IPA_HW_v3_0:
+	case IPA_HW_v3_1:
 		hw_type_idx = IPA_3_0;
 		break;
 	default:
@@ -2547,6 +2551,7 @@ int ipa3_cfg_ep_seq(u32 clnt_hdl)
 
 	switch (ipa3_ctx->ipa_hw_type) {
 	case IPA_HW_v3_0:
+	case IPA_HW_v3_1:
 		hw_type_index = IPA_3_0;
 		break;
 	default:
@@ -2563,8 +2568,7 @@ int ipa3_cfg_ep_seq(u32 clnt_hdl)
 			IPAERR("Configuring non-DMA SEQ type to DMA pipe\n");
 			BUG();
 		}
-
-		ipa3_inc_client_enable_clks();
+		IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 		/* Configure sequencers type*/
 
 		IPADBG("set sequencers to sequence 0x%x, ep = %d\n", type,
@@ -2572,7 +2576,7 @@ int ipa3_cfg_ep_seq(u32 clnt_hdl)
 		ipa_write_reg(ipa3_ctx->mmio,
 				IPA_ENDP_INIT_SEQ_n_OFST(clnt_hdl), type);
 
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 	} else {
 		IPADBG("should not set sequencer type of ep = %d\n", clnt_hdl);
 	}
@@ -2707,11 +2711,11 @@ int ipa3_cfg_ep_nat(u32 clnt_hdl, const struct ipa_ep_cfg_nat *ep_nat)
 	/* copy over EP cfg */
 	ipa3_ctx->ep[clnt_hdl].cfg.nat = *ep_nat;
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	ipa3_ctx->ctrl->ipa3_cfg_ep_nat(clnt_hdl, ep_nat);
 
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	return 0;
 }
@@ -2766,11 +2770,11 @@ int ipa3_cfg_ep_status(u32 clnt_hdl, const struct ipa3_ep_cfg_status *ep_status)
 	/* copy over EP cfg */
 	ipa3_ctx->ep[clnt_hdl].status = *ep_status;
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	ipa3_ctx->ctrl->ipa3_cfg_ep_status(clnt_hdl, ep_status);
 
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	return 0;
 }
@@ -2822,11 +2826,11 @@ int ipa3_cfg_ep_cfg(u32 clnt_hdl, const struct ipa_ep_cfg_cfg *cfg)
 	/* copy over EP cfg */
 	ipa3_ctx->ep[clnt_hdl].cfg.cfg = *cfg;
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	ipa3_ctx->ctrl->ipa3_cfg_ep_cfg(clnt_hdl, cfg);
 
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	return 0;
 }
@@ -2873,11 +2877,11 @@ int ipa3_cfg_ep_metadata_mask(u32 clnt_hdl,
 	/* copy over EP cfg */
 	ipa3_ctx->ep[clnt_hdl].cfg.metadata_mask = *metadata_mask;
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	ipa3_ctx->ctrl->ipa3_cfg_ep_metadata_mask(clnt_hdl, metadata_mask);
 
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	return 0;
 }
@@ -2975,11 +2979,11 @@ int ipa3_cfg_ep_hdr(u32 clnt_hdl, const struct ipa_ep_cfg_hdr *ep_hdr)
 	/* copy over EP cfg */
 	ep->cfg.hdr = *ep_hdr;
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	ipa3_ctx->ctrl->ipa3_cfg_ep_hdr(clnt_hdl, &ep->cfg.hdr);
 
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	return 0;
 }
@@ -3068,11 +3072,11 @@ int ipa3_cfg_ep_hdr_ext(u32 clnt_hdl,
 	/* copy over EP cfg */
 	ep->cfg.hdr_ext = *ep_hdr_ext;
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	ipa3_ctx->ctrl->ipa3_cfg_ep_hdr_ext(clnt_hdl, &ep->cfg.hdr_ext);
 
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	return 0;
 }
@@ -3271,7 +3275,7 @@ int ipa3_cfg_ep_mode(u32 clnt_hdl, const struct ipa_ep_cfg_mode *ep_mode)
 	ipa3_ctx->ep[clnt_hdl].cfg.mode = *ep_mode;
 	ipa3_ctx->ep[clnt_hdl].dst_pipe_index = ep;
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	ipa3_ctx->ctrl->ipa3_cfg_ep_mode(clnt_hdl,
 			ipa3_ctx->ep[clnt_hdl].dst_pipe_index,
@@ -3289,7 +3293,7 @@ int ipa3_cfg_ep_mode(u32 clnt_hdl, const struct ipa_ep_cfg_mode *ep_mode)
 		ipa_write_reg(ipa3_ctx->mmio,
 				IPA_ENDP_INIT_SEQ_n_OFST(clnt_hdl), type);
 	}
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	return 0;
 }
@@ -3403,11 +3407,11 @@ int ipa3_cfg_ep_aggr(u32 clnt_hdl, const struct ipa_ep_cfg_aggr *ep_aggr)
 	/* copy over EP cfg */
 	ipa3_ctx->ep[clnt_hdl].cfg.aggr = *ep_aggr;
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	ipa3_ctx->ctrl->ipa3_cfg_ep_aggr(clnt_hdl, ep_aggr);
 
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	return 0;
 }
@@ -3479,12 +3483,12 @@ int ipa3_cfg_ep_route(u32 clnt_hdl, const struct ipa_ep_cfg_route *ep_route)
 	ipa3_ctx->ep[clnt_hdl].rt_tbl_idx =
 		IPA_MEM_PART(v4_apps_rt_index_lo);
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	ipa3_ctx->ctrl->ipa3_cfg_ep_route(clnt_hdl,
 			ipa3_ctx->ep[clnt_hdl].rt_tbl_idx);
 
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	return 0;
 }
@@ -3551,11 +3555,11 @@ int ipa3_cfg_ep_holb(u32 clnt_hdl, const struct ipa_ep_cfg_holb *ep_holb)
 
 	ipa3_ctx->ep[clnt_hdl].holb = *ep_holb;
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	ipa3_ctx->ctrl->ipa3_cfg_ep_holb(clnt_hdl, ep_holb);
 
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	IPADBG("cfg holb %u ep=%d tmr=%d\n", ep_holb->en, clnt_hdl,
 				ep_holb->tmr_val);
@@ -3645,11 +3649,11 @@ int ipa3_cfg_ep_deaggr(u32 clnt_hdl,
 	/* copy over EP cfg */
 	ep->cfg.deaggr = *ep_deaggr;
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	ipa3_ctx->ctrl->ipa3_cfg_ep_deaggr(clnt_hdl, &ep->cfg.deaggr);
 
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	return 0;
 }
@@ -3691,14 +3695,14 @@ int ipa3_cfg_ep_metadata(u32 clnt_hdl, const struct ipa_ep_cfg_metadata *ep_md)
 	/* copy over EP cfg */
 	ipa3_ctx->ep[clnt_hdl].cfg.meta = *ep_md;
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	ipa3_ctx->ctrl->ipa3_cfg_ep_metadata(clnt_hdl, ep_md);
 	ipa3_ctx->ep[clnt_hdl].cfg.hdr.hdr_metadata_reg_valid = 1;
 	ipa3_ctx->ctrl->ipa3_cfg_ep_hdr(clnt_hdl,
 			&ipa3_ctx->ep[clnt_hdl].cfg.hdr);
 
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	return 0;
 }
@@ -3874,11 +3878,11 @@ int ipa3_set_aggr_mode(enum ipa_aggr_mode mode)
 {
 	u32 reg_val;
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 	reg_val = ipa_read_reg(ipa3_ctx->mmio, IPA_QCNCM_OFST);
 	ipa_write_reg(ipa3_ctx->mmio, IPA_QCNCM_OFST, (mode & 0x1) |
 			(reg_val & 0xfffffffe));
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 
 	return 0;
 }
@@ -3902,12 +3906,12 @@ int ipa3_set_qcncm_ndp_sig(char sig[3])
 		IPAERR("bad argument for ipa3_set_qcncm_ndp_sig/n");
 		return -EINVAL;
 	}
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 	reg_val = ipa_read_reg(ipa3_ctx->mmio, IPA_QCNCM_OFST);
 	ipa_write_reg(ipa3_ctx->mmio, IPA_QCNCM_OFST, sig[0] << 20 |
 			(sig[1] << 12) | (sig[2] << 4) |
 			(reg_val & 0xf000000f));
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 
 	return 0;
 }
@@ -3923,11 +3927,11 @@ int ipa3_set_single_ndp_per_mbim(bool enable)
 {
 	u32 reg_val;
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 	reg_val = ipa_read_reg(ipa3_ctx->mmio, IPA_SINGLE_NDP_MODE_OFST);
 	ipa_write_reg(ipa3_ctx->mmio, IPA_SINGLE_NDP_MODE_OFST,
 			(enable & 0x1) | (reg_val & 0xfffffffe));
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 
 	return 0;
 }
@@ -3972,14 +3976,14 @@ void ipa3_bam_reg_dump(void)
 	static DEFINE_RATELIMIT_STATE(_rs, 500*HZ, 1);
 
 	if (__ratelimit(&_rs)) {
-		ipa3_inc_client_enable_clks();
+		IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 		pr_err("IPA BAM START\n");
 		sps_get_bam_debug_info(ipa3_ctx->bam_handle, 93,
 			(SPS_BAM_PIPE(ipa3_get_ep_mapping(IPA_CLIENT_USB_CONS))
 			|
 			SPS_BAM_PIPE(ipa3_get_ep_mapping(IPA_CLIENT_USB_PROD))),
 			0, 2);
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 	}
 }
 
@@ -4642,7 +4646,14 @@ fail_free_desc:
  */
 bool ipa3_is_ready(void)
 {
-	return (ipa3_ctx != NULL) ? true : false;
+	bool complete;
+
+	if (ipa3_ctx == NULL)
+		return false;
+	mutex_lock(&ipa3_ctx->lock);
+	complete = ipa3_ctx->ipa_initialization_complete;
+	mutex_unlock(&ipa3_ctx->lock);
+	return complete;
 }
 
 /**
@@ -4665,7 +4676,7 @@ bool ipa3_is_client_handle_valid(u32 clnt_hdl)
 void ipa3_proxy_clk_unvote(void)
 {
 	if (ipa3_is_ready() && ipa3_ctx->q6_proxy_clk_vote_valid) {
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_SPECIAL("PROXY_CLK_VOTE");
 		ipa3_ctx->q6_proxy_clk_vote_valid = false;
 	}
 }
@@ -4678,7 +4689,7 @@ void ipa3_proxy_clk_unvote(void)
 void ipa3_proxy_clk_vote(void)
 {
 	if (ipa3_is_ready() && !ipa3_ctx->q6_proxy_clk_vote_valid) {
-		ipa3_inc_client_enable_clks();
+		IPA_ACTIVE_CLIENTS_INC_SPECIAL("PROXY_CLK_VOTE");
 		ipa3_ctx->q6_proxy_clk_vote_valid = true;
 	}
 }
@@ -4919,6 +4930,7 @@ int ipa3_bind_api_controller(enum ipa_hw_type ipa_hw_type,
 	api_ctrl->ipa_usb_deinit_teth_prot = ipa3_usb_deinit_teth_prot;
 	api_ctrl->ipa_usb_xdci_suspend = ipa3_usb_xdci_suspend;
 	api_ctrl->ipa_usb_xdci_resume = ipa3_usb_xdci_resume;
+	api_ctrl->ipa_register_ipa_ready_cb = ipa3_register_ipa_ready_cb;
 
 	return 0;
 }
@@ -5061,21 +5073,63 @@ void ipa3_set_resorce_groups_min_max_limits(void)
 	IPADBG("EXIT\n");
 }
 
+static void ipa3_gsi_poll_after_suspend(struct ipa3_ep_context *ep)
+{
+	bool empty;
+
+	IPADBG("switch ch %ld to poll\n", ep->gsi_chan_hdl);
+	gsi_config_channel_mode(ep->gsi_chan_hdl, GSI_CHAN_MODE_POLL);
+	gsi_is_channel_empty(ep->gsi_chan_hdl, &empty);
+	if (!empty) {
+		IPADBG("ch %ld not empty\n", ep->gsi_chan_hdl);
+		/* queue a work to start polling if don't have one */
+		atomic_set(&ipa3_ctx->transport_pm.eot_activity, 1);
+		if (!atomic_read(&ep->sys->curr_polling_state)) {
+			atomic_set(&ep->sys->curr_polling_state, 1);
+			queue_work(ep->sys->wq, &ep->sys->work);
+		}
+	}
+}
+
 void ipa3_suspend_apps_pipes(bool suspend)
 {
 	struct ipa_ep_cfg_ctrl cfg;
 	int ipa_ep_idx;
+	struct ipa3_ep_context *ep;
 
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.ipa_ep_suspend = suspend;
 
 	ipa_ep_idx = ipa3_get_ep_mapping(IPA_CLIENT_APPS_LAN_CONS);
-	if (ipa3_ctx->ep[ipa_ep_idx].valid)
+	ep = &ipa3_ctx->ep[ipa_ep_idx];
+	if (ep->valid) {
+		IPADBG("%s pipe %d\n", suspend ? "suspend" : "unsuspend",
+			ipa_ep_idx);
 		ipa3_cfg_ep_ctrl(ipa_ep_idx, &cfg);
+		if (suspend)
+			ipa3_gsi_poll_after_suspend(ep);
+		else if (!atomic_read(&ep->sys->curr_polling_state))
+			gsi_config_channel_mode(ep->gsi_chan_hdl,
+				GSI_CHAN_MODE_CALLBACK);
+	}
 
-	ipa_ep_idx = ipa3_get_ep_mapping(IPA_CLIENT_APPS_WAN_CONS);
-	if (ipa3_ctx->ep[ipa_ep_idx].valid)
+	ipa_ep_idx = ipa_get_ep_mapping(IPA_CLIENT_APPS_WAN_CONS);
+	/* Considering the case for SSR. */
+	if (ipa_ep_idx == -1) {
+		IPADBG("Invalid client.\n");
+		return;
+	}
+	ep = &ipa3_ctx->ep[ipa_ep_idx];
+	if (ep->valid) {
+		IPADBG("%s pipe %d\n", suspend ? "suspend" : "unsuspend",
+			ipa_ep_idx);
 		ipa3_cfg_ep_ctrl(ipa_ep_idx, &cfg);
+		if (suspend)
+			ipa3_gsi_poll_after_suspend(ep);
+		else if (!atomic_read(&ep->sys->curr_polling_state))
+			gsi_config_channel_mode(ep->gsi_chan_hdl,
+				GSI_CHAN_MODE_CALLBACK);
+	}
 }
 
 /**
@@ -5135,7 +5189,7 @@ int ipa3_inject_dma_task_for_gsi(void)
 int ipa3_stop_gsi_channel(u32 clnt_hdl)
 {
 	struct ipa3_mem_buffer mem;
-	int res;
+	int res = 0;
 	int i;
 	struct ipa3_ep_context *ep;
 
@@ -5146,26 +5200,28 @@ int ipa3_stop_gsi_channel(u32 clnt_hdl)
 	}
 
 	ep = &ipa3_ctx->ep[clnt_hdl];
-	if (!ep->keep_ipa_awake)
-		ipa3_inc_client_enable_clks();
+
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	memset(&mem, 0, sizeof(mem));
 
-	if (IPA_CLIENT_IS_PROD(ep->client))
-		return gsi_stop_channel(ep->gsi_chan_hdl);
+	if (IPA_CLIENT_IS_PROD(ep->client)) {
+		res = gsi_stop_channel(ep->gsi_chan_hdl);
+		goto end_sequence;
+	}
 
 	for (i = 0; i < IPA_GSI_CHANNEL_STOP_MAX_RETRY; i++) {
 		IPADBG("Calling gsi_stop_channel\n");
 		res = gsi_stop_channel(ep->gsi_chan_hdl);
 		IPADBG("gsi_stop_channel returned %d\n", res);
 		if (res != -GSI_STATUS_AGAIN && res != -GSI_STATUS_TIMED_OUT)
-			return res;
+			goto end_sequence;
 
 		/* Send a 1B packet DMA_RASK to IPA and try again*/
 		res = ipa3_inject_dma_task_for_gsi();
 		if (res) {
 			IPAERR("ipa3_inject_dma_task_for_gsi failed\n");
-			return res;
+			goto end_sequence;
 		}
 
 		/* sleep for short period to flush IPA */
@@ -5173,7 +5229,11 @@ int ipa3_stop_gsi_channel(u32 clnt_hdl)
 			IPA_GSI_CHANNEL_STOP_SLEEP_MAX_USEC);
 	}
 
-	return -EFAULT;
+	res = -EFAULT;
+end_sequence:
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
+
+	return res;
 }
 
 /**
@@ -5407,15 +5467,90 @@ int ipa3_generate_eq_from_hw_rule(
 	IPADBG("before align buf=0x%p extra=0x%p rest=0x%p\n",
 		buf, extra, rest);
 	/* align to 64 bit */
-	rest = (u8 *)(((u32)rest + IPA_HW_RULE_START_ALIGNMENT) &
+	rest = (u8 *)(((unsigned long)rest + IPA_HW_RULE_START_ALIGNMENT) &
 		~IPA_HW_RULE_START_ALIGNMENT);
 
 	IPADBG("after align buf=0x%p extra=0x%p rest=0x%p\n",
 		buf, extra, rest);
-	IPADBG("rest - buf=0x%x\n", rest - buf);
 
 	*rule_size = rest - buf;
+
+	IPADBG("rest - buf=0x%llx\n", (u64) (rest - buf));
 	IPADBG("*rule_size=0x%x\n", *rule_size);
 
+	return 0;
+}
+
+/**
+ * ipa3_load_fws() - Load the IPAv3 FWs into IPA&GSI SRAM.
+ *
+ * @firmware: Structure which contains the FW data from the user space.
+ *
+ * Return value: 0 on success, negative otherwise
+ *
+ */
+int ipa3_load_fws(const struct firmware *firmware)
+{
+	/*
+	 * TODO: Do we need to use a generic elf_hdr/elf_phdr
+	 * so we won't have issues with 64bit systems?
+	 */
+	const struct elf32_hdr *ehdr;
+	const struct elf32_phdr *phdr;
+	const uint8_t *elf_phdr_ptr;
+	uint32_t *elf_data_ptr;
+	int phdr_idx, index;
+	uint32_t *fw_mem_base;
+
+	ehdr = (struct elf32_hdr *) firmware->data;
+
+	elf_phdr_ptr = firmware->data + sizeof(*ehdr);
+
+	for (phdr_idx = 0; phdr_idx < ehdr->e_phnum; phdr_idx++) {
+		/*
+		 * The ELF program header will contain the starting
+		 * address to which the firmware needs to copied.
+		 * TODO: Shall we rely on that, or rely on the order
+		 * of which the FWs reside in the ELF, and use
+		 * registers/defines in here?
+		 */
+		phdr = (struct elf32_phdr *)elf_phdr_ptr;
+
+		/*
+		 * p_addr will contain the physical address to which the
+		 * FW needs to be loaded.
+		 * p_memsz will contain the size of the FW image.
+		 */
+		fw_mem_base = ioremap(phdr->p_paddr, phdr->p_memsz);
+		if (!fw_mem_base) {
+			IPAERR("Failed to map 0x%x for the size of %u\n",
+				phdr->p_paddr, phdr->p_memsz);
+				return -ENOMEM;
+		}
+
+		/*
+		 * p_offset will contain and absolute offset from the beginning
+		 * of the ELF file.
+		 */
+		elf_data_ptr = (uint32_t *)
+				((uint8_t *)firmware->data + phdr->p_offset);
+
+		if (phdr->p_memsz % sizeof(uint32_t)) {
+			IPAERR("FW size %u doesn't align to 32bit\n",
+				phdr->p_memsz);
+			return -EFAULT;
+		}
+
+		for (index = 0; index < phdr->p_memsz/sizeof(uint32_t);
+			index++) {
+			writel_relaxed(*elf_data_ptr, &fw_mem_base[index]);
+			elf_data_ptr++;
+		}
+
+		iounmap(fw_mem_base);
+
+		elf_phdr_ptr = elf_phdr_ptr + sizeof(*phdr);
+	}
+	IPADBG("IPA FWs (GSI FW, HPS and DPS) were loaded\n");
 	return 0;
 }

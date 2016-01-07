@@ -109,29 +109,16 @@ const unsigned int a3xx_cp_addr_regs[ADRENO_CP_ADDR_MAX] = {
 				A3XX_SP_FS_OBJ_START_REG),
 };
 
-unsigned int adreno_a3xx_rbbm_clock_ctl_default(struct adreno_device
+static unsigned int adreno_a3xx_rbbm_clock_ctl_default(struct adreno_device
 							*adreno_dev)
 {
-	if (adreno_is_a304(adreno_dev))
-		return A304_RBBM_CLOCK_CTL_DEFAULT;
-	else if (adreno_is_a305(adreno_dev))
-		return A305_RBBM_CLOCK_CTL_DEFAULT;
-	else if (adreno_is_a305c(adreno_dev))
-		return A305C_RBBM_CLOCK_CTL_DEFAULT;
-	else if (adreno_is_a306(adreno_dev))
-		return A306_RBBM_CLOCK_CTL_DEFAULT;
-	else if (adreno_is_a310(adreno_dev))
-		return A310_RBBM_CLOCK_CTL_DEFAULT;
-	else if (adreno_is_a320(adreno_dev))
+	if (adreno_is_a320(adreno_dev))
 		return A320_RBBM_CLOCK_CTL_DEFAULT;
 	else if (adreno_is_a330v2(adreno_dev))
-		return A330v2_RBBM_CLOCK_CTL_DEFAULT;
+		return A3XX_RBBM_CLOCK_CTL_DEFAULT;
 	else if (adreno_is_a330(adreno_dev))
 		return A330_RBBM_CLOCK_CTL_DEFAULT;
-	else if (adreno_is_a305b(adreno_dev))
-		return A305B_RBBM_CLOCK_CTL_DEFAULT;
-
-	BUG_ON(1);
+	return A3XX_RBBM_CLOCK_CTL_DEFAULT;
 }
 
 static const unsigned int _a3xx_pwron_fixup_fs_instructions[] = {
@@ -611,7 +598,7 @@ static void a3xx_platform_setup(struct adreno_device *adreno_dev)
 	struct adreno_gpudev *gpudev;
 	const struct adreno_reg_offsets *reg_offsets;
 
-	if (adreno_is_a306(adreno_dev)) {
+	if (adreno_is_a306(adreno_dev) || adreno_is_a306a(adreno_dev)) {
 		gpudev = ADRENO_GPU_DEVICE(adreno_dev);
 		reg_offsets = gpudev->reg_offsets;
 		reg_offsets->offsets[ADRENO_REG_VBIF_XIN_HALT_CTRL0] =
@@ -760,7 +747,7 @@ static void a3xx_err_callback(struct adreno_device *adreno_dev, int bit)
 	 (1 << A3XX_INT_CP_AHB_ERROR_HALT) |     \
 	 (1 << A3XX_INT_UCHE_OOB_ACCESS))
 
-static struct adreno_irq_funcs a3xx_irq_funcs[] = {
+static struct adreno_irq_funcs a3xx_irq_funcs[32] = {
 	ADRENO_IRQ_CALLBACK(NULL),                    /* 0 - RBBM_GPU_IDLE */
 	ADRENO_IRQ_CALLBACK(a3xx_err_callback),  /* 1 - RBBM_AHB_ERROR */
 	ADRENO_IRQ_CALLBACK(NULL),  /* 2 - RBBM_REG_TIMEOUT */
@@ -791,12 +778,10 @@ static struct adreno_irq_funcs a3xx_irq_funcs[] = {
 	/* 24 - MISC_HANG_DETECT */
 	ADRENO_IRQ_CALLBACK(adreno_hang_int_callback),
 	ADRENO_IRQ_CALLBACK(a3xx_err_callback),  /* 25 - UCHE_OOB_ACCESS */
-	/* 26 to 31 - Unused */
 };
 
 static struct adreno_irq a3xx_irq = {
 	.funcs = a3xx_irq_funcs,
-	.funcs_count = ARRAY_SIZE(a3xx_irq_funcs),
 	.mask = A3XX_INT_MASK,
 };
 
@@ -849,6 +834,13 @@ static const struct adreno_vbif_data a305c_vbif[] = {
 };
 
 static const struct adreno_vbif_data a306_vbif[] = {
+	{ A3XX_VBIF_ROUND_ROBIN_QOS_ARB, 0x0003 },
+	{ A3XX_VBIF_OUT_RD_LIM_CONF0, 0x0000000A },
+	{ A3XX_VBIF_OUT_WR_LIM_CONF0, 0x0000000A },
+	{0, 0},
+};
+
+static const struct adreno_vbif_data a306a_vbif[] = {
 	{ A3XX_VBIF_ROUND_ROBIN_QOS_ARB, 0x0003 },
 	{ A3XX_VBIF_OUT_RD_LIM_CONF0, 0x0000000A },
 	{ A3XX_VBIF_OUT_WR_LIM_CONF0, 0x0000000A },
@@ -951,6 +943,7 @@ static const struct adreno_vbif_platform a3xx_vbif_platforms[] = {
 	{ adreno_is_a305, a305_vbif },
 	{ adreno_is_a305c, a305c_vbif },
 	{ adreno_is_a306, a306_vbif },
+	{ adreno_is_a306a, a306a_vbif },
 	{ adreno_is_a310, a310_vbif },
 	{ adreno_is_a320, a320_vbif },
 	/* A330v2.1 needs to be ahead of A330v2 so the right device matches */
@@ -1197,7 +1190,8 @@ static void a3xx_perfcounter_init(struct adreno_device *adreno_dev)
 		a3xx_perfcounters_sp[3].countable = KGSL_PERFCOUNTER_BROKEN;
 
 	if (counters &&
-		(adreno_is_a306(adreno_dev) || adreno_is_a304(adreno_dev))) {
+		(adreno_is_a306(adreno_dev) || adreno_is_a304(adreno_dev) ||
+		adreno_is_a306a(adreno_dev))) {
 		counters->groups[KGSL_PERFCOUNTER_GROUP_VBIF].regs =
 			a3xx_perfcounters_vbif2;
 		counters->groups[KGSL_PERFCOUNTER_GROUP_VBIF_PWR].regs =

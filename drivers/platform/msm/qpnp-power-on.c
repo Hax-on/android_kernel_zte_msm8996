@@ -44,10 +44,15 @@
 #define PMIC8941_V1_REV4	0x01
 #define PMIC8941_V2_REV4	0x02
 #define PON_PRIMARY		0x01
+#define PON_SECONDARY		0x02
+#define PON_1REG		0x03
 #define PON_GEN2_PRIMARY	0x04
+#define PON_GEN2_SECONDARY	0x05
 
 #define PON_OFFSET(subtype, offset_gen1, offset_gen2) \
-	(subtype == PON_PRIMARY ? offset_gen1 : offset_gen2)
+	(((subtype == PON_PRIMARY) || \
+	(subtype == PON_SECONDARY) || \
+	(subtype == PON_1REG)) ? offset_gen1 : offset_gen2)
 
 /* Common PNP defines */
 #define QPNP_PON_REVISION2(pon)			((pon)->base + 0x01)
@@ -205,6 +210,9 @@ struct qpnp_pon {
 	int			reg_count;
 	u32			dbc;
 	u32			uvlo;
+	int			warm_reset_poff_type;
+	int			hard_reset_poff_type;
+	int			shutdown_poff_type;
 	u16			base;
 	u8			subtype;
 	u8			pon_ver;
@@ -306,7 +314,7 @@ static const char * const qpnp_pon_reason[] = {
 #define POFF_REASON_FAULT_OFFSET	16
 #define POFF_REASON_S3_RESET_OFFSET	32
 static const char * const qpnp_poff_reason[] = {
-	/* QPNP_PON_PRIMARY POFF reasons */
+	/* QPNP_PON_GEN1 POFF reasons */
 	[0] = "Triggered from SOFT (Software)",
 	[1] = "Triggered from PS_HOLD (PS_HOLD/MSM controlled shutdown)",
 	[2] = "Triggered from PMIC_WD (PMIC watchdog)",
@@ -384,6 +392,18 @@ qpnp_pon_masked_write(struct qpnp_pon *pon, u16 addr, u8 mask, u8 val)
 		dev_err(&pon->spmi->dev,
 			"Unable to write to addr=%hx, rc(%d)\n", addr, rc);
 	return rc;
+}
+
+static bool is_pon_gen1(struct qpnp_pon *pon)
+{
+	return pon->subtype == PON_PRIMARY ||
+			pon->subtype == PON_SECONDARY;
+}
+
+static bool is_pon_gen2(struct qpnp_pon *pon)
+{
+	return pon->subtype == PON_GEN2_PRIMARY ||
+			pon->subtype == PON_GEN2_SECONDARY;
 }
 
 /**
@@ -513,6 +533,27 @@ static int qpnp_pon_reset_config(struct qpnp_pon *pon,
 	else
 		rst_en_reg = QPNP_PON_PS_HOLD_RST_CTL2(pon);
 
+	/*
+	 * Based on the poweroff type set for a PON device through device tree
+	 * change the type being configured into PS_HOLD_RST_CTL.
+	 */
+	switch (type) {
+	case PON_POWER_OFF_WARM_RESET:
+		if (pon->warm_reset_poff_type != -EINVAL)
+			type = pon->warm_reset_poff_type;
+		break;
+	case PON_POWER_OFF_HARD_RESET:
+		if (pon->hard_reset_poff_type != -EINVAL)
+			type = pon->hard_reset_poff_type;
+		break;
+	case PON_POWER_OFF_SHUTDOWN:
+		if (pon->shutdown_poff_type != -EINVAL)
+			type = pon->shutdown_poff_type;
+		break;
+	default:
+		break;
+	}
+
 	rc = qpnp_pon_masked_write(pon, rst_en_reg, QPNP_PON_RESET_EN, 0);
 	if (rc)
 		dev_err(&pon->spmi->dev,
@@ -525,15 +566,6 @@ static int qpnp_pon_reset_config(struct qpnp_pon *pon,
 	 * conservative.
 	 */
 	udelay(500);
-
-	/*
-	 * In case of HARD RESET configure PMIC's
-	 * PS_HOLD_RESET_CTL based on the dt property.
-	 */
-	if ((type == PON_POWER_OFF_HARD_RESET) &&
-			of_find_property(pon->spmi->dev.of_node,
-				"qcom,cfg-shutdown-for-hard-reset", NULL))
-		type = PON_POWER_OFF_SHUTDOWN;
 
 	rc = qpnp_pon_masked_write(pon, QPNP_PON_PS_HOLD_RST_CTL(pon),
 				   QPNP_PON_POWER_OFF_MASK, type);
@@ -622,7 +654,7 @@ int qpnp_pon_is_warm_reset(void)
 	if (!pon)
 		return -EPROBE_DEFER;
 
-	if (pon->subtype == PON_PRIMARY)
+	if (is_pon_gen1(pon) || pon->subtype == PON_1REG)
 		return pon->warm_reset_reason1
 			|| (pon->warm_reset_reason2 & QPNP_PON_WARM_RESET_TFT);
 	else
@@ -679,7 +711,7 @@ int qpnp_pon_trigger_config(enum pon_trigger_source pon_src, bool enable)
 		return -EINVAL;
 	}
 
-	if (pon->subtype == PON_GEN2_PRIMARY && pon_src == PON_SMPL) {
+	if (is_pon_gen2(pon) && pon_src == PON_SMPL) {
 		rc = qpnp_pon_masked_write(pon, QPNP_PON_SMPL_CTL(pon),
 			QPNP_PON_SMPL_EN, enable ? QPNP_PON_SMPL_EN : 0);
 		if (rc)
@@ -716,7 +748,7 @@ static int qpnp_pon_store_and_clear_warm_reset(struct qpnp_pon *pon)
 		return rc;
 	}
 
-	if (pon->subtype == PON_PRIMARY) {
+	if (is_pon_gen1(pon) || pon->subtype == PON_1REG) {
 		rc = spmi_ext_register_readl(pon->spmi->ctrl, pon->spmi->sid,
 				QPNP_PON_WARM_RESET_REASON2(pon),
 				&pon->warm_reset_reason2, 1);
@@ -932,7 +964,7 @@ static irqreturn_t qpnp_pmic_wd_bark_irq(int irq, void *_pon)
 	print_pon_reg(pon, PON_WARM_RESET_REASON1(pon->subtype));
 	print_pon_reg(pon, PON_SOFT_RESET_REASON1(pon->subtype));
 	print_pon_reg(pon, PON_POFF_REASON1(pon->subtype));
-	if (pon->subtype == PON_PRIMARY) {
+	if (is_pon_gen1(pon) || pon->subtype == PON_1REG) {
 		print_pon_reg(pon, PON_PON_REASON2);
 		print_pon_reg(pon, PON_WARM_RESET_REASON2);
 		print_pon_reg(pon, PON_POFF_REASON2);
@@ -2019,13 +2051,15 @@ static int qpnp_pon_probe(struct spmi_device *spmi)
 			QPNP_PON_REVISION2(pon), rc);
 		return rc;
 	}
-	if (pon->subtype == PON_PRIMARY) {
+	if (is_pon_gen1(pon)) {
 		if (pon->pon_ver == 0)
 			pon->pon_ver = QPNP_PON_GEN1_V1;
 		else
 			pon->pon_ver = QPNP_PON_GEN1_V2;
-	} else if (pon->subtype == PON_GEN2_PRIMARY) {
+	} else if (is_pon_gen2(pon)) {
 		pon->pon_ver = QPNP_PON_GEN2;
+	} else if (pon->subtype == PON_1REG) {
+		pon->pon_ver = QPNP_PON_GEN1_V2;
 	} else {
 		dev_err(&pon->spmi->dev,
 			"Invalid PON_PERPH_SUBTYPE value %x\n",
@@ -2068,7 +2102,7 @@ static int qpnp_pon_probe(struct spmi_device *spmi)
 	}
 
 	/* POFF reason */
-	if (pon->subtype != PON_PRIMARY) {
+	if (!is_pon_gen1(pon) && pon->subtype != PON_1REG) {
 		rc = read_gen2_pon_off_reason(pon, &poff_sts,
 						&reason_index_offset);
 		if (rc)
@@ -2204,6 +2238,54 @@ static int qpnp_pon_probe(struct spmi_device *spmi)
 		}
 	} else {
 		rc = qpnp_pon_set_dbc(pon, delay);
+	}
+
+	rc = of_property_read_u32(pon->spmi->dev.of_node,
+				"qcom,warm-reset-poweroff-type",
+				&pon->warm_reset_poff_type);
+	if (rc) {
+		if (rc != -EINVAL) {
+			dev_err(&spmi->dev, "Unable to read warm reset poweroff type rc: %d\n",
+				rc);
+			return rc;
+		}
+		pon->warm_reset_poff_type = -EINVAL;
+	} else if (pon->warm_reset_poff_type <= PON_POWER_OFF_RESERVED ||
+			pon->warm_reset_poff_type >= PON_POWER_OFF_MAX_TYPE) {
+		dev_err(&spmi->dev, "Invalid warm-reset-poweroff-type\n");
+		pon->warm_reset_poff_type = -EINVAL;
+	}
+
+	rc = of_property_read_u32(pon->spmi->dev.of_node,
+				"qcom,hard-reset-poweroff-type",
+				&pon->hard_reset_poff_type);
+	if (rc) {
+		if (rc != -EINVAL) {
+			dev_err(&spmi->dev, "Unable to read hard reset poweroff type rc: %d\n",
+				rc);
+			return rc;
+		}
+		pon->hard_reset_poff_type = -EINVAL;
+	} else if (pon->hard_reset_poff_type <= PON_POWER_OFF_RESERVED ||
+			pon->hard_reset_poff_type >= PON_POWER_OFF_MAX_TYPE) {
+		dev_err(&spmi->dev, "Invalid hard-reset-poweroff-type\n");
+		pon->hard_reset_poff_type = -EINVAL;
+	}
+
+	rc = of_property_read_u32(pon->spmi->dev.of_node,
+				"qcom,shutdown-poweroff-type",
+				&pon->shutdown_poff_type);
+	if (rc) {
+		if (rc != -EINVAL) {
+			dev_err(&spmi->dev, "Unable to read shutdown poweroff type rc: %d\n",
+				rc);
+			return rc;
+		}
+		pon->shutdown_poff_type = -EINVAL;
+	} else if (pon->shutdown_poff_type <= PON_POWER_OFF_RESERVED ||
+			pon->shutdown_poff_type >= PON_POWER_OFF_MAX_TYPE) {
+		dev_err(&spmi->dev, "Invalid shutdown-poweroff-type\n");
+		pon->shutdown_poff_type = -EINVAL;
 	}
 
 	rc = device_create_file(&spmi->dev, &dev_attr_debounce_us);

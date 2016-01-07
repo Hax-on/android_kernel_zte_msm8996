@@ -46,6 +46,8 @@ enum gsi_ep_op {
 	GSI_EP_OP_GET_XFER_IDX,
 	GSI_EP_OP_PREPARE_TRBS,
 	GSI_EP_OP_FREE_TRBS,
+	GSI_EP_OP_SET_CLR_BLOCK_DBL,
+	GSI_EP_OP_CHECK_FOR_SUSPEND,
 };
 
 /*
@@ -586,6 +588,7 @@ struct usb_gadget_ops {
 	int	(*vbus_session) (struct usb_gadget *, int is_active);
 	int	(*vbus_draw) (struct usb_gadget *, unsigned mA);
 	int	(*pullup) (struct usb_gadget *, int is_on);
+	int	(*restart)(struct usb_gadget *);
 	int	(*ioctl)(struct usb_gadget *,
 				unsigned code, unsigned long param);
 	void	(*get_config_params)(struct usb_dcd_config_params *);
@@ -930,6 +933,20 @@ static inline int usb_gadget_disconnect(struct usb_gadget *gadget)
 	if (!gadget->ops->pullup)
 		return -EOPNOTSUPP;
 	return gadget->ops->pullup(gadget, 0);
+}
+
+/**
+ * usb_gadget_restart - software-controlled reset of USB peripheral connection
+ * @gadget:the peripheral being reset
+ *
+ * Informs controller driver for Vbus LOW followed by Vbus HIGH notification.
+ * This performs full hardware reset and re-initialization.
+  */
+static inline int usb_gadget_restart(struct usb_gadget *gadget)
+{
+	if (!gadget->ops->restart)
+		return -EOPNOTSUPP;
+	return gadget->ops->restart(gadget);
 }
 
 /**

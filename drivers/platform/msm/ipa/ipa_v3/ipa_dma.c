@@ -105,6 +105,7 @@ static struct ipa3_dma_ctx *ipa3_dma_ctx;
  *
  * Return codes: 0: success
  *		-EFAULT: IPADMA is already initialized
+ *		-EINVAL: IPA driver is not initialized
  *		-ENOMEM: allocating memory error
  *		-EPERM: pipe connection failed
  */
@@ -120,6 +121,12 @@ int ipa3_dma_init(void)
 		IPADMA_ERR("Already initialized.\n");
 		return -EFAULT;
 	}
+
+	if (!ipa3_is_ready()) {
+		IPADMA_ERR("IPA is not ready yet\n");
+		return -EINVAL;
+	}
+
 	ipa_dma_ctx_t = kzalloc(sizeof(*(ipa3_dma_ctx)), GFP_KERNEL);
 
 	if (!ipa_dma_ctx_t) {
@@ -252,7 +259,7 @@ int ipa3_dma_enable(void)
 		mutex_unlock(&ipa3_dma_ctx->enable_lock);
 		return -EPERM;
 	}
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SPECIAL("DMA");
 	ipa3_dma_ctx->is_enabled = true;
 	mutex_unlock(&ipa3_dma_ctx->enable_lock);
 
@@ -315,7 +322,7 @@ int ipa3_dma_disable(void)
 	}
 	ipa3_dma_ctx->is_enabled = false;
 	spin_unlock_irqrestore(&ipa3_dma_ctx->pending_lock, flags);
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_SPECIAL("DMA");
 	mutex_unlock(&ipa3_dma_ctx->enable_lock);
 	IPADMA_FUNC_EXIT();
 	return 0;

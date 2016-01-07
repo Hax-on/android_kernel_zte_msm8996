@@ -400,9 +400,12 @@ static void msm_vfe40_init_hardware_reg(struct vfe_device *vfe_dev)
 		vbif_parms.regs = "vbif-v2-regs";
 		vbif_parms.settings = "vbif-v2-settings";
 		break;
+	case VFE40_8937_VERSION:
+	case VFE40_8953_VERSION:
+		vfe_dev->is_camif_raw_crop_supported = 1;
+		break;
 	default:
-		pr_err("%s: QOS and VBIF is NOT configured for HW Version %x\n",
-			__func__, vfe_dev->vfe_hw_version);
+		ISP_DBG("%s: No special QOS\n", __func__);
 	}
 
 	msm_vfe40_init_qos_parms(vfe_dev, &qos_parms, &ds_parms);
@@ -898,24 +901,6 @@ static void msm_vfe40_axi_cfg_comp_mask(struct vfe_device *vfe_dev,
 	irq_mask = msm_camera_io_r(vfe_dev->vfe_base + 0x28);
 	irq_mask |= 1 << (comp_mask_index + 25);
 
-	/*
-	 * For dual VFE, composite 2/3 interrupt is used to trigger
-	 * microcontroller to update certain VFE registers
-	 */
-	if (stream_info->plane_cfg[0].plane_addr_offset &&
-		stream_info->stream_src == PIX_VIEWFINDER) {
-		comp_mask |= (axi_data->composite_info[comp_mask_index].
-		stream_composite_mask << 16);
-		irq_mask |= BIT(27);
-	}
-
-	if (stream_info->plane_cfg[0].plane_addr_offset &&
-		stream_info->stream_src == PIX_ENCODER) {
-		comp_mask |= (axi_data->composite_info[comp_mask_index].
-		stream_composite_mask << 24);
-		irq_mask |= BIT(28);
-	}
-
 	msm_camera_io_w(comp_mask, vfe_dev->vfe_base + 0x40);
 	msm_camera_io_w(irq_mask, vfe_dev->vfe_base + 0x28);
 }
@@ -923,7 +908,6 @@ static void msm_vfe40_axi_cfg_comp_mask(struct vfe_device *vfe_dev,
 static void msm_vfe40_axi_clear_comp_mask(struct vfe_device *vfe_dev,
 	struct msm_vfe_axi_stream *stream_info)
 {
-	struct msm_vfe_axi_shared_data *axi_data = &vfe_dev->axi_data;
 	uint32_t comp_mask, comp_mask_index = stream_info->comp_mask_index;
 	uint32_t irq_mask;
 
@@ -932,20 +916,6 @@ static void msm_vfe40_axi_clear_comp_mask(struct vfe_device *vfe_dev,
 
 	irq_mask = msm_camera_io_r(vfe_dev->vfe_base + 0x28);
 	irq_mask &= ~(1 << (comp_mask_index + 25));
-
-	if (stream_info->plane_cfg[0].plane_addr_offset &&
-		stream_info->stream_src == PIX_VIEWFINDER) {
-		comp_mask &= ~(axi_data->composite_info[comp_mask_index].
-		stream_composite_mask << 16);
-		irq_mask &= ~BIT(27);
-	}
-
-	if (stream_info->plane_cfg[0].plane_addr_offset &&
-		stream_info->stream_src == PIX_ENCODER) {
-		comp_mask &= ~(axi_data->composite_info[comp_mask_index].
-		stream_composite_mask << 24);
-		irq_mask &= ~BIT(28);
-	}
 
 	msm_camera_io_w(comp_mask, vfe_dev->vfe_base + 0x40);
 	msm_camera_io_w(irq_mask, vfe_dev->vfe_base + 0x28);
@@ -1136,7 +1106,6 @@ static int msm_vfe40_start_fetch_engine(struct vfe_device *vfe_dev,
 		pr_err("%s: fetch engine busy\n", __func__);
 		return -EINVAL;
 	}
-
 	memset(&mapped_info, 0, sizeof(struct msm_isp_buffer_mapped_info));
 	/* There is other option of passing buffer address from user,
 		in such case, driver needs to map the buffer and use it*/
@@ -1172,6 +1141,7 @@ static int msm_vfe40_start_fetch_engine(struct vfe_device *vfe_dev,
 	vfe_dev->fetch_engine_info.is_busy = 1;
 
 	msm_camera_io_w(mapped_info.paddr, vfe_dev->vfe_base + 0x228);
+	msm_camera_io_w_mb(0x1, vfe_dev->vfe_base + 0x378);
 
 	msm_camera_io_w_mb(0x10000, vfe_dev->vfe_base + 0x4C);
 	msm_camera_io_w_mb(0x20000, vfe_dev->vfe_base + 0x4C);
@@ -1222,17 +1192,28 @@ static void msm_vfe40_cfg_fetch_engine(struct vfe_device *vfe_dev,
 	msm_camera_io_w((x_size_word - 1) << 16, vfe_dev->vfe_base + 0x23C);
 
 	temp = msm_camera_io_r(vfe_dev->vfe_base + 0x1C);
-	temp |= 2 << 16;
+	temp |= 2 << 16 | pix_cfg->pixel_pattern;
 	msm_camera_io_w(temp, vfe_dev->vfe_base + 0x1C);
 
-	msm_camera_io_w(x_size_word  << 16 |
-		(fe_cfg->buf_height-1) << 4 |
-		VFE40_FETCH_BURST_LEN, vfe_dev->vfe_base + 0x240);
-
-	msm_camera_io_w(0 << 28 | 2 << 25 |
-		(fe_cfg->buf_width - 1)  << 12 |
-		(fe_cfg->buf_height - 1)
-		, vfe_dev->vfe_base + 0x244);
+	if (vfe_dev->vfe_hw_version == VFE40_8953_VERSION) {
+		msm_camera_io_w(x_size_word  << 17 |
+			(fe_cfg->buf_height-1) << 4 |
+			VFE40_FETCH_BURST_LEN,
+			vfe_dev->vfe_base + 0x240);
+		msm_camera_io_w(0 << 29 | 2 << 26 |
+			(fe_cfg->buf_width - 1)  << 13 |
+			(fe_cfg->buf_height - 1),
+			vfe_dev->vfe_base + 0x244);
+	} else {
+		msm_camera_io_w(x_size_word  << 16 |
+			(fe_cfg->buf_height-1) << 4 |
+			VFE40_FETCH_BURST_LEN,
+			vfe_dev->vfe_base + 0x240);
+		msm_camera_io_w(0 << 28 | 2 << 25 |
+			(fe_cfg->buf_width - 1)  << 12 |
+			(fe_cfg->buf_height - 1),
+			vfe_dev->vfe_base + 0x244);
+	}
 
 	/* need to use formulae to calculate MAIN_UNPACK_PATTERN*/
 	msm_camera_io_w(0xF6543210, vfe_dev->vfe_base + 0x248);
@@ -1399,6 +1380,31 @@ static void msm_vfe40_cfg_camif(struct vfe_device *vfe_dev,
 		msm_camera_io_w((subsample_cfg->line_skip << 16) |
 			subsample_cfg->pixel_skip,
 			vfe_dev->vfe_base + 0x30C);
+			if (vfe_dev->is_camif_raw_crop_supported) {
+				/* Pdaf output will be sent in PLAIN16 format*/
+				val = msm_camera_io_r(vfe_dev->vfe_base + 0x54);
+				val |= 5 << 9;
+				msm_camera_io_w(val, vfe_dev->vfe_base + 0x54);
+				if (subsample_cfg->first_pixel ||
+					subsample_cfg->last_pixel ||
+					subsample_cfg->first_line ||
+					subsample_cfg->last_line) {
+					msm_camera_io_w(
+					subsample_cfg->first_pixel << 16 |
+						subsample_cfg->last_pixel,
+						vfe_dev->vfe_base + 0x8A4);
+					msm_camera_io_w(
+					subsample_cfg->first_line << 16 |
+						subsample_cfg->last_line,
+						vfe_dev->vfe_base + 0x8A8);
+					val = msm_camera_io_r(
+						vfe_dev->vfe_base + 0x2F8);
+					val |= 1 << 22;
+					msm_camera_io_w(val,
+						vfe_dev->vfe_base + 0x2F8);
+				}
+			}
+
 	}
 }
 
@@ -1526,7 +1532,9 @@ static void msm_vfe40_axi_cfg_wm_reg(
 	} else if (vfe_dev->vfe_hw_version == VFE40_8952_VERSION) {
 		burst_len = VFE40_BURST_LEN_8952_VERSION;
 		wm_bit_shift = VFE40_WM_BIT_SHIFT;
-	} else if (vfe_dev->vfe_hw_version == VFE40_8976_VERSION) {
+	} else if (vfe_dev->vfe_hw_version == VFE40_8976_VERSION ||
+		vfe_dev->vfe_hw_version == VFE40_8937_VERSION ||
+		vfe_dev->vfe_hw_version == VFE40_8953_VERSION) {
 		burst_len = VFE40_BURST_LEN_8952_VERSION;
 		wm_bit_shift = VFE40_WM_BIT_SHIFT_8976_VERSION;
 	} else {
@@ -2034,7 +2042,9 @@ static void msm_vfe40_stats_cfg_ub(struct vfe_device *vfe_dev)
 	};
 
 	if (vfe_dev->vfe_hw_version == VFE40_8916_VERSION ||
-	    vfe_dev->vfe_hw_version == VFE40_8939_VERSION) {
+		vfe_dev->vfe_hw_version == VFE40_8939_VERSION ||
+		vfe_dev->vfe_hw_version == VFE40_8937_VERSION ||
+		vfe_dev->vfe_hw_version == VFE40_8953_VERSION) {
 		stats_burst_len = VFE40_STATS_BURST_LEN_8916_VERSION;
 		ub_offset = VFE40_UB_SIZE_8916;
 	} else if (vfe_dev->vfe_hw_version == VFE40_8952_VERSION ||

@@ -1858,7 +1858,8 @@ static int pp_dspp_setup(u32 disp_num, struct mdss_mdp_mixer *mixer)
 	}
 
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
-	if (pp_driver_ops.gamut_clk_gate_en)
+	if ((mdata->pp_block_off.dspp_gamut_off != U32_MAX) &&
+			(pp_driver_ops.gamut_clk_gate_en))
 		pp_driver_ops.gamut_clk_gate_en(base +
 					mdata->pp_block_off.dspp_gamut_off);
 	ret = pp_hist_setup(&opmode, MDSS_PP_DSPP_CFG | dspp_num, mixer);
@@ -2361,9 +2362,9 @@ static int mdss_mdp_pp_dt_parse(struct device *dev)
 						   "qcom,mdss-dspp-gamut-off",
 						   &prop_val);
 			if (ret) {
-				pr_err("read property %s failed ret %d\n",
+				pr_debug("Could not read/find %s prop ret %d\n",
 				       "qcom,mdss-dspp-gamut-off", ret);
-				goto bail_out;
+				mdata->pp_block_off.dspp_gamut_off = U32_MAX;
 			} else {
 				mdata->pp_block_off.dspp_gamut_off = prop_val;
 			}
@@ -2568,6 +2569,26 @@ int mdss_mdp_pp_default_overlay_config(struct msm_fb_data_type *mfd,
 	return ret;
 }
 
+static bool pp_ad_bl_threshold_check(int al_thresh, int base, int prev_bl,
+					 int curr_bl)
+{
+	int bl_thresh = 0, diff = 0;
+	bool ret = false;
+
+	pr_debug("al_thresh = %d, base = %d\n", al_thresh, base);
+	if (base <= 0) {
+		pr_debug("Invalid base for threshold calculation %d\n", base);
+		return ret;
+	}
+	bl_thresh = (curr_bl * al_thresh) / (base * 4);
+	diff = (curr_bl > prev_bl) ? (curr_bl - prev_bl) : (prev_bl - curr_bl);
+	ret = (diff > bl_thresh) ? true : false;
+	pr_debug("prev_bl =%d, curr_bl = %d, bl_thresh = %d, diff = %d, ret = %d\n",
+		prev_bl, curr_bl, bl_thresh, diff, ret);
+
+	return ret;
+}
+
 static int pp_ad_calc_bl(struct msm_fb_data_type *mfd, int bl_in, int *bl_out,
 	bool *bl_out_notify)
 {
@@ -2628,15 +2649,16 @@ static int pp_ad_calc_bl(struct msm_fb_data_type *mfd, int bl_in, int *bl_out,
 		mutex_unlock(&ad->lock);
 		return ret;
 	}
-	*bl_out = temp;
 
-	if (ad_bl_out != mfd->ad_bl_level) {
+	*bl_out = temp;
+	if (pp_ad_bl_threshold_check(ad->init.al_thresh, ad->init.alpha_base,
+					mfd->ad_bl_level, ad_bl_out)) {
 		mfd->ad_bl_level = ad_bl_out;
+		pr_debug("backlight send to AD block: %d\n", mfd->ad_bl_level);
 		*bl_out_notify = true;
+		pp_ad_invalidate_input(mfd);
 	}
 
-	if (*bl_out_notify)
-		pp_ad_invalidate_input(mfd);
 	mutex_unlock(&ad->lock);
 	return 0;
 }
@@ -5528,13 +5550,24 @@ static int mdss_mdp_ad_setup(struct msm_fb_data_type *mfd)
 {
 	int ret = 0;
 	struct mdss_ad_info *ad;
-	struct mdss_mdp_ctl *ctl = mfd_to_ctl(mfd);
-	struct mdss_mdp_ctl *sctl = mdss_mdp_get_split_ctl(ctl);
+	struct mdss_mdp_ctl *ctl, *sctl;
 	struct msm_fb_data_type *bl_mfd;
 	struct mdss_data_type *mdata;
 	u32 bypass = MDSS_PP_AD_BYPASS_DEF, bl;
 	u32 width;
 	struct mdss_overlay_private *mdp5_data;
+
+	if (!mfd) {
+		pr_err("mfd = 0x%p\n", mfd);
+		return -EINVAL;
+	}
+
+	ctl = mfd_to_ctl(mfd);
+	if (!ctl) {
+		pr_err("ctl = 0x%p\n", ctl);
+		return -EINVAL;
+	}
+	sctl = mdss_mdp_get_split_ctl(ctl);
 
 	ret = mdss_mdp_get_ad(mfd, &ad);
 	if (ret == -ENODEV || ret == -EPERM) {
@@ -5558,7 +5591,7 @@ static int mdss_mdp_ad_setup(struct msm_fb_data_type *mfd)
 		bl_mfd = mfd;
 	}
 
-	mdata = mfd_to_mdata(mfd);
+	mdata = mdss_mdp_get_mdata();
 
 	mutex_lock(&ad->lock);
 	if (ad->sts != last_sts || ad->state != last_state) {
@@ -5703,27 +5736,33 @@ static void pp_ad_calc_worker(struct work_struct *work)
 {
 	struct mdss_ad_info *ad;
 	struct mdss_mdp_ctl *ctl;
-	struct msm_fb_data_type *mfd, *bl_mfd;
 	struct mdss_overlay_private *mdp5_data;
 	struct mdss_data_type *mdata;
 	char __iomem *base;
 	ad = container_of(work, struct mdss_ad_info, calc_work);
 
 	mutex_lock(&ad->lock);
-	if (!ad->mfd  || !ad->bl_mfd || !(ad->sts & PP_STS_ENABLE)) {
+	if (!ad->mfd || !(ad->sts & PP_STS_ENABLE)) {
 		mutex_unlock(&ad->lock);
 		return;
 	}
-	mfd = ad->mfd;
-	bl_mfd = ad->bl_mfd;
+	mdp5_data = mfd_to_mdp5_data(ad->mfd);
+	if (!mdp5_data) {
+		pr_err("mdp5_data = 0x%p\n", mdp5_data);
+		mutex_unlock(&ad->lock);
+		return;
+	}
+
 	ctl = mfd_to_ctl(ad->mfd);
 	mdata = mfd_to_mdata(ad->mfd);
-	mdp5_data = mfd_to_mdp5_data(mfd);
-
-	if (!mdata || ad->calc_hw_num >= mdata->nad_cfgs) {
+	if (!ctl || !mdata || ad->calc_hw_num >= mdata->nad_cfgs) {
+		pr_err("ctl = 0x%p, mdata = 0x%p, ad->calc_hw_num = %d, mdata->nad_cfg = %d\n",
+			ctl, mdata, ad->calc_hw_num,
+			(!mdata ? 0 : mdata->nad_cfgs));
 		mutex_unlock(&ad->lock);
 		return;
 	}
+
 	base = mdata->ad_off[ad->calc_hw_num].base;
 
 	if ((ad->cfg.mode == MDSS_AD_MODE_AUTO_STR) && (ad->last_bl == 0)) {
@@ -5739,10 +5778,8 @@ static void pp_ad_calc_worker(struct work_struct *work)
 			readl_relaxed(base + MDSS_MDP_REG_AD_STR_OUT));
 		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
 	}
-	if (mdp5_data) {
-		mdp5_data->ad_events++;
-		sysfs_notify_dirent(mdp5_data->ad_event_sd);
-	}
+	mdp5_data->ad_events++;
+	sysfs_notify_dirent(mdp5_data->ad_event_sd);
 	if (!ad->calc_itr) {
 		ad->state &= ~PP_AD_STATE_VSYNC;
 		ctl->ops.remove_vsync_handler(ctl, &ad->handle);
@@ -5793,10 +5830,11 @@ static int  pp_ad_attenuate_bl(struct mdss_ad_info *ad, u32 bl, u32 *bl_out)
 		return -EINVAL;
 	}
 	lut_interval = (MDSS_MDP_AD_BL_SCALE + 1) / (AD_BL_ATT_LUT_LEN - 1);
-	bl_att = ad->bl_att_lut[n] + (bl - lut_interval * n) *
-			(ad->bl_att_lut[n + 1] - ad->bl_att_lut[n]) /
-			lut_interval;
-	pr_debug("n = %d, bl_att = %d\n", n, bl_att);
+	bl_att = ((ad->bl_att_lut[n + 1] - ad->bl_att_lut[n]) *
+		(bl - lut_interval * n) + (ad->bl_att_lut[n] * lut_interval)) /
+		lut_interval;
+	pr_debug("n = %u, bl_att_lut[%u] = %u, bl_att_lut[%u] = %u, bl_att = %u\n",
+		n, n, ad->bl_att_lut[n], n + 1, ad->bl_att_lut[n + 1], bl_att);
 	if (ad->init.alpha_base)
 		*bl_out = (ad->init.alpha * bl_att +
 			(ad->init.alpha_base - ad->init.alpha) * bl) /
@@ -5819,6 +5857,7 @@ static int pp_ad_linearize_bl(struct mdss_ad_info *ad, u32 bl, u32 *bl_out,
 {
 
 	u32 n;
+	uint32_t *bl_lut = NULL;
 	int ret = -EINVAL;
 
 	if (bl < 0 || bl > ad->bl_mfd->panel_info->bl_max) {
@@ -5828,6 +5867,14 @@ static int pp_ad_linearize_bl(struct mdss_ad_info *ad, u32 bl, u32 *bl_out,
 	}
 
 	pr_debug("bl_in = %d, inv = %d\n", bl, inv);
+	if (inv == MDP_PP_AD_BL_LINEAR_INV) {
+		bl_lut = ad->bl_lin;
+	} else if (inv == MDP_PP_AD_BL_LINEAR) {
+		bl_lut = ad->bl_lin_inv;
+	} else {
+		pr_err("invalid inv param: inv = %d\n", inv);
+		return -EINVAL;
+	}
 
 	/* map panel backlight range to AD backlight range */
 	linear_map(bl, &bl, ad->bl_mfd->panel_info->bl_max,
@@ -5835,30 +5882,19 @@ static int pp_ad_linearize_bl(struct mdss_ad_info *ad, u32 bl, u32 *bl_out,
 
 	pr_debug("Before linearization = %d\n", bl);
 	n = bl * (AD_BL_LIN_LEN - 1) / MDSS_MDP_AD_BL_SCALE;
-	pr_debug("n = %d\n", n);
+	pr_debug("n = %u\n", n);
 	if (n > (AD_BL_LIN_LEN - 1)) {
 		pr_err("Invalid index for BL linearization: %d.\n", n);
 		return ret;
 	} else if (n == (AD_BL_LIN_LEN - 1)) {
-		if (inv == MDP_PP_AD_BL_LINEAR_INV)
-			*bl_out = ad->bl_lin_inv[n];
-		else if (inv == MDP_PP_AD_BL_LINEAR)
-			*bl_out = ad->bl_lin[n];
+		*bl_out = bl_lut[n];
 	} else {
 		/* linear piece-wise interpolation */
-		if (inv == MDP_PP_AD_BL_LINEAR_INV) {
-			*bl_out = bl * (AD_BL_LIN_LEN - 1) *
-				(ad->bl_lin_inv[n + 1] - ad->bl_lin_inv[n]) /
-				MDSS_MDP_AD_BL_SCALE - n *
-				(ad->bl_lin_inv[n + 1] - ad->bl_lin_inv[n]) +
-				ad->bl_lin_inv[n];
-		} else if (inv == MDP_PP_AD_BL_LINEAR) {
-			*bl_out = bl * (AD_BL_LIN_LEN - 1) *
-				(ad->bl_lin[n + 1] - ad->bl_lin[n]) /
-				MDSS_MDP_AD_BL_SCALE -
-				n * (ad->bl_lin[n + 1] - ad->bl_lin[n]) +
-				ad->bl_lin[n];
-		}
+		*bl_out = ((bl_lut[n + 1] - bl_lut[n]) *
+			(bl - n * MDSS_MDP_AD_BL_SCALE /
+			(AD_BL_LIN_LEN  - 1)) + bl_lut[n] *
+			MDSS_MDP_AD_BL_SCALE / (AD_BL_LIN_LEN  - 1)) *
+			(AD_BL_LIN_LEN  - 1) / MDSS_MDP_AD_BL_SCALE;
 	}
 	pr_debug("After linearization = %d\n", *bl_out);
 
@@ -6759,11 +6795,17 @@ static int pp_mfd_ad_release_all(struct msm_fb_data_type *mfd)
 	if (!ad->mfd)
 		return 0;
 
+	mutex_lock(&ad->lock);
+	ad->sts &= ~PP_STS_ENABLE;
+	ad->mfd = NULL;
+	ad->bl_mfd = NULL;
+	ad->state = 0;
+	cancel_work_sync(&ad->calc_work);
+	mutex_unlock(&ad->lock);
+
 	ctl = mfd_to_ctl(mfd);
 	if (ctl && ctl->ops.remove_vsync_handler)
 		ctl->ops.remove_vsync_handler(ctl, &ad->handle);
-	cancel_work_sync(&ad->calc_work);
-	ad->state = 0;
 
 	return ret;
 }

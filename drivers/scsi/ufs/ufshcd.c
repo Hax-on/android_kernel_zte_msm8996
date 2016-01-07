@@ -737,6 +737,9 @@ static inline u32 ufshcd_get_intr_mask(struct ufs_hba *hba)
 		intr_mask = INTERRUPT_MASK_ALL_VER_21;
 	}
 
+	if (!ufshcd_is_crypto_supported(hba))
+		intr_mask &= ~CRYPTO_ENGINE_FATAL_ERROR;
+
 	return intr_mask;
 }
 
@@ -1000,7 +1003,11 @@ static void ufshcd_enable_run_stop_reg(struct ufs_hba *hba)
  */
 static inline void ufshcd_hba_start(struct ufs_hba *hba)
 {
-	ufshcd_writel(hba, CONTROLLER_ENABLE, REG_CONTROLLER_ENABLE);
+	u32 val = CONTROLLER_ENABLE;
+
+	if (ufshcd_is_crypto_supported(hba))
+		val |= CRYPTO_GENERAL_ENABLE;
+	ufshcd_writel(hba, val, REG_CONTROLLER_ENABLE);
 }
 
 /**
@@ -2265,15 +2272,52 @@ static void ufshcd_disable_intr(struct ufs_hba *hba, u32 intrs)
 	ufshcd_writel(hba, set, REG_INTERRUPT_ENABLE);
 }
 
+static int ufshcd_prepare_crypto_utrd(struct ufs_hba *hba,
+		struct ufshcd_lrb *lrbp)
+{
+	struct utp_transfer_req_desc *req_desc = lrbp->utr_descriptor_ptr;
+	u8 cc_index = 0;
+	bool enable = false;
+	u64 dun = 0;
+	int ret;
+
+	/*
+	 * Call vendor specific code to get crypto info for this request:
+	 * enable, crypto config. index, DUN.
+	 * If bypass is set, don't bother setting the other fields.
+	 */
+	ret = ufshcd_vops_crypto_req_setup(hba, lrbp, &cc_index, &enable, &dun);
+	if (ret) {
+		dev_err(hba->dev,
+			"%s: failed to setup crypto request (%d)\n",
+			__func__, ret);
+		return ret;
+	}
+
+	if (!enable)
+		goto out;
+
+	req_desc->header.dword_0 |= cc_index | UTRD_CRYPTO_ENABLE;
+	if (lrbp->cmd->request && lrbp->cmd->request->bio)
+		dun = lrbp->cmd->request->bio->bi_iter.bi_sector;
+
+	req_desc->header.dword_1 = (u32)(dun & 0xFFFFFFFF);
+	req_desc->header.dword_3 = (u32)((dun >> 32) & 0xFFFFFFFF);
+out:
+	return 0;
+}
+
 /**
  * ufshcd_prepare_req_desc_hdr() - Fills the requests header
  * descriptor according to request
+ * @hba: per adapter instance
  * @lrbp: pointer to local reference block
  * @upiu_flags: flags required in the header
  * @cmd_dir: requests data direction
  */
-static void ufshcd_prepare_req_desc_hdr(struct ufshcd_lrb *lrbp,
-		u32 *upiu_flags, enum dma_data_direction cmd_dir)
+static void ufshcd_prepare_req_desc_hdr(struct ufs_hba *hba,
+	struct ufshcd_lrb *lrbp, u32 *upiu_flags,
+	enum dma_data_direction cmd_dir)
 {
 	struct utp_transfer_req_desc *req_desc = lrbp->utr_descriptor_ptr;
 	u32 data_direction;
@@ -2310,6 +2354,9 @@ static void ufshcd_prepare_req_desc_hdr(struct ufshcd_lrb *lrbp,
 	req_desc->header.dword_3 = 0;
 
 	req_desc->prd_table_length = 0;
+
+	if (ufshcd_is_crypto_supported(hba))
+		ufshcd_prepare_crypto_utrd(hba, lrbp);
 }
 
 /**
@@ -2412,7 +2459,7 @@ static int ufshcd_compose_upiu(struct ufs_hba *hba, struct ufshcd_lrb *lrbp)
 	switch (lrbp->command_type) {
 	case UTP_CMD_TYPE_SCSI:
 		if (likely(lrbp->cmd)) {
-			ufshcd_prepare_req_desc_hdr(lrbp, &upiu_flags,
+			ufshcd_prepare_req_desc_hdr(hba, lrbp, &upiu_flags,
 					lrbp->cmd->sc_data_direction);
 			ufshcd_prepare_utp_scsi_cmd_upiu(lrbp, upiu_flags);
 		} else {
@@ -2420,7 +2467,7 @@ static int ufshcd_compose_upiu(struct ufs_hba *hba, struct ufshcd_lrb *lrbp)
 		}
 		break;
 	case UTP_CMD_TYPE_DEV_MANAGE:
-		ufshcd_prepare_req_desc_hdr(lrbp, &upiu_flags, DMA_NONE);
+		ufshcd_prepare_req_desc_hdr(hba, lrbp, &upiu_flags, DMA_NONE);
 		if (hba->dev_cmd.type == DEV_CMD_TYPE_QUERY)
 			ufshcd_prepare_utp_query_req_upiu(
 					hba, lrbp, upiu_flags);
@@ -4836,6 +4883,9 @@ ufshcd_transfer_rsp_status(struct ufs_hba *hba, struct ufshcd_lrb *lrbp)
 	case OCS_MISMATCH_RESP_UPIU_SIZE:
 	case OCS_PEER_COMM_FAILURE:
 	case OCS_FATAL_ERROR:
+	case OCS_DEVICE_FATAL_ERROR:
+	case OCS_INVALID_CRYPTO_CONFIG:
+	case OCS_GENERAL_CRYPTO_ERROR:
 	default:
 		result |= DID_ERROR << 16;
 		dev_err(hba->dev,
@@ -6511,6 +6561,76 @@ out:
 	return ret;
 }
 
+/**
+ * ufshcd_quirk_tune_host_pa_tactivate - Ensures that host PA_TACTIVATE is
+ * more than device PA_TACTIVATE time.
+ * @hba: per-adapter instance
+ *
+ * Some UFS devices require host PA_TACTIVATE to be lower than device
+ * PA_TACTIVATE, we need to enable UFS_DEVICE_QUIRK_HOST_PA_TACTIVATE quirk
+ * for such devices.
+ *
+ * Returns zero on success, non-zero error value on failure.
+ */
+static int ufshcd_quirk_tune_host_pa_tactivate(struct ufs_hba *hba)
+{
+	int ret = 0;
+	u32 granularity, peer_granularity;
+	u32 pa_tactivate, peer_pa_tactivate;
+	u32 pa_tactivate_us, peer_pa_tactivate_us;
+	u8 gran_to_us_table[] = {1, 4, 8, 16, 32, 100};
+
+	ret = ufshcd_dme_get(hba, UIC_ARG_MIB(PA_GRANULARITY),
+				  &granularity);
+	if (ret)
+		goto out;
+
+	ret = ufshcd_dme_peer_get(hba, UIC_ARG_MIB(PA_GRANULARITY),
+				  &peer_granularity);
+	if (ret)
+		goto out;
+
+	if ((granularity < PA_GRANULARITY_MIN_VAL) ||
+	    (granularity > PA_GRANULARITY_MAX_VAL)) {
+		dev_err(hba->dev, "%s: invalid host PA_GRANULARITY %d",
+			__func__, granularity);
+		return -EINVAL;
+	}
+
+	if ((peer_granularity < PA_GRANULARITY_MIN_VAL) ||
+	    (peer_granularity > PA_GRANULARITY_MAX_VAL)) {
+		dev_err(hba->dev, "%s: invalid device PA_GRANULARITY %d",
+			__func__, peer_granularity);
+		return -EINVAL;
+	}
+
+	ret = ufshcd_dme_get(hba, UIC_ARG_MIB(PA_TACTIVATE), &pa_tactivate);
+	if (ret)
+		goto out;
+
+	ret = ufshcd_dme_peer_get(hba, UIC_ARG_MIB(PA_TACTIVATE),
+				  &peer_pa_tactivate);
+	if (ret)
+		goto out;
+
+	pa_tactivate_us = pa_tactivate * gran_to_us_table[granularity - 1];
+	peer_pa_tactivate_us = peer_pa_tactivate *
+			     gran_to_us_table[peer_granularity - 1];
+
+	if (pa_tactivate_us > peer_pa_tactivate_us) {
+		u32 new_peer_pa_tactivate;
+
+		new_peer_pa_tactivate = pa_tactivate_us /
+				      gran_to_us_table[peer_granularity - 1];
+		new_peer_pa_tactivate++;
+		ret = ufshcd_dme_peer_set(hba, UIC_ARG_MIB(PA_TACTIVATE),
+					  new_peer_pa_tactivate);
+	}
+
+out:
+	return ret;
+}
+
 static void ufshcd_tune_unipro_params(struct ufs_hba *hba)
 {
 	if (ufshcd_is_unipro_pa_params_tuning_req(hba)) {
@@ -6521,6 +6641,9 @@ static void ufshcd_tune_unipro_params(struct ufs_hba *hba)
 	if (hba->dev_quirks & UFS_DEVICE_QUIRK_PA_TACTIVATE)
 		/* set 1ms timeout for PA_TACTIVATE */
 		ufshcd_dme_set(hba, UIC_ARG_MIB(PA_TACTIVATE), 10);
+
+	if (hba->dev_quirks & UFS_DEVICE_QUIRK_HOST_PA_TACTIVATE)
+		ufshcd_quirk_tune_host_pa_tactivate(hba);
 }
 
 static void ufshcd_clear_dbg_ufs_stats(struct ufs_hba *hba)

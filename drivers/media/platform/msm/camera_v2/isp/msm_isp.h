@@ -36,6 +36,8 @@
 #define VFE40_8939_VERSION 0x10040000
 #define VFE40_8952_VERSION 0x10060000
 #define VFE40_8976_VERSION 0x10050000
+#define VFE40_8937_VERSION 0x10080000
+#define VFE40_8953_VERSION 0x10090000
 #define VFE32_8909_VERSION 0x30600
 
 #define MAX_IOMMU_CTX 2
@@ -360,7 +362,7 @@ struct msm_vfe_axi_stream {
 	enum msm_vfe_axi_stream_type stream_type;
 	uint32_t frame_based;
 	enum msm_vfe_frame_skip_pattern frame_skip_pattern;
-	uint32_t framedrop_period;
+	uint32_t current_framedrop_period;
 	uint32_t prev_framedrop_period;
 	uint32_t num_burst_capture;/*number of frame to capture*/
 	uint32_t init_frame_drop;
@@ -497,7 +499,6 @@ struct msm_vfe_tasklet_queue_cmd {
 	uint32_t vfeInterruptStatus1;
 	struct msm_isp_timestamp ts;
 	uint8_t cmd_used;
-	uint8_t iommu_page_fault;
 };
 
 #define MSM_VFE_TASKLETQ_SIZE 200
@@ -710,6 +711,7 @@ struct vfe_device {
 	uint32_t isp_raw0_debug;
 	uint32_t isp_raw1_debug;
 	uint32_t isp_raw2_debug;
+	uint8_t is_camif_raw_crop_supported;
 };
 
 struct vfe_parent_device {

@@ -1292,7 +1292,7 @@ static void armv8pmu_reset(void *info)
 		armv8pmu_disable_event(NULL, idx);
 
 	/* Initialize & Reset PMNC: C and P bits. */
-	armv8pmu_pmcr_write(ARMV8_PMCR_P | ARMV8_PMCR_C);
+	armv8pmu_pmcr_write(armv8pmu_pmcr_read() | ARMV8_PMCR_P | ARMV8_PMCR_C);
 
 	armv8pmu_init_usermode();
 }
@@ -1915,7 +1915,9 @@ static __ref void reset_pmu_force(void)
 	for_each_possible_cpu(cpu) {
 		if (!cpu_online(cpu)) {
 			save_online_mask |= BIT(cpu);
-			ret = cpu_up(cpu);
+			lock_device_hotplug();
+			ret = device_online(get_cpu_device(cpu));
+			unlock_device_hotplug();
 			if (ret)
 				pr_err("Failed to bring up CPU: %d, ret: %d\n",
 				       cpu, ret);
@@ -1927,7 +1929,9 @@ static __ref void reset_pmu_force(void)
 		armpmu_release_hardware(cpu_pmu);
 	for_each_possible_cpu(cpu) {
 		if ((save_online_mask & BIT(cpu)) && cpu_online(cpu)) {
-			ret = cpu_down(cpu);
+			lock_device_hotplug();
+			ret = device_offline(get_cpu_device(cpu));
+			unlock_device_hotplug();
 			if (ret)
 				pr_err("Failed to bring down CPU: %d, ret: %d\n",
 						cpu, ret);

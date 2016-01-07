@@ -13,13 +13,25 @@
 #ifndef __IPA_REG_H__
 #define __IPA_REG_H__
 
+/*
+ * IPA HW 3.1 Registers
+ */
+#define IPA_SUSPEND_IRQ_EN_EE_n_ADDR(n) (0x00003034 + 0x1000 * (n))
+#define IPA_SUSPEND_IRQ_CLR_EE_n_ADDR(n) (0x00003038 + 0x1000 * (n))
+/*
+ * End of IPA 3.1 Registers
+ */
+
+/*
+Common Registers
+*/
+
 #define IPA_IRQ_STTS_EE_n_ADDR(n) (0x00003008 + 0x1000 * (n))
-
 #define IPA_IRQ_EN_EE_n_ADDR(n) (0x0000300c + 0x1000 * (n))
-
 #define IPA_IRQ_CLR_EE_n_ADDR(n) (0x00003010 + 0x1000 * (n))
 
-#define IPA_IRQ_SUSPEND_INFO_EE_n_ADDR(n) (0x00003098 + 0x1000 * (n))
+#define IPA_IRQ_SUSPEND_INFO_EE_n_ADDR_v3_0(n) (0x00003098 + 0x1000 * (n))
+#define IPA_IRQ_SUSPEND_INFO_EE_n_ADDR_v3_1(n) (0x00003030 + 0x1000 * (n))
 
 #define IPA_BCR_OFST 0x000001D0
 #define IPA_COUNTER_CFG_OFST 0x000001f0
@@ -289,5 +301,11 @@
 #define IPA_ENDP_INIT_SEQ_n_DPS_SEQ_TYPE_SHFT 0x4
 #define IPA_ENDP_INIT_SEQ_n_HPS_SEQ_TYPE_BMSK 0xf
 #define IPA_ENDP_INIT_SEQ_n_HPS_SEQ_TYPE_SHFT 0x0
+
+#define IPA_ENDP_GSI_CFG_TLV_n_OFST(n) (0x850 + 0x70 * (n))
+#define IPA_ENDP_GSI_CFG_AOS_n_OFST(n) (0x854 + 0x70 * (n))
+#define IPA_ENDP_GSI_CFG2_n_OFST(n) (0x858 + 0x70 * (n))
+#define IPA_ENDP_GSI_CFG1_n_OFST(n) (0x5504 + 0x4 * (n))
+#define IPA_ENABLE_GSI_OFST 0x5500
 
 #endif

@@ -320,54 +320,45 @@ int msm895x_wsa881x_init(struct snd_soc_component *component)
 	unsigned int ch_rate[WSA881X_MAX_SWR_PORTS] = {2400, 600, 300, 1200};
 	unsigned int ch_mask[WSA881X_MAX_SWR_PORTS] = {0x1, 0xF, 0x3, 0x3};
 	struct snd_soc_codec *codec = snd_soc_component_to_codec(component);
-	struct snd_soc_card *card = codec->component.card;
-	struct msm8952_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
+	struct msm8952_asoc_mach_data *pdata;
 	struct snd_soc_dapm_context *dapm = &codec->dapm;
-	struct msm895x_auxcodec_prefix_map codec_prefix_map[MAX_AUX_CODECS] = {
-	{ "wsa881x.20170211", "SpkrRight" },
-	{ "wsa881x.20170212", "SpkrLeft" },
-	{ "wsa881x.21170213", "SpkrRight" },
-	{ "wsa881x.21170214", "SpkrLeft" } };
-	u8 i;
 
 	if (!codec) {
 		pr_err("%s codec is NULL\n", __func__);
 		return -EINVAL;
 	}
 
-	for (i = 0; i < MAX_AUX_CODECS; i++) {
-		if (!strcmp(component->name, codec_prefix_map[i].codec_name))
-			break;
-	}
-	if (i >= MAX_AUX_CODECS) {
-		pr_err("%s: could not find prefix map\n" , __func__);
-		return -EINVAL;
-	}
-	if (!strcmp(codec_prefix_map[i].codec_prefix, "SpkrLeft")) {
+	if (!strcmp(component->name_prefix, "SpkrLeft")) {
+		dev_dbg(codec->dev, "%s: setting left ch map to codec %s\n",
+				__func__, codec->component.name);
 		wsa881x_set_channel_map(codec, &spkleft_ports[0],
 				WSA881X_MAX_SWR_PORTS, &ch_mask[0],
 				&ch_rate[0]);
-	} else if (!strcmp(codec_prefix_map[i].codec_prefix, "SpkrRight")) {
+		if (dapm->component) {
+			snd_soc_dapm_ignore_suspend(dapm, "SpkrLeft IN");
+			snd_soc_dapm_ignore_suspend(dapm, "SpkrLeft SPKR");
+		}
+	} else if (!strcmp(component->name_prefix, "SpkrRight")) {
+		dev_dbg(codec->dev, "%s: setting right ch map to codec %s\n",
+				__func__, codec->component.name);
 		wsa881x_set_channel_map(codec, &spkright_ports[0],
 				WSA881X_MAX_SWR_PORTS, &ch_mask[0],
 				&ch_rate[0]);
+		if (dapm->component) {
+			snd_soc_dapm_ignore_suspend(dapm, "SpkrRight IN");
+			snd_soc_dapm_ignore_suspend(dapm, "SpkrRight SPKR");
+		}
 	} else {
 		dev_err(codec->dev, "%s: wrong codec name %s\n", __func__,
-			codec->component.name);
+				codec->component.name);
 		return -EINVAL;
 	}
-	pdata = snd_soc_card_get_drvdata(card);
+
+
+	pdata = snd_soc_card_get_drvdata(component->card);
 	if (pdata && pdata->codec_root)
 		wsa881x_codec_info_create_codec_entry(pdata->codec_root,
 						      codec);
-	if (!strcmp(codec_prefix_map[i].codec_prefix, "SpkrLeft")) {
-		snd_soc_dapm_ignore_suspend(dapm, "SpkrLeft IN");
-		snd_soc_dapm_ignore_suspend(dapm, "SpkrLeft SPKR");
-	} else if (!strcmp(codec_prefix_map[i].codec_prefix, "SpkrRight")) {
-		snd_soc_dapm_ignore_suspend(dapm, "SpkrRight IN");
-		snd_soc_dapm_ignore_suspend(dapm, "SpkrRight SPKR");
-	}
-
 	return 0;
 }
 
@@ -1095,6 +1086,8 @@ int msm_snd_hw_params(struct snd_pcm_substream *substream,
 			 * this DAI is based on that of the Rx path.
 			 */
 			user_set_tx_ch = msm_slim_0_rx_ch;
+		else if (dai_link->be_id == MSM_BACKEND_DAI_SLIMBUS_4_TX)
+			user_set_tx_ch = msm_vi_feed_tx_ch;
 		else
 			user_set_tx_ch = tx_ch_cnt;
 
@@ -1234,8 +1227,28 @@ int msm_slim_4_tx_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 	struct snd_interval *channels = hw_param_interval(params,
 			SNDRV_PCM_HW_PARAM_CHANNELS);
 
-	rate->min = rate->max = SAMPLING_RATE_48KHZ;
-	channels->min = channels->max = msm_vi_feed_tx_ch;
+	struct snd_soc_dai *codec_dai = rtd->codec_dai;
+
+	pr_debug("%s: codec name: %s", __func__, codec_dai->name);
+	if (!strcmp(dev_name(codec_dai->dev), "tomtom_codec")) {
+		rate->min = rate->max = SAMPLING_RATE_48KHZ;
+		channels->min = channels->max = msm_vi_feed_tx_ch;
+		pr_debug("%s: tomtom vi sample rate = %d\n",
+				__func__, rate->min);
+	} else if (!strcmp(dev_name(codec_dai->dev), "tasha_codec")) {
+		param_set_mask(params, SNDRV_PCM_HW_PARAM_FORMAT,
+			SNDRV_PCM_FORMAT_S32_LE);
+		rate->min = rate->max = SAMPLING_RATE_8KHZ;
+		channels->min = channels->max = msm_vi_feed_tx_ch/2;
+		pr_debug("%s: tasha vi sample rate = %d\n",
+				__func__, rate->min);
+	} else {
+		rate->min = rate->max = SAMPLING_RATE_48KHZ;
+		channels->min = channels->max = msm_vi_feed_tx_ch;
+		pr_debug("%s: default sample rate = %d\n",
+				__func__, rate->min);
+	}
+
 	pr_debug("%s: %d\n", __func__, msm_vi_feed_tx_ch);
 	return 0;
 }
@@ -1978,6 +1991,9 @@ int msm_audrx_init(struct snd_soc_pcm_runtime *rtd)
 		snd_soc_dapm_ignore_suspend(dapm, "ANC HPHR");
 		snd_soc_dapm_ignore_suspend(dapm, "ANC LINEOUT1");
 		snd_soc_dapm_ignore_suspend(dapm, "ANC LINEOUT2");
+		snd_soc_dapm_ignore_suspend(dapm, "AIF4 VI");
+		snd_soc_dapm_ignore_suspend(dapm, "VIINPUT");
+
 	}
 
 	snd_soc_dapm_sync(dapm);
@@ -2344,6 +2360,10 @@ static int msm8952_asoc_machine_probe(struct platform_device *pdev)
 		ret = -EPROBE_DEFER;
 		goto err;
 	}
+
+	ret = msm8952_init_wsa_dev(pdev, card);
+	if (ret)
+		goto err;
 
 	ret = snd_soc_register_card(card);
 	if (ret) {

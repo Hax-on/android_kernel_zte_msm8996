@@ -142,7 +142,7 @@
 #define ARM_SMMU_GR0_sTLBGSYNC		0x70
 #define ARM_SMMU_GR0_sTLBGSTATUS	0x74
 #define sTLBGSTATUS_GSACTIVE		(1 << 0)
-#define TLB_LOOP_TIMEOUT		1000000	/* 1s! */
+#define TLB_LOOP_TIMEOUT		500000	/* 500ms */
 
 /* Stream mapping registers */
 #define ARM_SMMU_GR0_SMR(n)		(0x800 + ((n) << 2))
@@ -1256,6 +1256,10 @@ static irqreturn_t arm_smmu_context_fault(int irq, void *dev)
 				(fsr & 0x80000000) ? "MULTI " : "");
 			dev_err(smmu->dev,
 				"soft iova-to-phys=%pa\n", &phys_soft);
+			if (!phys_soft)
+				dev_err(smmu->dev,
+					"SOFTWARE TABLE WALK FAILED! Looks like %s accessed an unmapped address!\n",
+					dev_name(smmu->dev));
 			dev_err(smmu->dev,
 				"hard iova-to-phys (ATOS)=%pa\n", &phys_atos);
 			dev_err(smmu->dev, "SID=0x%x\n", frsynra & 0xffff);
@@ -2932,6 +2936,13 @@ static int regulator_notifier(struct notifier_block *nb,
 	struct arm_smmu_device *smmu = container_of(nb,
 					struct arm_smmu_device, regulator_nb);
 
+	/* Ignore EVENT DISABLE as no clocks could be turned on
+	 * at this notification.
+	*/
+	if (event != REGULATOR_EVENT_PRE_DISABLE &&
+				event != REGULATOR_EVENT_ENABLE)
+		return NOTIFY_OK;
+
 	ret = arm_smmu_prepare_clocks(smmu);
 	if (ret)
 		goto out;
@@ -2940,7 +2951,7 @@ static int regulator_notifier(struct notifier_block *nb,
 	if (ret)
 		goto unprepare_clock;
 
-	if (event == REGULATOR_EVENT_DISABLE)
+	if (event == REGULATOR_EVENT_PRE_DISABLE)
 		arm_smmu_halt(smmu);
 	else if (event == REGULATOR_EVENT_ENABLE)
 		arm_smmu_resume(smmu);
@@ -2949,7 +2960,7 @@ static int regulator_notifier(struct notifier_block *nb,
 unprepare_clock:
 	arm_smmu_unprepare_clocks(smmu);
 out:
-	return ret;
+	return NOTIFY_OK;
 }
 
 static int register_regulator_notifier(struct arm_smmu_device *smmu)

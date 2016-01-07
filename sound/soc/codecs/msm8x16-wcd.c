@@ -256,6 +256,12 @@ static struct wcd_mbhc_register
 			  0, 0, 0, 0),
 	WCD_MBHC_REGISTER("WCD_MBHC_PULLDOWN_CTRL",
 			  MSM8X16_WCD_A_ANALOG_MICB_2_EN, 0x20, 5, 0),
+	WCD_MBHC_REGISTER("WCD_MBHC_ANC_DET_EN",
+			  0, 0, 0, 0),
+	WCD_MBHC_REGISTER("WCD_MBHC_FSM_STATUS",
+			  0, 0, 0, 0),
+	WCD_MBHC_REGISTER("WCD_MBHC_MUX_CTL",
+			  0, 0, 0, 0),
 };
 
 struct msm8x16_wcd_spmi {
@@ -2935,6 +2941,17 @@ static const struct snd_kcontrol_new spkr_switch[] = {
 		MSM8X16_WCD_A_ANALOG_SPKR_DAC_CTL, 7, 1, 0)
 };
 
+static const char * const lo_text[] = {
+	"ZERO", "Switch",
+};
+
+static const struct soc_enum lo_enum =
+	SOC_ENUM_SINGLE(SND_SOC_NOPM, 0, ARRAY_SIZE(hph_text), hph_text);
+
+static const struct snd_kcontrol_new lo_mux[] = {
+	SOC_DAPM_ENUM("LINE_OUT", lo_enum)
+};
+
 static void msm8x16_wcd_codec_enable_adc_block(struct snd_soc_codec *codec,
 					 int enable)
 {
@@ -3939,6 +3956,41 @@ static int msm8x16_wcd_hphl_dac_event(struct snd_soc_dapm_widget *w,
 	return 0;
 }
 
+static int msm8x16_wcd_lo_dac_event(struct snd_soc_dapm_widget *w,
+	struct snd_kcontrol *kcontrol, int event)
+{
+	struct snd_soc_codec *codec = w->codec;
+
+	dev_dbg(codec->dev, "%s %s %d\n", __func__, w->name, event);
+
+	switch (event) {
+	case SND_SOC_DAPM_PRE_PMU:
+		snd_soc_update_bits(codec,
+			MSM8X16_WCD_A_ANALOG_RX_LO_EN_CTL, 0x80, 0x80);
+		snd_soc_update_bits(codec,
+			MSM8X16_WCD_A_ANALOG_RX_LO_DAC_CTL, 0x08, 0x08);
+		snd_soc_update_bits(codec,
+			MSM8X16_WCD_A_ANALOG_RX_LO_DAC_CTL, 0x40, 0x40);
+		break;
+	case SND_SOC_DAPM_POST_PMU:
+		snd_soc_update_bits(codec,
+			MSM8X16_WCD_A_ANALOG_RX_LO_DAC_CTL, 0x80, 0x80);
+		snd_soc_update_bits(codec,
+			MSM8X16_WCD_A_ANALOG_RX_LO_DAC_CTL, 0x08, 0x08);
+		break;
+	case SND_SOC_DAPM_POST_PMD:
+		usleep_range(20000, 20100);
+		snd_soc_update_bits(codec,
+			MSM8X16_WCD_A_ANALOG_RX_LO_DAC_CTL, 0x80, 0x00);
+		snd_soc_update_bits(codec,
+			MSM8X16_WCD_A_ANALOG_RX_LO_DAC_CTL, 0x40, 0x00);
+		snd_soc_update_bits(codec,
+			MSM8X16_WCD_A_ANALOG_RX_LO_EN_CTL, 0x80, 0x00);
+		break;
+	}
+	return 0;
+}
+
 static int msm8x16_wcd_hphr_dac_event(struct snd_soc_dapm_widget *w,
 	struct snd_kcontrol *kcontrol, int event)
 {
@@ -4110,6 +4162,10 @@ static const struct snd_soc_dapm_route audio_map[] = {
 	{"SPK PA", NULL, "SPK_RX_BIAS"},
 	{"SPK PA", NULL, "SPK DAC"},
 	{"SPK DAC", "Switch", "RX3 CHAIN"},
+	{"LINE_OUT", "Switch", "LINEOUT DAC"},
+	{"LINEOUT DAC", NULL, "RX3 CHAIN"},
+	{"LINEOUT PA", NULL, "LINEOUT DAC"},
+	{"LINEOUT", NULL, "LINEOUT PA"},
 	{"SPK DAC", NULL, "VDD_SPKDRV"},
 
 	{"RX1 CHAIN", NULL, "RX1 CLK"},
@@ -4668,13 +4724,27 @@ static const struct snd_soc_dapm_widget msm8x16_wcd_dapm_widgets[] = {
 	SND_SOC_DAPM_MIXER("SPK DAC", SND_SOC_NOPM, 0, 0,
 		spkr_switch, ARRAY_SIZE(spkr_switch)),
 
+	SND_SOC_DAPM_MUX("LINE_OUT",
+		SND_SOC_NOPM, 0, 0, lo_mux),
+
+	SND_SOC_DAPM_DAC_E("LINEOUT DAC", NULL,
+		SND_SOC_NOPM, 0, 0, msm8x16_wcd_lo_dac_event,
+		SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU |
+		SND_SOC_DAPM_POST_PMD),
+
 	/* Speaker */
 	SND_SOC_DAPM_OUTPUT("SPK_OUT"),
+
+	/* Lineout */
+	SND_SOC_DAPM_OUTPUT("LINEOUT"),
 
 	SND_SOC_DAPM_PGA_E("SPK PA", MSM8X16_WCD_A_ANALOG_SPKR_DRV_CTL,
 			6, 0 , NULL, 0, msm8x16_wcd_codec_enable_spk_pa,
 			SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU |
 			SND_SOC_DAPM_PRE_PMD | SND_SOC_DAPM_POST_PMD),
+
+	SND_SOC_DAPM_PGA_E("LINEOUT PA", MSM8X16_WCD_A_ANALOG_RX_LO_EN_CTL,
+			4, 0 , NULL, 0, NULL, 0),
 
 	SND_SOC_DAPM_SUPPLY("VDD_SPKDRV", SND_SOC_NOPM, 0, 0,
 			    msm89xx_wcd_codec_enable_vdd_spkr,
@@ -4935,8 +5005,8 @@ static const struct msm8x16_wcd_reg_mask_val cajon_wcd_reg_defaults[] = {
 	MSM8X16_WCD_REG_VAL(MSM8X16_WCD_A_ANALOG_SPKR_DRV_DBG, 0x01),
 	MSM8X16_WCD_REG_VAL(MSM8X16_WCD_A_ANALOG_SPKR_OCP_CTL, 0xE1),
 	MSM8X16_WCD_REG_VAL(MSM8X16_WCD_A_ANALOG_SPKR_DAC_CTL, 0x03),
-	MSM8X16_WCD_REG_VAL(MSM8X16_WCD_A_DIGITAL_CDC_RST_CTL, 0x80),
 	MSM8X16_WCD_REG_VAL(MSM8X16_WCD_A_ANALOG_RX_HPH_BIAS_PA, 0xFA),
+	MSM8X16_WCD_REG_VAL(MSM8X16_WCD_A_DIGITAL_CDC_RST_CTL, 0x80),
 };
 
 static const struct msm8x16_wcd_reg_mask_val cajon2p0_wcd_reg_defaults[] = {
@@ -4955,8 +5025,8 @@ static const struct msm8x16_wcd_reg_mask_val cajon2p0_wcd_reg_defaults[] = {
 	MSM8X16_WCD_REG_VAL(MSM8X16_WCD_A_ANALOG_SPKR_DAC_CTL, 0x03),
 	MSM8X16_WCD_REG_VAL(MSM8X16_WCD_A_ANALOG_RX_EAR_STATUS, 0x10),
 	MSM8X16_WCD_REG_VAL(MSM8X16_WCD_A_ANALOG_BYPASS_MODE, 0x18),
-	MSM8X16_WCD_REG_VAL(MSM8X16_WCD_A_DIGITAL_CDC_RST_CTL, 0x80),
 	MSM8X16_WCD_REG_VAL(MSM8X16_WCD_A_ANALOG_RX_HPH_BIAS_PA, 0xFA),
+	MSM8X16_WCD_REG_VAL(MSM8X16_WCD_A_DIGITAL_CDC_RST_CTL, 0x80),
 };
 
 static void msm8x16_wcd_update_reg_defaults(struct snd_soc_codec *codec)
@@ -5154,7 +5224,9 @@ static int msm8x16_wcd_device_up(struct snd_soc_codec *codec)
 		pr_debug("%s: Update ASOC cache", __func__);
 		kfree(codec->reg_cache);
 		codec->reg_cache = kmemdup(codec_drv->reg_cache_default,
-					codec_drv->reg_word_size, GFP_KERNEL);
+					   (codec_drv->reg_cache_size
+					    * codec_drv->reg_word_size),
+					   GFP_KERNEL);
 		if (!codec->reg_cache) {
 			pr_err("%s: Cache update failed!\n", __func__);
 			mutex_unlock(&codec->mutex);

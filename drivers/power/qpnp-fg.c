@@ -105,6 +105,7 @@ enum pmic_subtype {
 	PMI8994		= 10,
 	PMI8950		= 17,
 	PMI8996		= 19,
+	PMI8937		= 55,
 };
 
 enum wa_flags {
@@ -198,8 +199,6 @@ enum fg_mem_setting_index {
 	FG_MEM_CUTOFF_VOLTAGE,
 	FG_MEM_VBAT_EST_DIFF,
 	FG_MEM_DELTA_SOC,
-	FG_MEM_SOC_MAX,
-	FG_MEM_SOC_MIN,
 	FG_MEM_BATT_LOW,
 	FG_MEM_THERM_DELAY,
 	FG_MEM_SETTING_MAX,
@@ -245,8 +244,6 @@ static struct fg_mem_setting settings[FG_MEM_SETTING_MAX] = {
 	SETTING(CUTOFF_VOLTAGE,	 0x40C,   0,      3200),
 	SETTING(VBAT_EST_DIFF,	 0x000,   0,      30),
 	SETTING(DELTA_SOC,	 0x450,   3,      1),
-	SETTING(SOC_MAX,	 0x458,   1,      85),
-	SETTING(SOC_MIN,	 0x458,   2,      15),
 	SETTING(BATT_LOW,	 0x458,   0,      4200),
 	SETTING(THERM_DELAY,	 0x4AC,   3,      0),
 };
@@ -314,7 +311,7 @@ enum fg_soc_irq {
 	DELTA_SOC,
 	FIRST_EST_DONE,
 	SW_FALLBK_OCV,
-	SW_FALLBK_NEW_BATTRT_STS,
+	SW_FALLBK_NEW_BATT,
 	FG_SOC_IRQ_COUNT,
 };
 
@@ -3287,7 +3284,8 @@ static void status_change_work(struct work_struct *work)
 	int cc_soc, rc, capacity = get_prop_capacity(chip);
 
 	if (chip->status == POWER_SUPPLY_STATUS_FULL) {
-		if (capacity >= 99 && chip->hold_soc_while_full) {
+		if (capacity >= 99 && chip->hold_soc_while_full
+				&& chip->health == POWER_SUPPLY_HEALTH_GOOD) {
 			if (fg_debug_mask & FG_STATUS)
 				pr_info("holding soc at 100\n");
 			chip->charge_full = true;
@@ -5083,8 +5081,6 @@ static int fg_of_init(struct fg_chip *chip)
 	OF_READ_SETTING(FG_MEM_IRQ_VOLT_EMPTY, "irq-volt-empty-mv", rc, 1);
 	OF_READ_SETTING(FG_MEM_VBAT_EST_DIFF, "vbat-estimate-diff-mv", rc, 1);
 	OF_READ_SETTING(FG_MEM_DELTA_SOC, "fg-delta-soc", rc, 1);
-	OF_READ_SETTING(FG_MEM_SOC_MAX, "fg-soc-max", rc, 1);
-	OF_READ_SETTING(FG_MEM_SOC_MIN, "fg-soc-min", rc, 1);
 	OF_READ_SETTING(FG_MEM_BATT_LOW, "fg-vbatt-low-threshold", rc, 1);
 	OF_READ_SETTING(FG_MEM_THERM_DELAY, "fg-therm-delay-us", rc, 1);
 	OF_READ_PROPERTY(chip->learning_data.max_increment,
@@ -5882,22 +5878,6 @@ static int fg_common_hw_init(struct fg_chip *chip)
 		return rc;
 	}
 
-	rc = fg_mem_masked_write(chip, settings[FG_MEM_SOC_MAX].address, 0xFF,
-			soc_to_setpoint(settings[FG_MEM_SOC_MAX].value),
-			settings[FG_MEM_SOC_MAX].offset);
-	if (rc) {
-		pr_err("failed to write soc_max rc=%d\n", rc);
-		return rc;
-	}
-
-	rc = fg_mem_masked_write(chip, settings[FG_MEM_SOC_MIN].address, 0xFF,
-			soc_to_setpoint(settings[FG_MEM_SOC_MIN].value),
-			settings[FG_MEM_SOC_MIN].offset);
-	if (rc) {
-		pr_err("failed to write soc_min rc=%d\n", rc);
-		return rc;
-	}
-
 	rc = fg_mem_masked_write(chip, settings[FG_MEM_BATT_LOW].address, 0xFF,
 			batt_to_setpoint_8b(settings[FG_MEM_BATT_LOW].value),
 			settings[FG_MEM_BATT_LOW].offset);
@@ -6064,6 +6044,7 @@ static int fg_hw_init(struct fg_chip *chip)
 
 		break;
 	case PMI8950:
+	case PMI8937:
 		rc = fg_8950_hw_init(chip);
 		/* Setup workaround flag based on PMIC type */
 		if (fg_sense_type == INTERNAL_CURRENT_SENSE)
@@ -6156,6 +6137,7 @@ static int fg_detect_pmic_type(struct fg_chip *chip)
 	switch (pmic_rev_id->pmic_subtype) {
 	case PMI8994:
 	case PMI8950:
+	case PMI8937:
 	case PMI8996:
 		chip->pmic_subtype = pmic_rev_id->pmic_subtype;
 		chip->pmic_revision[REVID_RESERVED]	= pmic_rev_id->rev1;

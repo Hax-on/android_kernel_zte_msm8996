@@ -30,7 +30,7 @@
 #include "glink_xprt_if.h"
 
 /* Number of internal IPC Logging log pages */
-#define NUM_LOG_PAGES	15
+#define NUM_LOG_PAGES	10
 #define GLINK_PM_QOS_HOLDOFF_MS		10
 #define GLINK_QOS_DEF_NUM_TOKENS	10
 #define GLINK_QOS_DEF_NUM_PRIORITY	1
@@ -94,6 +94,7 @@ struct glink_qos_priority_bin {
  * @tx_path_activity:		transmit activity has occurred
  * @pm_qos_work:		removes PM QoS vote due to inactivity
  * @xprt_dbgfs_lock_lhb3:	debugfs channel structure lock
+ * @log_ctx:			IPC logging context for this transport.
  */
 struct glink_core_xprt_ctx {
 	struct rwref_lock xprt_state_lhb0;
@@ -136,6 +137,7 @@ struct glink_core_xprt_ctx {
 	struct delayed_work pm_qos_work;
 
 	struct mutex xprt_dbgfs_lock_lhb3;
+	void *log_ctx;
 };
 
 /**
@@ -2542,11 +2544,7 @@ int glink_close(void *handle)
 		return -EBUSY;
 	}
 
-	spin_lock_irqsave(&ctx->transport_ptr->tx_ready_lock_lhb2, flags);
-	if (!list_empty(&ctx->tx_ready_list_node))
-		list_del_init(&ctx->tx_ready_list_node);
-	spin_unlock_irqrestore(&ctx->transport_ptr->tx_ready_lock_lhb2, flags);
-
+	/* Set the channel state before removing it from xprt's list(s) */
 	GLINK_INFO_PERF_CH(ctx,
 		"%s: local:%u->GLINK_CHANNEL_CLOSING\n",
 		__func__, ctx->local_open_state);
@@ -2554,6 +2552,11 @@ int glink_close(void *handle)
 
 	ctx->pending_delete = true;
 	complete_all(&ctx->int_req_complete);
+
+	spin_lock_irqsave(&ctx->transport_ptr->tx_ready_lock_lhb2, flags);
+	if (!list_empty(&ctx->tx_ready_list_node))
+		list_del_init(&ctx->tx_ready_list_node);
+	spin_unlock_irqrestore(&ctx->transport_ptr->tx_ready_lock_lhb2, flags);
 
 	if (ctx->transport_ptr->local_state != GLINK_XPRT_DOWN) {
 		glink_qos_reset_priority(ctx);
@@ -2636,7 +2639,6 @@ static int glink_tx_common(void *handle, void *pkt_priv,
 	size_t intent_size;
 	bool is_atomic =
 		tx_flags & (GLINK_TX_SINGLE_THREADED | GLINK_TX_ATOMIC);
-	enum local_channel_state_e ch_st;
 	unsigned long flags;
 
 	if (!size)
@@ -2723,9 +2725,7 @@ static int glink_tx_common(void *handle, void *pkt_priv,
 			/* wait for the rx_intent from remote side */
 			wait_for_completion(&ctx->int_req_complete);
 			reinit_completion(&ctx->int_req_complete);
-			ch_st = ctx->local_open_state;
-			if (ch_st == GLINK_CHANNEL_CLOSING ||
-					ch_st == GLINK_CHANNEL_CLOSED) {
+			if (!ch_is_fully_opened(ctx)) {
 				GLINK_ERR_CH(ctx,
 					"%s: Channel closed while waiting for intent\n",
 					__func__);
@@ -3589,6 +3589,7 @@ int glink_core_register_transport(struct glink_transport_if *if_ptr,
 	size_t len;
 	uint16_t id;
 	int ret;
+	char log_name[GLINK_NAME_SIZE*2+2] = {0};
 
 	if (!if_ptr || !cfg || !cfg->name || !cfg->edge)
 		return -EINVAL;
@@ -3676,6 +3677,12 @@ int glink_core_register_transport(struct glink_transport_if *if_ptr,
 	list_add_tail(&xprt_ptr->list_node, &transport_list);
 	mutex_unlock(&transport_list_lock_lha0);
 	glink_debugfs_add_xprt(xprt_ptr);
+	snprintf(log_name, sizeof(log_name), "%s_%s",
+			xprt_ptr->edge, xprt_ptr->name);
+	xprt_ptr->log_ctx = ipc_log_context_create(NUM_LOG_PAGES, log_name, 0);
+	if (!xprt_ptr->log_ctx)
+		GLINK_ERR("%s: unable to create log context for [%s:%s]\n",
+				__func__, xprt_ptr->edge, xprt_ptr->name);
 
 	return 0;
 }
@@ -3703,6 +3710,8 @@ void glink_core_unregister_transport(struct glink_transport_if *if_ptr)
 	mutex_unlock(&transport_list_lock_lha0);
 	flush_delayed_work(&xprt_ptr->pm_qos_work);
 	pm_qos_remove_request(&xprt_ptr->pm_qos_req);
+	ipc_log_context_destroy(xprt_ptr->log_ctx);
+	xprt_ptr->log_ctx = NULL;
 	rwref_put(&xprt_ptr->xprt_state_lhb0);
 }
 EXPORT_SYMBOL(glink_core_unregister_transport);
@@ -3800,6 +3809,7 @@ static struct glink_core_xprt_ctx *glink_create_dummy_xprt_ctx(
 	if_ptr->tx_cmd_ch_remote_close_ack = dummy_tx_cmd_ch_remote_close_ack;
 
 	xprt_ptr->ops = if_ptr;
+	xprt_ptr->log_ctx = log_ctx;
 	spin_lock_init(&xprt_ptr->xprt_ctx_lock_lhb1);
 	INIT_LIST_HEAD(&xprt_ptr->free_lcid_list);
 	xprt_ptr->local_state = GLINK_XPRT_DOWN;
@@ -4863,7 +4873,20 @@ static void xprt_schedule_tx(struct glink_core_xprt_ctx *xprt_ptr,
 {
 	unsigned long flags;
 
+	if (unlikely(xprt_ptr->local_state == GLINK_XPRT_DOWN)) {
+		GLINK_ERR_CH(ch_ptr, "%s: Error XPRT is down\n", __func__);
+		kfree(tx_info);
+		return;
+	}
+
 	spin_lock_irqsave(&xprt_ptr->tx_ready_lock_lhb2, flags);
+	if (unlikely(!ch_is_fully_opened(ch_ptr))) {
+		spin_unlock_irqrestore(&xprt_ptr->tx_ready_lock_lhb2, flags);
+		GLINK_ERR_CH(ch_ptr, "%s: Channel closed before tx\n",
+			     __func__);
+		kfree(tx_info);
+		return;
+	}
 	if (list_empty(&ch_ptr->tx_ready_list_node))
 		list_add_tail(&ch_ptr->tx_ready_list_node,
 			&xprt_ptr->prio_bin[ch_ptr->curr_priority].tx_ready);
@@ -5697,6 +5720,20 @@ void *glink_get_log_ctx(void)
 	return log_ctx;
 }
 EXPORT_SYMBOL(glink_get_log_ctx);
+
+/**
+ * glink_get_xprt_log_ctx() - Return log context for GLINK xprts.
+ *
+ * Return: Log context or NULL if none.
+ */
+void *glink_get_xprt_log_ctx(struct glink_core_xprt_ctx *xprt)
+{
+	if (xprt)
+		return xprt->log_ctx;
+	else
+		return NULL;
+}
+EXPORT_SYMBOL(glink_get_xprt_log_ctx);
 
 static int glink_init(void)
 {

@@ -41,8 +41,6 @@
 #define CLK_DIS_WAIT_VAL	(0x2 << 12)
 
 #define TIMEOUT_US		100
-#define MAX_GDSCR_READS		100
-#define MAX_VOTABLE_GDSCR_READS	200
 
 struct gdsc {
 	struct regulator_dev	*rdev;
@@ -59,9 +57,11 @@ struct gdsc {
 	int			root_clk_idx;
 	bool			no_status_check_on_disable;
 	bool			is_gdsc_enabled;
+	bool			allow_clear;
 	void __iomem		*domain_addr;
 	void __iomem		*hw_ctrl_addr;
 	void __iomem		*sw_reset_addr;
+	u32			gds_timeout;
 };
 
 enum gdscr_status {
@@ -69,19 +69,26 @@ enum gdscr_status {
 	DISABLED,
 };
 
+static DEFINE_MUTEX(gdsc_seq_lock);
+
+void gdsc_allow_clear_retention(struct regulator *regulator)
+{
+	struct gdsc *sc = regulator_get_drvdata(regulator);
+
+	if (sc)
+		sc->allow_clear = true;
+}
+
 static int poll_gdsc_status(struct gdsc *sc, enum gdscr_status status)
 {
 	void __iomem *gdscr;
-	int count;
+	int count = sc->gds_timeout;
 	u32 val;
 
-	if (sc->hw_ctrl_addr) {
+	if (sc->hw_ctrl_addr)
 		gdscr = sc->hw_ctrl_addr;
-		count = MAX_VOTABLE_GDSCR_READS;
-	} else {
+	else
 		gdscr = sc->gdscr;
-		count = MAX_GDSCR_READS;
-	}
 
 	for (; count > 0; count--) {
 		val = readl_relaxed(gdscr);
@@ -133,7 +140,9 @@ static int gdsc_enable(struct regulator_dev *rdev)
 {
 	struct gdsc *sc = rdev_get_drvdata(rdev);
 	uint32_t regval, hw_ctrl_regval = 0x0;
-	int i, ret;
+	int i, ret = 0;
+
+	mutex_lock(&gdsc_seq_lock);
 
 	if (sc->root_en || sc->force_root_en)
 		clk_prepare_enable(sc->clocks[sc->root_clk_idx]);
@@ -171,6 +180,7 @@ static int gdsc_enable(struct regulator_dev *rdev)
 		if (regval & HW_CONTROL_MASK) {
 			dev_warn(&rdev->dev, "Invalid enable while %s is under HW control\n",
 				 sc->rdesc.name);
+			mutex_unlock(&gdsc_seq_lock);
 			return -EBUSY;
 		}
 
@@ -183,20 +193,36 @@ static int gdsc_enable(struct regulator_dev *rdev)
 
 		ret = poll_gdsc_status(sc, ENABLED);
 		if (ret) {
-			dev_err(&rdev->dev, "%s enable timed out: 0x%x\n",
-				sc->rdesc.name, regval);
-			udelay(TIMEOUT_US);
 			regval = readl_relaxed(sc->gdscr);
 			if (sc->hw_ctrl_addr) {
 				hw_ctrl_regval =
 					readl_relaxed(sc->hw_ctrl_addr);
-				dev_err(&rdev->dev, "%s final state (%d us after timeout): 0x%x, GDS_HW_CTRL: 0x%x\n",
-					sc->rdesc.name, TIMEOUT_US, regval,
-					hw_ctrl_regval);
-			} else
+				dev_warn(&rdev->dev, "%s state (after %d us timeout): 0x%x, GDS_HW_CTRL: 0x%x. Re-polling.\n",
+					sc->rdesc.name, sc->gds_timeout,
+					regval, hw_ctrl_regval);
+
+				ret = poll_gdsc_status(sc, ENABLED);
+				if (ret) {
+					dev_err(&rdev->dev, "%s final state (after additional %d us timeout): 0x%x, GDS_HW_CTRL: 0x%x\n",
+					sc->rdesc.name, sc->gds_timeout,
+					readl_relaxed(sc->gdscr),
+					readl_relaxed(sc->hw_ctrl_addr));
+
+					mutex_unlock(&gdsc_seq_lock);
+					return ret;
+				}
+			} else {
+				dev_err(&rdev->dev, "%s enable timed out: 0x%x\n",
+					sc->rdesc.name,
+					regval);
+				udelay(sc->gds_timeout);
+				regval = readl_relaxed(sc->gdscr);
 				dev_err(&rdev->dev, "%s final state: 0x%x (%d us after timeout)\n",
-					sc->rdesc.name, regval, TIMEOUT_US);
-			return ret;
+					sc->rdesc.name, regval,
+					sc->gds_timeout);
+				mutex_unlock(&gdsc_seq_lock);
+				return ret;
+			}
 		}
 	} else {
 		for (i = 0; i < sc->clock_count; i++)
@@ -228,7 +254,10 @@ static int gdsc_enable(struct regulator_dev *rdev)
 	if (sc->force_root_en)
 		clk_disable_unprepare(sc->clocks[sc->root_clk_idx]);
 	sc->is_gdsc_enabled = true;
-	return 0;
+
+	mutex_unlock(&gdsc_seq_lock);
+
+	return ret;
 }
 
 static int gdsc_disable(struct regulator_dev *rdev)
@@ -237,15 +266,17 @@ static int gdsc_disable(struct regulator_dev *rdev)
 	uint32_t regval;
 	int i, ret = 0;
 
+	mutex_lock(&gdsc_seq_lock);
+
 	if (sc->force_root_en)
 		clk_prepare_enable(sc->clocks[sc->root_clk_idx]);
 
 	for (i = sc->clock_count-1; i >= 0; i--) {
 		if (unlikely(i == sc->root_clk_idx))
 			continue;
-		if (sc->toggle_mem)
+		if (sc->toggle_mem && sc->allow_clear)
 			clk_set_flags(sc->clocks[i], CLKFLAG_NORETAIN_MEM);
-		if (sc->toggle_periph)
+		if (sc->toggle_periph && sc->allow_clear)
 			clk_set_flags(sc->clocks[i], CLKFLAG_NORETAIN_PERIPH);
 	}
 
@@ -257,6 +288,7 @@ static int gdsc_disable(struct regulator_dev *rdev)
 		if (regval & HW_CONTROL_MASK) {
 			dev_warn(&rdev->dev, "Invalid disable while %s is under HW control\n",
 				 sc->rdesc.name);
+			mutex_unlock(&gdsc_seq_lock);
 			return -EBUSY;
 		}
 
@@ -299,6 +331,9 @@ static int gdsc_disable(struct regulator_dev *rdev)
 	if ((sc->is_gdsc_enabled && sc->root_en) || sc->force_root_en)
 		clk_disable_unprepare(sc->clocks[sc->root_clk_idx]);
 	sc->is_gdsc_enabled = false;
+
+	mutex_unlock(&gdsc_seq_lock);
+
 	return ret;
 }
 
@@ -307,7 +342,9 @@ static unsigned int gdsc_get_mode(struct regulator_dev *rdev)
 	struct gdsc *sc = rdev_get_drvdata(rdev);
 	uint32_t regval;
 
+	mutex_lock(&gdsc_seq_lock);
 	regval = readl_relaxed(sc->gdscr);
+	mutex_unlock(&gdsc_seq_lock);
 	if (regval & HW_CONTROL_MASK)
 		return REGULATOR_MODE_FAST;
 	return REGULATOR_MODE_NORMAL;
@@ -317,7 +354,9 @@ static int gdsc_set_mode(struct regulator_dev *rdev, unsigned int mode)
 {
 	struct gdsc *sc = rdev_get_drvdata(rdev);
 	uint32_t regval;
-	int ret;
+	int ret = 0;
+
+	mutex_lock(&gdsc_seq_lock);
 
 	regval = readl_relaxed(sc->gdscr);
 
@@ -327,6 +366,7 @@ static int gdsc_set_mode(struct regulator_dev *rdev, unsigned int mode)
 	 */
 	if (regval & SW_COLLAPSE_MASK) {
 		dev_err(&rdev->dev, "can't enable hw collapse now\n");
+		mutex_unlock(&gdsc_seq_lock);
 		return -EBUSY;
 	}
 
@@ -361,18 +401,20 @@ static int gdsc_set_mode(struct regulator_dev *rdev, unsigned int mode)
 		 */
 		mb();
 		udelay(1);
+
 		ret = poll_gdsc_status(sc, ENABLED);
-		if (ret) {
+		if (ret)
 			dev_err(&rdev->dev, "%s set_mode timed out: 0x%x\n",
 				sc->rdesc.name, regval);
-			return ret;
-		}
 		break;
 	default:
-		return -EINVAL;
+		ret = -EINVAL;
+		break;
 	}
 
-	return 0;
+	mutex_unlock(&gdsc_seq_lock);
+
+	return ret;
 }
 
 static struct regulator_ops gdsc_ops = {
@@ -393,6 +435,7 @@ static int gdsc_probe(struct platform_device *pdev)
 	uint32_t regval, clk_dis_wait_val = CLK_DIS_WAIT_VAL;
 	bool retain_mem, retain_periph, support_hw_trigger;
 	int i, ret;
+	u32 timeout;
 
 	sc = devm_kzalloc(&pdev->dev, sizeof(struct gdsc), GFP_KERNEL);
 	if (sc == NULL)
@@ -443,6 +486,12 @@ static int gdsc_probe(struct platform_device *pdev)
 		if (sc->hw_ctrl_addr == NULL)
 			return -ENOMEM;
 	}
+
+	sc->gds_timeout = TIMEOUT_US;
+	ret = of_property_read_u32(pdev->dev.of_node, "qcom,gds-timeout",
+							&timeout);
+	if (!ret)
+		sc->gds_timeout = timeout;
 
 	sc->clock_count = of_property_count_strings(pdev->dev.of_node,
 					    "clock-names");
@@ -539,13 +588,17 @@ static int gdsc_probe(struct platform_device *pdev)
 		}
 	}
 
+	sc->allow_clear = of_property_read_bool(pdev->dev.of_node,
+							"qcom,disallow-clear");
+	sc->allow_clear = !sc->allow_clear;
+
 	for (i = 0; i < sc->clock_count; i++) {
-		if (retain_mem || (regval & PWR_ON_MASK))
+		if (retain_mem || (regval & PWR_ON_MASK) || !sc->allow_clear)
 			clk_set_flags(sc->clocks[i], CLKFLAG_RETAIN_MEM);
 		else
 			clk_set_flags(sc->clocks[i], CLKFLAG_NORETAIN_MEM);
 
-		if (retain_periph || (regval & PWR_ON_MASK))
+		if (retain_periph || (regval & PWR_ON_MASK) || !sc->allow_clear)
 			clk_set_flags(sc->clocks[i], CLKFLAG_RETAIN_PERIPH);
 		else
 			clk_set_flags(sc->clocks[i], CLKFLAG_NORETAIN_PERIPH);

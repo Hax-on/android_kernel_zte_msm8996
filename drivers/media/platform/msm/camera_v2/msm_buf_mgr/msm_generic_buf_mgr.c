@@ -72,6 +72,7 @@ static int32_t msm_buf_mngr_get_buf(struct msm_buf_mngr_device *dev,
 	}
 	new_entry->session_id = buf_info->session_id;
 	new_entry->stream_id = buf_info->stream_id;
+	new_entry->index = new_entry->vb2_buf->v4l2_buf.index;
 	spin_lock_irqsave(&dev->buf_q_spinlock, flags);
 	list_add_tail(&new_entry->entry, &dev->buf_qhead);
 	spin_unlock_irqrestore(&dev->buf_q_spinlock, flags);
@@ -101,14 +102,14 @@ static int32_t msm_buf_mngr_buf_done(struct msm_buf_mngr_device *buf_mngr_dev,
 	list_for_each_entry_safe(bufs, save, &buf_mngr_dev->buf_qhead, entry) {
 		if ((bufs->session_id == buf_info->session_id) &&
 			(bufs->stream_id == buf_info->stream_id) &&
-			(bufs->vb2_buf->v4l2_buf.index == buf_info->index)) {
-			bufs->vb2_buf->v4l2_buf.sequence  = buf_info->frame_id;
-			bufs->vb2_buf->v4l2_buf.timestamp = buf_info->timestamp;
-			bufs->vb2_buf->v4l2_buf.reserved = buf_info->reserved;
+			(bufs->index == buf_info->index)) {
 			ret = buf_mngr_dev->vb2_ops.buf_done
 					(bufs->vb2_buf,
 						buf_info->session_id,
-						buf_info->stream_id);
+						buf_info->stream_id,
+						buf_info->frame_id,
+						&buf_info->timestamp,
+						buf_info->reserved);
 			list_del_init(&bufs->entry);
 			kfree(bufs);
 			break;
@@ -130,7 +131,7 @@ static int32_t msm_buf_mngr_put_buf(struct msm_buf_mngr_device *buf_mngr_dev,
 	list_for_each_entry_safe(bufs, save, &buf_mngr_dev->buf_qhead, entry) {
 		if ((bufs->session_id == buf_info->session_id) &&
 			(bufs->stream_id == buf_info->stream_id) &&
-			(bufs->vb2_buf->v4l2_buf.index == buf_info->index)) {
+			(bufs->index == buf_info->index)) {
 			ret = buf_mngr_dev->vb2_ops.put_buf(bufs->vb2_buf,
 				buf_info->session_id, buf_info->stream_id);
 			list_del_init(&bufs->entry);
@@ -149,6 +150,7 @@ static int32_t msm_generic_buf_mngr_flush(
 	unsigned long flags;
 	struct msm_get_bufs *bufs, *save;
 	int32_t ret = -EINVAL;
+	struct timeval ts;
 
 	spin_lock_irqsave(&buf_mngr_dev->buf_q_spinlock, flags);
 	/*
@@ -160,7 +162,7 @@ static int32_t msm_generic_buf_mngr_flush(
 			(bufs->stream_id == buf_info->stream_id)) {
 			ret = buf_mngr_dev->vb2_ops.buf_done(bufs->vb2_buf,
 						buf_info->session_id,
-						buf_info->stream_id);
+						buf_info->stream_id, 0, &ts, 0);
 			pr_err("Bufs not flushed: str_id = %d buf_index = %d ret = %d\n",
 			buf_info->stream_id, bufs->vb2_buf->v4l2_buf.index,
 			ret);
@@ -272,7 +274,7 @@ static int msm_buf_mngr_handle_cont_cmd(struct msm_buf_mngr_device *dev,
 	struct ion_handle *ion_handle = NULL;
 	struct msm_camera_user_buf_cont_t *iaddr, *temp_addr;
 	struct msm_buf_mngr_user_buf_cont_info *new_entry, *bufs, *save;
-	unsigned long size;
+	size_t size;
 
 	if ((cont_cmd->cmd >= MSM_CAMERA_BUF_MNGR_CONT_MAX) ||
 		(cont_cmd->cmd < 0) ||
@@ -317,7 +319,7 @@ static int msm_buf_mngr_handle_cont_cmd(struct msm_buf_mngr_device *dev,
 		if ((size == 0) || (size <
 			(sizeof(struct msm_camera_user_buf_cont_t) *
 			cont_cmd->cnt))) {
-			pr_err("Invalid or zero size ION buffer %lu\n", size);
+			pr_err("Invalid or zero size ION buffer %zu\n", size);
 			rc = -EINVAL;
 			goto free_ion_handle;
 		}

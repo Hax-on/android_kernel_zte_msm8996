@@ -67,7 +67,6 @@ extern unsigned int sysctl_sched_downmigrate_pct;
 extern int sysctl_sched_upmigrate_min_nice;
 extern unsigned int sysctl_sched_powerband_limit_pct;
 extern unsigned int sysctl_sched_boost;
-extern unsigned int sysctl_power_aware_timer_migration;
 extern unsigned int sysctl_early_detection_duration;
 
 #ifdef CONFIG_SCHED_QHMP
@@ -76,6 +75,7 @@ extern unsigned int sysctl_sched_small_task_pct;
 #else
 extern unsigned int sysctl_sched_lowspill_freq;
 extern unsigned int sysctl_sched_pack_freq;
+extern unsigned int sysctl_sched_select_prev_cpu_us;
 #if defined(CONFIG_SCHED_FREQ_INPUT)
 extern unsigned int sysctl_sched_new_task_windows;
 #endif

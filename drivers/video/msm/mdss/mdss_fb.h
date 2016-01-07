@@ -238,9 +238,9 @@ struct msm_mdp_interface {
 
 #define IS_CALIB_MODE_BL(mfd) (((mfd)->calib_mode) & MDSS_CALIB_MODE_BL)
 #define MDSS_BRIGHT_TO_BL(out, v, bl_max, max_bright) do {\
-					out = (2 * (v) * (bl_max) + max_bright)\
-					/ (2 * max_bright);\
-					} while (0)
+				out = (2 * (v) * (bl_max) + max_bright);\
+				do_div(out, 2 * max_bright);\
+				} while (0)
 
 struct mdss_fb_file_info {
 	struct file *file;
@@ -301,7 +301,7 @@ struct msm_fb_data_type {
 	u32 bl_scale;
 	u32 bl_min_lvl;
 	u32 unset_bl_level;
-	u32 bl_updated;
+	bool allow_bl_update;
 	u32 bl_level_scaled;
 	struct mutex bl_lock;
 
@@ -437,11 +437,11 @@ int mdss_fb_register_mdp_instance(struct msm_mdp_interface *mdp);
 int mdss_fb_dcm(struct msm_fb_data_type *mfd, int req_state);
 int mdss_fb_suspres_panel(struct device *dev, void *data);
 int mdss_fb_do_ioctl(struct fb_info *info, unsigned int cmd,
-		     unsigned long arg);
+		     unsigned long arg, struct file *file);
 int mdss_fb_compat_ioctl(struct fb_info *info, unsigned int cmd,
-			 unsigned long arg);
+			 unsigned long arg, struct file *file);
 int mdss_fb_atomic_commit(struct fb_info *info,
-	struct mdp_layer_commit  *commit);
+	struct mdp_layer_commit  *commit, struct file *file);
 int mdss_fb_async_position_update(struct fb_info *info,
 		struct mdp_position_update *update_pos);
 

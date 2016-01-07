@@ -2128,6 +2128,19 @@ static int try_set_ctrl(struct msm_vidc_inst *inst, struct v4l2_ctrl *ctrl)
 		property_id = HAL_CONFIG_VENC_INTRA_PERIOD;
 		intra_period.pframes = num_p;
 		intra_period.bframes = num_b;
+
+		/*
+		 *Incase firmware does not have B-Frame support,
+		 *offload the b-frame count to p-frame to make up
+		 *for the requested Intraperiod
+		 */
+		if (!inst->capability.bframe.max) {
+			intra_period.pframes = num_p + num_b;
+			intra_period.bframes = 0;
+			dprintk(VIDC_DBG,
+				"No bframe support, changing pframe from %d to %d\n",
+				num_p, intra_period.pframes);
+		}
 		pdata = &intra_period;
 		break;
 	}
@@ -3001,7 +3014,7 @@ static int try_set_ext_ctrl(struct msm_vidc_inst *inst,
 	struct hal_vc1e_perf_cfg_type search_range = { {0} };
 	u32 property_id = 0;
 	void *pdata = NULL;
-	struct msm_vidc_core_capability *cap = NULL;
+	struct msm_vidc_capability *cap = NULL;
 	struct hal_initial_quantization quant;
 	struct hal_aspect_ratio sar;
 	struct hal_bitrate bitrate;
@@ -3221,10 +3234,18 @@ int msm_venc_inst_init(struct msm_vidc_inst *inst)
 	inst->prop.width[CAPTURE_PORT] = DEFAULT_WIDTH;
 	inst->prop.height[OUTPUT_PORT] = DEFAULT_HEIGHT;
 	inst->prop.width[OUTPUT_PORT] = DEFAULT_WIDTH;
-	inst->prop.fps = 15;
-	inst->capability.pixelprocess_capabilities = 0;
+	inst->capability.height.min = MIN_SUPPORTED_HEIGHT;
+	inst->capability.height.max = DEFAULT_HEIGHT;
+	inst->capability.width.min = MIN_SUPPORTED_WIDTH;
+	inst->capability.width.max = DEFAULT_WIDTH;
+	inst->capability.alloc_mode_in = HAL_BUFFER_MODE_STATIC;
+	inst->capability.alloc_mode_out = HAL_BUFFER_MODE_STATIC;
+	inst->capability.secure_output2_threshold.min = 0;
+	inst->capability.secure_output2_threshold.max = 0;
 	inst->buffer_mode_set[OUTPUT_PORT] = HAL_BUFFER_MODE_STATIC;
 	inst->buffer_mode_set[CAPTURE_PORT] = HAL_BUFFER_MODE_STATIC;
+	inst->prop.fps = 30;
+	inst->capability.pixelprocess_capabilities = 0;
 	return rc;
 }
 

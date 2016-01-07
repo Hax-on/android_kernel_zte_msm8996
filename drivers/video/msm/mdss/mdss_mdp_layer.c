@@ -167,7 +167,7 @@ static int __layer_param_check(struct msm_fb_data_type *mfd,
 	int content_secure;
 	struct mdss_data_type *mdata = mfd_to_mdata(mfd);
 	struct mdss_mdp_ctl *ctl = mfd_to_ctl(mfd);
-	u32 src_w, src_h, dst_w, dst_h;
+	u32 src_w, src_h, dst_w, dst_h, width, height;
 
 	if (!ctl) {
 		pr_err("ctl is null\n");
@@ -199,16 +199,21 @@ static int __layer_param_check(struct msm_fb_data_type *mfd,
 		return -EINVAL;
 	}
 
+	width = layer->buffer.width;
+	height = layer->buffer.height;
+	if (layer->flags & MDP_LAYER_DEINTERLACE) {
+		width *= 2;
+		height /= 2;
+	}
+
 	if (layer->buffer.width > MAX_IMG_WIDTH ||
 	    layer->buffer.height > MAX_IMG_HEIGHT ||
 	    layer->src_rect.w < min_src_size ||
 	    layer->src_rect.h < min_src_size ||
-	    CHECK_LAYER_BOUNDS(layer->src_rect.x, layer->src_rect.w,
-			layer->buffer.width) ||
-	    CHECK_LAYER_BOUNDS(layer->src_rect.y, layer->src_rect.h,
-			layer->buffer.height)) {
-		pr_err("invalid source image img wh=%dx%d rect=%d,%d,%d,%d\n",
-		       layer->buffer.width, layer->buffer.height,
+	    CHECK_LAYER_BOUNDS(layer->src_rect.x, layer->src_rect.w, width) ||
+	    CHECK_LAYER_BOUNDS(layer->src_rect.y, layer->src_rect.h, height)) {
+		pr_err("invalid source image img flag=%d wh=%dx%d rect=%d,%d,%d,%d\n",
+		       layer->flags, width, height,
 		       layer->src_rect.x, layer->src_rect.y,
 		       layer->src_rect.w, layer->src_rect.h);
 		return -EINVAL;
@@ -486,16 +491,18 @@ static int __configure_pipe_params(struct msm_fb_data_type *mfd,
 	pipe->alpha = layer->alpha;
 	pipe->transp = layer->transp_mask;
 	pipe->blend_op = layer->blend_op;
+	pipe->is_handed_off = false;
 	pipe->async_update = (layer->flags & MDP_LAYER_ASYNC) ? true : false;
 
 	if (mixer->ctl) {
 		pipe->dst.x += mixer->ctl->border_x_off;
 		pipe->dst.y += mixer->ctl->border_y_off;
+		pr_debug("border{%d,%d}\n", mixer->ctl->border_x_off,
+				mixer->ctl->border_y_off);
 	}
-	pr_debug("src{%d,%d,%d,%d}, dst{%d,%d,%d,%d}, border{%d,%d}\n",
+	pr_debug("src{%d,%d,%d,%d}, dst{%d,%d,%d,%d}\n",
 		pipe->src.x, pipe->src.y, pipe->src.w, pipe->src.h,
-		pipe->dst.x, pipe->dst.y, pipe->dst.w, pipe->dst.h,
-		mixer->ctl->border_x_off, mixer->ctl->border_y_off);
+		pipe->dst.x, pipe->dst.y, pipe->dst.w, pipe->dst.h);
 
 	flags = pipe->flags;
 	if (is_single_layer)
@@ -928,21 +935,42 @@ static struct mdss_mdp_pipe *__find_layer_in_validate_q(
 	return found ? pipe : NULL;
 }
 
+static bool __find_pipe_in_list(struct list_head *head,
+			int pipe_ndx, struct mdss_mdp_pipe **out_pipe)
+{
+	struct mdss_mdp_pipe *pipe;
+
+	list_for_each_entry(pipe, head, list) {
+		if (pipe_ndx == pipe->ndx) {
+			*out_pipe = pipe;
+			return true;
+		}
+	}
+
+	return false;
+}
+
 static struct mdss_mdp_pipe *__find_used_pipe(struct msm_fb_data_type *mfd,
 		u32 pipe_ndx)
 {
 	struct mdss_overlay_private *mdp5_data = mfd_to_mdp5_data(mfd);
-	struct mdss_mdp_pipe *pipe, *tmp, *used_pipe = NULL;
+	struct mdss_mdp_pipe *pipe = NULL;
+	bool found;
 
 	mutex_lock(&mdp5_data->list_lock);
-	list_for_each_entry_safe(pipe, tmp, &mdp5_data->pipes_used, list) {
-		if (pipe->ndx == pipe_ndx) {
-			used_pipe = pipe;
-			break;
-		}
+
+	found = __find_pipe_in_list(&mdp5_data->pipes_used, pipe_ndx, &pipe);
+
+	/* check if the pipe is in the cleanup or destroy list */
+	if (!found &&
+	   (__find_pipe_in_list(&mdp5_data->pipes_destroy, pipe_ndx, &pipe) ||
+	    __find_pipe_in_list(&mdp5_data->pipes_cleanup, pipe_ndx, &pipe))) {
+		pr_debug("reuse pipe%d ndx:%d\n", pipe->num, pipe->ndx);
+		list_move(&pipe->list, &mdp5_data->pipes_used);
 	}
+
 	mutex_unlock(&mdp5_data->list_lock);
-	return used_pipe;
+	return pipe;
 }
 
 /*

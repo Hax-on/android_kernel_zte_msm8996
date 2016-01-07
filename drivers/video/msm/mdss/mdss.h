@@ -155,6 +155,7 @@ enum mdss_hw_quirk {
 	MDSS_QUIRK_DOWNSCALE_HANG,
 	MDSS_QUIRK_DSC_RIGHT_ONLY_PU,
 	MDSS_QUIRK_DSC_2SLICE_PU_THRPUT,
+	MDSS_QUIRK_DMA_BI_DIR,
 	MDSS_QUIRK_MAX,
 };
 
@@ -402,7 +403,6 @@ struct mdss_data_type {
 
 	struct ion_client *iclient;
 	int iommu_attached;
-	struct mdss_iommu_map_type *iommu_map;
 
 	struct debug_bus *dbg_bus;
 	u32 dbg_bus_size;
@@ -441,6 +441,7 @@ struct mdss_data_type {
 	struct mdss_max_bw_settings *max_bw_settings;
 	u32 bw_mode_bitmap;
 	u32 max_bw_settings_cnt;
+	bool bw_limit_pending;
 
 	struct mdss_max_bw_settings *max_per_pipe_bw_settings;
 	u32 mdss_per_pipe_bw_cnt;

@@ -326,7 +326,7 @@ static void ipa_uc_event_handler(enum ipa_irq_type interrupt,
 
 	WARN_ON(private_data != ipa_ctx);
 
-	ipa_inc_client_enable_clks();
+	IPA2_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	IPADBG("uC evt opcode=%u\n",
 		ipa_ctx->uc_ctx.uc_sram_mmio->eventOp);
@@ -337,7 +337,7 @@ static void ipa_uc_event_handler(enum ipa_irq_type interrupt,
 	if (0 > feature || IPA_HW_FEATURE_MAX <= feature) {
 		IPAERR("Invalid feature %u for event %u\n",
 			feature, ipa_ctx->uc_ctx.uc_sram_mmio->eventOp);
-		ipa_dec_client_disable_clks();
+		IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 		return;
 	}
 	/* Feature specific handling */
@@ -367,7 +367,7 @@ static void ipa_uc_event_handler(enum ipa_irq_type interrupt,
 		IPADBG("unsupported uC evt opcode=%u\n",
 				ipa_ctx->uc_ctx.uc_sram_mmio->eventOp);
 	}
-	ipa_dec_client_disable_clks();
+	IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 
 }
 
@@ -375,14 +375,15 @@ static int ipa_uc_panic_notifier(struct notifier_block *this,
 		unsigned long event, void *ptr)
 {
 	int result = 0;
+	struct ipa2_active_client_logging_info log_info;
 
 	IPADBG("this=%p evt=%lu ptr=%p\n", this, event, ptr);
 
 	result = ipa_uc_state_check();
 	if (result)
 		goto fail;
-
-	if (ipa_inc_client_enable_clks_no_block())
+	IPA2_ACTIVE_CLIENTS_PREP_SIMPLE(log_info);
+	if (ipa2_inc_client_enable_clks_no_block(&log_info))
 		goto fail;
 
 	ipa_ctx->uc_ctx.uc_sram_mmio->cmdOp =
@@ -393,7 +394,7 @@ static int ipa_uc_panic_notifier(struct notifier_block *this,
 	/* give uc enough time to save state */
 	udelay(IPA_PKT_FLUSH_TO_US);
 
-	ipa_dec_client_disable_clks();
+	IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 	IPADBG("err_fatal issued\n");
 
 fail:
@@ -421,7 +422,7 @@ static void ipa_uc_response_hdlr(enum ipa_irq_type interrupt,
 
 	WARN_ON(private_data != ipa_ctx);
 
-	ipa_inc_client_enable_clks();
+	IPA2_ACTIVE_CLIENTS_INC_SIMPLE();
 	IPADBG("uC rsp opcode=%u\n",
 			ipa_ctx->uc_ctx.uc_sram_mmio->responseOp);
 
@@ -430,7 +431,7 @@ static void ipa_uc_response_hdlr(enum ipa_irq_type interrupt,
 	if (0 > feature || IPA_HW_FEATURE_MAX <= feature) {
 		IPAERR("Invalid feature %u for event %u\n",
 			feature, ipa_ctx->uc_ctx.uc_sram_mmio->eventOp);
-		ipa_dec_client_disable_clks();
+		IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 		return;
 	}
 
@@ -443,7 +444,7 @@ static void ipa_uc_response_hdlr(enum ipa_irq_type interrupt,
 			IPADBG("feature %d specific response handler\n",
 				feature);
 			complete_all(&ipa_ctx->uc_ctx.uc_completion);
-			ipa_dec_client_disable_clks();
+			IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 			return;
 		}
 	}
@@ -483,7 +484,7 @@ static void ipa_uc_response_hdlr(enum ipa_irq_type interrupt,
 		IPAERR("Unsupported uC rsp opcode = %u\n",
 		       ipa_ctx->uc_ctx.uc_sram_mmio->responseOp);
 	}
-	ipa_dec_client_disable_clks();
+	IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 }
 
 /**
@@ -751,7 +752,6 @@ int ipa_uc_monitor_holb(enum ipa_client_type ipa_client, bool enable)
 	union IpaHwmonitorHolbCmdData_t cmd;
 	int ep_idx;
 	int ret;
-	struct ipa_ep_context *ep;
 
 	/* HOLB monitoring is applicable only to 2.6L. */
 	if (ipa_ctx->ipa_hw_type != IPA_HW_v2_6L) {
@@ -764,14 +764,6 @@ int ipa_uc_monitor_holb(enum ipa_client_type ipa_client, bool enable)
 		IPAERR("Invalid IPA client\n");
 		return 0;
 	}
-
-	ep = &ipa_ctx->ep[ep_idx];
-
-	if (!ep->valid) {
-		IPAERR("EP not valid.\n");
-		return 0;
-	}
-
 
 	/*
 	 * If the uC interface has not been initialized yet,
@@ -794,7 +786,7 @@ int ipa_uc_monitor_holb(enum ipa_client_type ipa_client, bool enable)
 	cmd.params.monitorPipe = (u8)(enable ? 1 : 0);
 	cmd.params.pipeNum = (u8)ep_idx;
 
-	IPADBG("uC holb monitoring on IPA pipe %d\n, Enable: %d",
+	IPADBG("uC holb monitoring on IPA pipe %d, Enable: %d\n",
 	       ep_idx, enable);
 
 	ret = ipa_uc_send_cmd(cmd.raw32b,

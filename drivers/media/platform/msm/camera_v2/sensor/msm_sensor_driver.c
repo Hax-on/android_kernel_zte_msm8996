@@ -27,7 +27,7 @@
   * by ZTE_YCM_20140728 yi.changming 400015
   */
 // --->
- #include "msm_eeprom.h"
+ #include "zte_eeprom.h"
   // <---400015
  #include <linux/debugfs.h>
 
@@ -222,11 +222,14 @@ static int32_t msm_sensor_fill_eeprom_subdevid_by_name(
 				struct msm_sensor_ctrl_t *s_ctrl)
 {
 	int32_t rc = 0;
+	const char *eeprom_name;
 	struct device_node *src_node = NULL;
 	uint32_t val = 0, eeprom_name_len;
-	int32_t *eeprom_subdev_id;
+	int32_t *eeprom_subdev_id, i, userspace_probe = 0;
+	int32_t count = 0;
 	struct  msm_sensor_info_t *sensor_info;
 	struct device_node *of_node = s_ctrl->of_node;
+	const void *p;
 
 	if (!s_ctrl->sensordata->eeprom_name || !of_node)
 		return -EINVAL;
@@ -246,32 +249,65 @@ static int32_t msm_sensor_fill_eeprom_subdevid_by_name(
 	if (0 == eeprom_name_len)
 		return 0;
 
-	src_node = of_parse_phandle(of_node, "qcom,eeprom-src", 0);
-	if (!src_node) {
-		pr_err("eeprom src node NULL\n");
-		return -EINVAL;
-	}
+	p = of_get_property(of_node, "qcom,eeprom-src", &count);
+	if (!p || !count)
+		return 0;
 
-	rc = of_property_read_u32(src_node, "cell-index", &val);
-	if (rc < 0) {
-		pr_err("%s qcom,eeprom cell index %d, rc %d\n",
-			__func__, val, rc);
-		of_node_put(src_node);
-		return -EINVAL;
-	}
+	count /= sizeof(uint32_t);
+	for (i = 0; i < count; i++) {
+		userspace_probe = 0;
+		eeprom_name = NULL;
+		src_node = of_parse_phandle(of_node, "qcom,eeprom-src", i);
+		if (!src_node) {
+			pr_err("eeprom src node NULL\n");
+			continue;
+		}
+		/* In the case of eeprom probe from kernel eeprom name
+			should be present, Otherwise it will throw as errors */
+		rc = of_property_read_string(src_node, "qcom,eeprom-name",
+			&eeprom_name);
+		if (rc < 0) {
+			pr_err("%s:%d Eeprom userspace probe for %s\n",
+				__func__, __LINE__,
+				s_ctrl->sensordata->eeprom_name);
+			of_node_put(src_node);
+			userspace_probe = 1;
+			if (count > 1)
+				return -EINVAL;
+		}
+		if (!userspace_probe &&
+			strcmp(eeprom_name, s_ctrl->sensordata->eeprom_name))
+			continue;
 
+		rc = of_property_read_u32(src_node, "cell-index", &val);
+		if (rc < 0) {
+			pr_err("%s qcom,eeprom cell index %d, rc %d\n",
+				__func__, val, rc);
+			of_node_put(src_node);
+			if (userspace_probe)
+				return -EINVAL;
+			continue;
+		}
 /*
   * by ZTE_YCM_20140728 yi.changming 400015
   */
 // --->		
 		msm_get_info_from_eeprom(s_ctrl,src_node);
 // <---	400015
+		*eeprom_subdev_id = val;
+		CDBG("%s:%d Eeprom subdevice id is %d\n",
+			__func__, __LINE__, val);
+		of_node_put(src_node);
+		src_node = NULL;
+		break;
+	}
 
 	*eeprom_subdev_id = val;
 	CDBG("%s:%d Eeprom subdevice id is %d\n",
 		__func__, __LINE__, val);
 	of_node_put(src_node);
 	src_node = NULL;
+
 
 	return rc;
 }
@@ -692,6 +728,13 @@ int32_t msm_sensor_driver_probe(void *setting,
 
 	unsigned long                        mount_pos = 0;
 	uint32_t                             is_yuv;
+/*
+ * add by lijing for flash
+ * ZTE_CAM_LIJING_20151020
+ */
+#if 1
+	unsigned long                             has_flash = 0;
+#endif
 
 	/* Validate input parameters */
 	if (!setting) {
@@ -986,7 +1029,15 @@ CSID_TG:
 		s_ctrl->sensordata->sensor_info->
 			subdev_id[SUB_MODULE_LED_FLASH] = -1;
 	}
-
+/*
+ * add by lijing for flash
+ * ZTE_CAM_LIJING_20151020
+ */
+#if 1
+	else
+		 has_flash = 1;
+	pr_err("has_flash=%ld\n",has_flash);
+#endif
 	/*
 	 * Create /dev/videoX node, comment for now until dummy /dev/videoX
 	 * node is created and used by HAL
@@ -1023,7 +1074,13 @@ CSID_TG:
 		(s_ctrl->sensordata->sensor_info->position << 16) |
 		((s_ctrl->sensordata->
 		sensor_info->sensor_mount_angle / 90) << 8);
-
+/*
+ * add by lijing for flash
+ * ZTE_CAM_LIJING_20151020
+ */	
+#if 1
+    mount_pos = mount_pos | (has_flash << 15);
+#endif
 	s_ctrl->msm_sd.sd.entity.flags = mount_pos | MEDIA_ENT_FL_DEFAULT;
 
 	/*Save sensor info*/

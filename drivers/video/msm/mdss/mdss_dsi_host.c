@@ -28,6 +28,7 @@
 #include "mdss_panel.h"
 #include "mdss_debug.h"
 #include "mdss_smmu.h"
+#include "mdss_dsi_phy.h"
 
 #define VSYNC_PERIOD 17
 #define DMA_TX_TIMEOUT 200
@@ -288,6 +289,23 @@ void mdss_dsi_get_hw_revision(struct mdss_dsi_ctrl_pdata *ctrl)
 
 	pr_debug("%s: ndx=%d hw_rev=%x\n", __func__,
 				ctrl->ndx, ctrl->shared_data->hw_rev);
+}
+
+void mdss_dsi_read_phy_revision(struct mdss_dsi_ctrl_pdata *ctrl)
+{
+	u32 reg_val;
+
+	if (ctrl->shared_data->phy_rev > DSI_PHY_REV_UNKNOWN)
+		return;
+
+	reg_val = MIPI_INP(ctrl->phy_io.base);
+
+	if (reg_val == DSI_PHY_REV_20)
+		ctrl->shared_data->phy_rev = DSI_PHY_REV_20;
+	else if (reg_val == DSI_PHY_REV_10)
+		ctrl->shared_data->phy_rev = DSI_PHY_REV_10;
+	else
+		ctrl->shared_data->phy_rev = DSI_PHY_REV_UNKNOWN;
 }
 
 void mdss_dsi_host_init(struct mdss_panel_data *pdata)
@@ -1185,7 +1203,7 @@ static void mdss_dsi_mode_setup(struct mdss_panel_data *pdata)
 		vsync_period = vspw + vbp + height + dummy_yres + vfp;
 		hsync_period = hspw + hbp + width + dummy_xres + hfp;
 
-		if (ctrl_pdata->shared_data->timing_db_mode)
+		if (ctrl_pdata->timing_db_mode)
 			MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x1e8, 0x1);
 		MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x24,
 			((hspw + hbp + width + dummy_xres) << 16 |
@@ -1200,7 +1218,7 @@ static void mdss_dsi_mode_setup(struct mdss_panel_data *pdata)
 		MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x30, (hspw << 16));
 		MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x34, 0);
 		MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x38, (vspw << 16));
-		if (ctrl_pdata->shared_data->timing_db_mode)
+		if (ctrl_pdata->timing_db_mode)
 			MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x1e4, 0x1);
 	} else {		/* command mode */
 		if (mipi->dst_format == DSI_CMD_DST_FORMAT_RGB888)
@@ -2119,6 +2137,7 @@ int mdss_dsi_en_wait4dynamic_done(struct mdss_dsi_ctrl_pdata *ctrl)
 	unsigned long flag;
 	u32 data;
 	int rc = 0;
+	struct mdss_dsi_ctrl_pdata *sctrl_pdata;
 
 	/* DSI_INTL_CTRL */
 	data = MIPI_INP((ctrl->ctrl_base) + 0x0110);
@@ -2130,8 +2149,21 @@ int mdss_dsi_en_wait4dynamic_done(struct mdss_dsi_ctrl_pdata *ctrl)
 	reinit_completion(&ctrl->dynamic_comp);
 	mdss_dsi_enable_irq(ctrl, DSI_DYNAMIC_TERM);
 	spin_unlock_irqrestore(&ctrl->mdp_lock, flag);
+
+	/*
+	 * Ensure that registers are updated before triggering
+	 * dynamic refresh
+	 */
+	wmb();
+
 	MIPI_OUTP((ctrl->ctrl_base) + DSI_DYNAMIC_REFRESH_CTRL,
-			(BIT(8) | BIT(0)));
+		(BIT(13) | BIT(8) | BIT(0)));
+
+	sctrl_pdata = mdss_dsi_get_ctrl_clk_slave();
+
+	if (sctrl_pdata)
+		MIPI_OUTP((sctrl_pdata->ctrl_base) + DSI_DYNAMIC_REFRESH_CTRL,
+				(BIT(13) | BIT(8) | BIT(0)));
 
 	if (!wait_for_completion_timeout(&ctrl->dynamic_comp,
 			msecs_to_jiffies(VSYNC_PERIOD * 4))) {
@@ -2692,7 +2724,7 @@ void mdss_dsi_timeout_status(struct mdss_dsi_ctrl_pdata *ctrl)
 	}
 }
 
-void mdss_dsi_dln0_phy_err(struct mdss_dsi_ctrl_pdata *ctrl)
+void mdss_dsi_dln0_phy_err(struct mdss_dsi_ctrl_pdata *ctrl, bool print_en)
 {
 	u32 status;
 	unsigned char *base;
@@ -2703,7 +2735,8 @@ void mdss_dsi_dln0_phy_err(struct mdss_dsi_ctrl_pdata *ctrl)
 
 	if (status & 0x011111) {
 		MIPI_OUTP(base + 0x00b4, status);
-		pr_err("%s: status=%x\n", __func__, status);
+		if (print_en)
+			pr_err("%s: status=%x\n", __func__, status);
 		ctrl->err_cont.phy_err_cnt++;
 	}
 }
@@ -2781,7 +2814,7 @@ static void __dsi_error_counter(struct dsi_err_container *err_container)
 
 	if (prev_time &&
 		((curr_time - prev_time) < err_container->err_time_delta))
-		MDSS_XLOG_TOUT_HANDLER("mdp", "dsi0_ctrl", "dsi0_phy",
+		MDSS_XLOG_TOUT_HANDLER_WQ("mdp", "dsi0_ctrl", "dsi0_phy",
 			"dsi1_ctrl", "dsi1_phy", "panic");
 }
 
@@ -2798,7 +2831,7 @@ void mdss_dsi_error(struct mdss_dsi_ctrl_pdata *ctrl)
 	mdss_dsi_ack_err_status(ctrl);	/* mask0, 0x01f */
 	mdss_dsi_timeout_status(ctrl);	/* mask0, 0x0e0 */
 	mdss_dsi_status(ctrl);		/* mask0, 0xc0100 */
-	mdss_dsi_dln0_phy_err(ctrl);	/* mask0, 0x3e00000 */
+	mdss_dsi_dln0_phy_err(ctrl, true);	/* mask0, 0x3e00000 */
 
 	/* clear dsi error interrupt */
 	intr = MIPI_INP(ctrl->ctrl_base + 0x0110);
@@ -2813,6 +2846,7 @@ void mdss_dsi_error(struct mdss_dsi_ctrl_pdata *ctrl)
 irqreturn_t mdss_dsi_isr(int irq, void *ptr)
 {
 	u32 isr;
+	u32 intr;
 	struct mdss_dsi_ctrl_pdata *ctrl =
 			(struct mdss_dsi_ctrl_pdata *)ptr;
 
@@ -2889,6 +2923,12 @@ irqreturn_t mdss_dsi_isr(int irq, void *ptr)
 	if (isr & DSI_INTR_DYNAMIC_REFRESH_DONE) {
 		spin_lock(&ctrl->mdp_lock);
 		mdss_dsi_disable_irq_nosync(ctrl, DSI_DYNAMIC_TERM);
+
+		/* clear dfps interrupt */
+		intr = MIPI_INP(ctrl->ctrl_base + 0x0110);
+		intr |= DSI_INTR_DYNAMIC_REFRESH_DONE;
+		MIPI_OUTP(ctrl->ctrl_base + 0x0110, intr);
+
 		complete(&ctrl->dynamic_comp);
 		spin_unlock(&ctrl->mdp_lock);
 	}

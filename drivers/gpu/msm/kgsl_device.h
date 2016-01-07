@@ -252,7 +252,6 @@ struct kgsl_device {
 	int open_count;
 
 	struct mutex mutex;
-	struct mutex mutex_mmu_sync;
 	uint32_t state;
 	uint32_t requested_state;
 
@@ -293,6 +292,8 @@ struct kgsl_device {
 	struct device *busmondev; /* pseudo dev for GPU BW voting governor */
 };
 
+#define KGSL_MMU_DEVICE(_mmu) \
+	container_of((_mmu), struct kgsl_device, mmu)
 
 #define KGSL_DEVICE_COMMON_INIT(_dev) \
 	.hwaccess_gate = COMPLETION_INITIALIZER((_dev).hwaccess_gate),\
@@ -305,7 +306,6 @@ struct kgsl_device {
 	.wait_queue = __WAIT_QUEUE_HEAD_INITIALIZER((_dev).wait_queue),\
 	.active_cnt_wq = __WAIT_QUEUE_HEAD_INITIALIZER((_dev).active_cnt_wq),\
 	.mutex = __MUTEX_INITIALIZER((_dev).mutex),\
-	.mutex_mmu_sync = __MUTEX_INITIALIZER((_dev).mutex_mmu_sync),\
 	.state = KGSL_STATE_NONE,\
 	.ver_major = DRIVER_VERSION_MAJOR,\
 	.ver_minor = DRIVER_VERSION_MINOR
@@ -453,6 +453,7 @@ struct kgsl_device_private {
  * @work: worker to dump the frozen memory
  * @dump_gate: completion gate signaled by worker when it is finished.
  * @process: the process that caused the hang, if known.
+ * @sysfs_read: An atomic for concurrent snapshot reads via syfs.
  */
 struct kgsl_snapshot {
 	u8 *start;
@@ -467,6 +468,7 @@ struct kgsl_snapshot {
 	struct work_struct work;
 	struct completion dump_gate;
 	struct kgsl_process_private *process;
+	atomic_t sysfs_read;
 };
 
 /**

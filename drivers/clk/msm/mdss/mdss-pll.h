@@ -21,7 +21,8 @@
 #define MDSS_PLL_REG_R(base, offset)	readl_relaxed((base) + (offset))
 
 #define PLL_CALC_DATA(addr0, addr1, data0, data1)      \
-	(((data1) << 24) | (((addr1)/4) << 16) | ((data0) << 8) | ((addr0)/4))
+	(((data1) << 24) | ((((addr1) / 4) & 0xFF) << 16) | \
+	 ((data0) << 8) | (((addr0) / 4) & 0xFF))
 
 #define MDSS_DYN_PLL_REG_W(base, offset, addr0, addr1, data0, data1)   \
 		writel_relaxed(PLL_CALC_DATA(addr0, addr1, data0, data1), \
@@ -33,12 +34,14 @@ enum {
 	MDSS_HDMI_PLL_8996,
 	MDSS_HDMI_PLL_8996_V2,
 	MDSS_HDMI_PLL_8996_V3,
+	MDSS_HDMI_PLL_8996_V3_1_8,
 	MDSS_UNKNOWN_PLL,
 };
 
 enum {
 	MDSS_PLL_TARGET_8996,
 	MDSS_PLL_TARGET_8952,
+	MDSS_PLL_TARGET_8937,
 };
 
 #define DFPS_MAX_NUM_OF_FRAME_RATES 10

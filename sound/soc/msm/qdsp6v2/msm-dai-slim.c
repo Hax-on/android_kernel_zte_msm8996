@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -27,10 +27,12 @@
 			SNDRV_PCM_RATE_8000 | \
 			SNDRV_PCM_RATE_16000 | \
 			SNDRV_PCM_RATE_96000 | \
-			SNDRV_PCM_RATE_192000)
+			SNDRV_PCM_RATE_192000 | \
+			SNDRV_PCM_RATE_384000)
 
 #define SLIM_DAI_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | \
-			  SNDRV_PCM_FMTBIT_S24_LE)
+			  SNDRV_PCM_FMTBIT_S24_LE | \
+			  SNDRV_PCM_FMTBIT_S32_LE)
 
 #define DAI_STATE_INITIALIZED (0x01 << 0)
 #define DAI_STATE_PREPARED (0x01 << 1)
@@ -52,12 +54,13 @@ struct msm_slim_dai_data {
 	u16 *chan_h;
 	u16 *sh_ch;
 	u16 grph;
-	u16 rate;
+	u32 rate;
 	u16 bits;
 	u16 ch_cnt;
 	u8 status;
 	struct snd_soc_dai_driver *dai_drv;
 	struct msm_slim_dma_data dma_data;
+	struct slim_port_cfg port_cfg;
 };
 
 struct msm_dai_slim_drv_data {
@@ -135,6 +138,16 @@ static int msm_dai_slim_ch_ctl(struct msm_slim_dma_data *dma_data,
 			goto done;
 		}
 
+		rc = slim_config_mgrports(sdev, &(dma_data->ph),
+					  dai_data->ch_cnt,
+					  &(dai_data->port_cfg));
+		if (IS_ERR_VALUE(rc)) {
+			dev_err(&sdev->dev,
+				"%s: config mgrport failed rc %d\n",
+				__func__ , rc);
+			goto err_done;
+		}
+
 		for (i = 0; i < dai_data->ch_cnt; i++) {
 			rc = slim_connect_sink(sdev,
 					       &dma_data->ph, 1,
@@ -143,7 +156,7 @@ static int msm_dai_slim_ch_ctl(struct msm_slim_dma_data *dma_data,
 				dev_err(&sdev->dev,
 					"%s: slim_connect_sink failed, ch = %d, err = %d\n",
 					__func__, i, rc);
-				goto err_connect_sink;
+				goto err_done;
 			}
 		}
 
@@ -154,7 +167,7 @@ static int msm_dai_slim_ch_ctl(struct msm_slim_dma_data *dma_data,
 			dev_err(&sdev->dev,
 				"%s: slim activate ch failed, err = %d\n",
 				__func__, rc);
-			goto err_connect_sink;
+			goto err_done;
 		}
 		/* Mark dai status as running */
 		SET_DAI_STATE(dai_data->status, DAI_STATE_RUNNING);
@@ -190,7 +203,7 @@ static int msm_dai_slim_ch_ctl(struct msm_slim_dma_data *dma_data,
 
 	return rc;
 
-err_connect_sink:
+err_done:
 	rc1 = slim_dealloc_mgrports(sdev,
 				   &dma_data->ph, 1);
 	if (IS_ERR_VALUE(rc1))
@@ -227,6 +240,11 @@ static int msm_dai_slim_hw_params(
 	}
 
 	dai_data->rate = params_rate(params);
+	dai_data->port_cfg.port_opts = SLIM_OPT_NONE;
+	if (dai_data->rate >= SNDRV_PCM_RATE_48000)
+		dai_data->port_cfg.watermark = 16;
+	else
+		dai_data->port_cfg.watermark = 8;
 
 	switch (params_format(params)) {
 	case SNDRV_PCM_FORMAT_S16_LE:
@@ -234,6 +252,9 @@ static int msm_dai_slim_hw_params(
 		break;
 	case SNDRV_PCM_FORMAT_S24_LE:
 		dai_data->bits = 24;
+		break;
+	case SNDRV_PCM_FORMAT_S32_LE:
+		dai_data->bits = 32;
 		break;
 	default:
 		dev_err(dai->dev, "%s: invalid format %d\n", __func__,
@@ -423,7 +444,7 @@ static struct snd_soc_dai_driver msm_slim_dais[] = {
 			 */
 			.channels_max = 1,
 			.rate_min = 8000,
-			.rate_max = 192000,
+			.rate_max = 384000,
 			.stream_name = "SLIM_DAI0 Capture",
 		},
 		.ops = &msm_dai_slim_ops,

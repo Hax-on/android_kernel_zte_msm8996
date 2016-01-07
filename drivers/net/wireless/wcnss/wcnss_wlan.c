@@ -2725,6 +2725,9 @@ wcnss_trigger_config(struct platform_device *pdev)
 	is_pronto_v3 = of_property_read_bool(pdev->dev.of_node,
 							"qcom,is-pronto-v3");
 
+	penv->is_vsys_adc_channel = of_property_read_bool(pdev->dev.of_node,
+						"qcom,has-vsys-adc-channel");
+
 	if (of_property_read_u32(pdev->dev.of_node,
 			"qcom,wlan-rx-buff-count", &penv->wlan_rx_buff_count)) {
 		penv->wlan_rx_buff_count = WCNSS_DEF_WLAN_RX_BUFF_COUNT;
@@ -3195,6 +3198,16 @@ void wcnss_flush_work(struct work_struct *work)
 		cancel_work_sync(cnss_work);
 }
 EXPORT_SYMBOL(wcnss_flush_work);
+
+/* wlan prop driver cannot invoke show_stack
+ * function directly, so to invoke this function it
+ * call wcnss_dump_stack function
+ */
+void wcnss_dump_stack(struct task_struct *task)
+{
+	show_stack(task, NULL);
+}
+EXPORT_SYMBOL(wcnss_dump_stack);
 
 /* wlan prop driver cannot invoke cancel_delayed_work_sync
  * function directly, so to invoke this function it call

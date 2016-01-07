@@ -303,13 +303,15 @@ static void _ringbuffer_setup_common(struct adreno_ringbuffer *rb)
 			  ADRENO_REG_CP_RB_BASE_HI, rb->buffer_desc.gpuaddr);
 
 	/* CP ROQ queue sizes (bytes) - RB:16, ST:16, IB1:32, IB2:64 */
-	if (adreno_is_a305(adreno_dev) || adreno_is_a305c(adreno_dev) ||
-		adreno_is_a306(adreno_dev) || adreno_is_a320(adreno_dev) ||
-		adreno_is_a304(adreno_dev))
-		kgsl_regwrite(device, A3XX_CP_QUEUE_THRESHOLDS, 0x000E0602);
-	else if (adreno_is_a330(adreno_dev) || adreno_is_a305b(adreno_dev) ||
-			adreno_is_a310(adreno_dev))
-		kgsl_regwrite(device, A3XX_CP_QUEUE_THRESHOLDS, 0x003E2008);
+	if (adreno_is_a3xx(adreno_dev)) {
+		unsigned int val = 0x000E0602;
+
+		if (adreno_is_a305b(adreno_dev) ||
+				adreno_is_a310(adreno_dev) ||
+				adreno_is_a330(adreno_dev))
+			val = 0x003E2008;
+		kgsl_regwrite(device, A3XX_CP_QUEUE_THRESHOLDS, val);
+	}
 }
 
 /**
@@ -332,9 +334,6 @@ static int _ringbuffer_start_common(struct adreno_ringbuffer *rb)
 	status = gpudev->rb_init(adreno_dev, rb);
 	if (status)
 		return status;
-
-	if (gpudev->switch_to_unsecure_mode)
-		status = gpudev->switch_to_unsecure_mode(adreno_dev, rb);
 
 	return status;
 }
@@ -398,15 +397,14 @@ static int _adreno_ringbuffer_init(struct adreno_device *adreno_dev,
 	return ret;
 }
 
-int adreno_ringbuffer_init(struct kgsl_device *device)
+int adreno_ringbuffer_init(struct adreno_device *adreno_dev, bool nopreempt)
 {
 	int status = 0;
-	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	struct adreno_gpudev *gpudev = ADRENO_GPU_DEVICE(adreno_dev);
 	struct adreno_ringbuffer *rb;
 	int i;
 
-	if (ADRENO_FEATURE(adreno_dev, ADRENO_PREEMPTION))
+	if (nopreempt == false && ADRENO_FEATURE(adreno_dev, ADRENO_PREEMPTION))
 		adreno_dev->num_ringbuffers = gpudev->num_prio_levels;
 	else
 		adreno_dev->num_ringbuffers = 1;

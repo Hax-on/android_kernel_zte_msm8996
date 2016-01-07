@@ -24,6 +24,8 @@ dtb-$(CONFIG_ARCH_MSM8996) += msm8996-v2-pmi8994-cdp.dtb \
 	msm8996-v3-fluid.dtb \
 	msm8996-v3-liquid.dtb \
 	msm8996-v3-dtp.dtb \
+	msm8996-v3-pm8004-mmxf-adp.dtb \
+	msm8996-v3-pm8004-agave-adp.dtb \
 	msm8996-v3.0-pmi8994-cdp.dtb \
 	msm8996-v3.0-pmi8994-mtp.dtb \
 	msm8996-v3.0-pmi8994-pm8004-cdp.dtb \
@@ -55,6 +57,7 @@ dtb-$(CONFIG_ARCH_MSM8996) += msm8996-v2-pmi8994-cdp.dtb \
 	apq8096-v3-pmi8996-mtp.dtb \
 	apq8096-v3-liquid.dtb \
 	apq8096-v3-dragonboard.dtb \
+	apq8096-v3-sbc.dtb \
 	apq8096-v3-auto-dragonboard.dtb \
 	apq8096-v3.0-pmi8994-cdp.dtb \
 	apq8096-v3.0-pmi8994-mtp.dtb \
@@ -73,7 +76,8 @@ dtb-$(CONFIG_ARCH_MSM8996) += msm8996-v2-pmi8994-cdp.dtb \
 	apq8096-v3-pmi8994-mdm9x55-i2s-mtp.dtb \
 	apq8096-v3-pmi8994-mdm9x55-slimbus-mtp.dtb \
 	apq8096-v3-pmi8996-mdm9x55-i2s-mtp.dtb \
-	apq8096-v3-pmi8996-mdm9x55-slimbus-mtp.dtb
+	apq8096-v3-pmi8996-mdm9x55-slimbus-mtp.dtb \
+	apq8096-v3-pmi8996-dragonboard.dtb
 
 dtb-$(CONFIG_ARCH_MSMCOBALT) += msmcobalt-sim.dtb \
 	msmcobalt-rumi.dtb
@@ -97,21 +101,32 @@ dtb-$(CONFIG_ARCH_MSM8937) += msm8937-rumi.dtb \
 	msm8937-pmi8937-mtp.dtb \
 	msm8937-pmi8950-rcm.dtb \
 	msm8937-pmi8937-rcm.dtb \
+	msm8937-pmi8950-qrd-sku1.dtb \
+	msm8937-pmi8937-qrd-sku2.dtb \
 	apq8037-pmi8950-cdp.dtb \
 	apq8037-pmi8937-cdp.dtb \
 	apq8037-pmi8950-mtp.dtb \
 	apq8037-pmi8937-mtp.dtb
 
+dtb-$(CONFIG_ARCH_MSMGOLD) += msmgold-rumi.dtb \
+	msmgold-cdp.dtb \
+	msmgold-mtp.dtb \
+	msmgold-rcm.dtb \
+	apqgold-cdp.dtb \
+	apqgold-mtp.dtb
+
 dtb-$(CONFIG_ARCH_MSMTITANIUM) += msmtitanium-sim.dtb \
 	msmtitanium-rumi.dtb \
 	msmtitanium-cdp.dtb \
 	msmtitanium-mtp.dtb \
-	msmtitanium-rcm.dtb
+	msmtitanium-rcm.dtb \
+	apqtitanium-cdp.dtb \
+	apqtitanium-mtp.dtb
 
-dtb-$(CONFIG_ARCH_MDMFERMIUM) += mdmfermium-rumi.dtb \
-	mdmfermium-cdp.dtb \
-	mdmfermium-mtp.dtb \
-	mdmfermium-rcm.dtb
+dtb-$(CONFIG_ARCH_MDM9607) += mdm9607-rumi.dtb \
+	mdm9607-cdp.dtb \
+	mdm9607-mtp.dtb \
+	mdm9607-rcm.dtb
 
 dtb-$(CONFIG_ARCH_MSM8916) += msm8952-qrd-skum.dtb \
        msm8952-cdp.dtb \

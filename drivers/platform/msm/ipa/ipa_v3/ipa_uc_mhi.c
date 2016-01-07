@@ -600,6 +600,21 @@ int ipa3_uc_mhi_init(void (*ready_cb)(void), void (*wakeup_request_cb)(void))
 	return 0;
 }
 
+void ipa3_uc_mhi_cleanup(void)
+{
+	IPADBG("Enter\n");
+
+	if (!ipa3_uc_mhi_ctx) {
+		IPAERR("ipa3_uc_mhi_ctx is not initialized\n");
+		return;
+	}
+	ipa3_uc_register_handlers(IPA_HW_FEATURE_MHI, NULL);
+	kfree(ipa3_uc_mhi_ctx);
+	ipa3_uc_mhi_ctx = NULL;
+
+	IPADBG("Done\n");
+}
+
 int ipa3_uc_mhi_init_engine(struct ipa_mhi_msi_info *msi, u32 mmio_addr,
 	u32 host_ctrl_addr, u32 host_data_addr, u32 first_ch_idx,
 	u32 first_evt_idx)
@@ -614,7 +629,7 @@ int ipa3_uc_mhi_init_engine(struct ipa_mhi_msi_info *msi, u32 mmio_addr,
 		return -EFAULT;
 	}
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	res = ipa3_uc_update_hw_flags(0);
 	if (res) {
@@ -677,7 +692,7 @@ int ipa3_uc_mhi_init_engine(struct ipa_mhi_msi_info *msi, u32 mmio_addr,
 	res = 0;
 
 disable_clks:
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 	return res;
 
 }
@@ -700,7 +715,7 @@ int ipa3_uc_mhi_init_channel(int ipa_ep_idx, int channelHandle,
 		return -EINVAL;
 	}
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	memset(&uc_rsp, 0, sizeof(uc_rsp));
 	uc_rsp.params.state = IPA_HW_MHI_CHANNEL_STATE_RUN;
@@ -725,7 +740,7 @@ int ipa3_uc_mhi_init_channel(int ipa_ep_idx, int channelHandle,
 	res = 0;
 
 disable_clks:
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 	return res;
 }
 
@@ -740,8 +755,7 @@ int ipa3_uc_mhi_reset_channel(int channelHandle)
 		IPAERR("Not initialized\n");
 		return -EFAULT;
 	}
-
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	memset(&uc_rsp, 0, sizeof(uc_rsp));
 	uc_rsp.params.state = IPA_HW_MHI_CHANNEL_STATE_DISABLE;
@@ -763,7 +777,7 @@ int ipa3_uc_mhi_reset_channel(int channelHandle)
 	res = 0;
 
 disable_clks:
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 	return res;
 }
 
@@ -777,8 +791,7 @@ int ipa3_uc_mhi_suspend_channel(int channelHandle)
 		IPAERR("Not initialized\n");
 		return -EFAULT;
 	}
-
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	memset(&uc_rsp, 0, sizeof(uc_rsp));
 	uc_rsp.params.state = IPA_HW_MHI_CHANNEL_STATE_SUSPEND;
@@ -800,7 +813,7 @@ int ipa3_uc_mhi_suspend_channel(int channelHandle)
 	res = 0;
 
 disable_clks:
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 	return res;
 }
 
@@ -814,8 +827,7 @@ int ipa3_uc_mhi_resume_channel(int channelHandle, bool LPTransitionRejected)
 		IPAERR("Not initialized\n");
 		return -EFAULT;
 	}
-
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	memset(&uc_rsp, 0, sizeof(uc_rsp));
 	uc_rsp.params.state = IPA_HW_MHI_CHANNEL_STATE_RUN;
@@ -838,7 +850,7 @@ int ipa3_uc_mhi_resume_channel(int channelHandle, bool LPTransitionRejected)
 	res = 0;
 
 disable_clks:
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 	return res;
 }
 
@@ -851,8 +863,7 @@ int ipa3_uc_mhi_stop_event_update_channel(int channelHandle)
 		IPAERR("Not initialized\n");
 		return -EFAULT;
 	}
-
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	memset(&cmd, 0, sizeof(cmd));
 	cmd.params.channelHandle = channelHandle;
@@ -870,7 +881,7 @@ int ipa3_uc_mhi_stop_event_update_channel(int channelHandle)
 
 	res = 0;
 disable_clks:
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 	return res;
 }
 
@@ -888,7 +899,7 @@ int ipa3_uc_mhi_send_dl_ul_sync_info(union IpaHwMhiDlUlSyncCmdData_t cmd)
 	IPADBG("ulMsiEventThreshold=0x%x dlMsiEventThreshold=0x%x\n",
 		cmd.params.ulMsiEventThreshold, cmd.params.dlMsiEventThreshold);
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	res = ipa3_uc_send_cmd(cmd.raw32b,
 		IPA_CPU_2_HW_CMD_MHI_DL_UL_SYNC_INFO, 0, false, HZ);
@@ -899,7 +910,7 @@ int ipa3_uc_mhi_send_dl_ul_sync_info(union IpaHwMhiDlUlSyncCmdData_t cmd)
 
 	res = 0;
 disable_clks:
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 	return res;
 }
 

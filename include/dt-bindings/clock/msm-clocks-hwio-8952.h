@@ -19,6 +19,7 @@
 #define GPLL3_MODE			0x22000
 #define GPLL4_MODE			0x24000
 #define GPLL4_STATUS			0x24024
+#define GX_DOMAIN_MISC			0x5B00C
 #define SYS_MM_NOC_AXI_CBCR		0x3D008
 #define BIMC_GFX_CBCR			0x59034
 #define MSS_CFG_AHB_CBCR		0x49000
@@ -211,6 +212,7 @@
 #define SYSTEM_MM_NOC_CMD_RCGR		0x3D000
 #define USB_FS_BCR			0x3F000
 
+#define APCS_CLOCK_SLEEP_ENA_VOTE	0x45008
 #define BYTE1_CMD_RCGR			0x4D0B0
 #define ESC1_CMD_RCGR			0x4D0A8
 #define PCLK1_CMD_RCGR			0x4D0B8
@@ -386,8 +388,8 @@
 	clkname##_clk_src.c.fmax[VDD_DIG_##l4] = (f4);\
 	clkname##_clk_src.c.fmax[VDD_DIG_##l5] = (f5)
 
-#define OVERRIDE_FTABLE(clkname, ftable) \
-	clkname##_clk_src.freq_tbl = ftable##_8937
+#define OVERRIDE_FTABLE(clkname, ftable, name) \
+	clkname##_clk_src.freq_tbl = ftable##_##name
 
 enum vdd_dig_levels {
 	VDD_DIG_NONE,

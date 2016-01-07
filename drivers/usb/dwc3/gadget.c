@@ -2226,6 +2226,13 @@ static int dwc3_gadget_stop(struct usb_gadget *g,
 	return 0;
 }
 
+static int dwc3_gadget_restart_usb_session(struct usb_gadget *g)
+{
+	struct dwc3		*dwc = gadget_to_dwc(g);
+
+	return dwc3_notify_event(dwc, DWC3_CONTROLLER_RESTART_USB_SESSION);
+}
+
 static const struct usb_gadget_ops dwc3_gadget_ops = {
 	.get_frame		= dwc3_gadget_get_frame,
 	.wakeup			= dwc3_gadget_wakeup,
@@ -2236,6 +2243,7 @@ static const struct usb_gadget_ops dwc3_gadget_ops = {
 	.pullup			= dwc3_gadget_pullup,
 	.udc_start		= dwc3_gadget_start,
 	.udc_stop		= dwc3_gadget_stop,
+	.restart		= dwc3_gadget_restart_usb_session,
 };
 
 /* -------------------------------------------------------------------------- */
@@ -3501,8 +3509,10 @@ static irqreturn_t dwc3_check_event_buf(struct dwc3 *dwc, u32 buf)
 		return IRQ_NONE;
 
 	if (count > evt->length) {
-		dev_warn(dwc->dev, "%s: ev_count is huge: %d", __func__, count);
-		return IRQ_NONE;
+		dbg_event(0xFF, "HUGE_EVCNT", count);
+		evt->lpos = (evt->lpos + count) % DWC3_EVENT_BUFFERS_SIZE;
+		dwc3_writel(dwc->regs, DWC3_GEVNTCOUNT(buf), count);
+		return IRQ_HANDLED;
 	}
 
 	evt->count = count;

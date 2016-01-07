@@ -216,6 +216,9 @@
 #define AFVC_OVERRIDE_BIT			BIT(1)
 #define SYSOK_PIN_CONFIG_BIT			BIT(0)
 
+#define VERSION_REG				0x2E
+#define VERSION_MASK				BIT(1)
+
 /* Command registers */
 #define CMD_I2C_REG				0x30
 #define CMD_RELOAD_BIT				BIT(7)
@@ -383,8 +386,6 @@
 #define DEFAULT_BATT_TEMP			250
 #define SUSPEND_CURRENT_MA			2
 
-#define CHG_ITERM_70MA				0x1C
-#define CHG_ITERM_100MA				0x18
 #define CHG_ITERM_200MA				0x0
 #define CHG_ITERM_300MA				0x04
 #define CHG_ITERM_400MA				0x08
@@ -408,6 +409,19 @@ static char *pm_batt_supplied_to[] = {
 struct smb1351_regulator {
 	struct regulator_desc	rdesc;
 	struct regulator_dev	*rdev;
+};
+
+enum chip_version {
+	SMB_UNKNOWN = 0,
+	SMB1350,
+	SMB1351,
+	SMB_MAX_TYPE,
+};
+
+static const char *smb1351_version_str[SMB_MAX_TYPE] = {
+	[SMB_UNKNOWN] = "Unknown",
+	[SMB1350] = "SMB1350",
+	[SMB1351] = "SMB1351",
 };
 
 struct smb1351_charger {
@@ -452,6 +466,7 @@ struct smb1351_charger {
 	bool			usbin_ov;
 	bool			chg_remove_work_scheduled;
 	bool			force_hvdcp_2p0;
+	enum chip_version	version;
 
 	/* psy */
 	struct power_supply	*usb_psy;
@@ -503,17 +518,18 @@ struct irq_handler_info {
 
 /* USB input charge current */
 static int usb_chg_current[] = {
-	500, 700, 1000, 1100, 1200, 1300, 1500, 1600,
-	1700, 1800, 2000, 2200, 2500, 3000, 3500, 3940,
+	500, 685, 1000, 1100, 1200, 1300, 1500, 1600,
+	1700, 1800, 2000, 2200, 2500, 3000,
 };
 
 static int fast_chg_current[] = {
-	1000, 1200, 1400, 1600, 1800, 2000, 2400, 2600,
-	2800, 3000, 3400, 3600, 3800, 4000, 4500,
+	1000, 1200, 1400, 1600, 1800, 2000, 2200,
+	2400, 2600, 2800, 3000, 3400, 3600, 3800,
+	4000, 4640,
 };
 
 static int pre_chg_current[] = {
-	100, 120, 200, 300, 400, 500, 600, 700,
+	200, 300, 400, 500, 600, 700,
 };
 
 struct battery_status {
@@ -707,12 +723,7 @@ static int smb1351_fastchg_current_set(struct smb1351_charger *chip,
 		chip->fastchg_current_max_ma = pre_chg_current[i];
 		pr_debug("prechg setting %02x\n", i);
 
-		if (i == 0)
-			i = 0x7 << SMB1351_CHG_PRE_SHIFT;
-		else if (i == 1)
-			i = 0x6 << SMB1351_CHG_PRE_SHIFT;
-		else
-			i = (i - 2) << SMB1351_CHG_PRE_SHIFT;
+		i = i << SMB1351_CHG_PRE_SHIFT;
 
 		rc = smb1351_masked_write(chip, CHG_OTH_CURRENT_CTRL_REG,
 				PRECHG_CURRENT_MASK, i);
@@ -723,6 +734,13 @@ static int smb1351_fastchg_current_set(struct smb1351_charger *chip,
 		return smb1351_masked_write(chip, VARIOUS_FUNC_2_REG,
 				PRECHG_TO_FASTCHG_BIT, PRECHG_TO_FASTCHG_BIT);
 	} else {
+		if (chip->version == SMB_UNKNOWN)
+			return -EINVAL;
+
+		/* SMB1350 supports FCC upto 2600 mA */
+		if (chip->version == SMB1350 && fastchg_current > 2600)
+			fastchg_current = 2600;
+
 		/* set fastchg current */
 		for (i = ARRAY_SIZE(fast_chg_current) - 1; i >= 0; i--) {
 			if (fast_chg_current[i] <= fastchg_current)
@@ -771,11 +789,7 @@ static int smb1351_iterm_set(struct smb1351_charger *chip, int iterm_ma)
 	int rc;
 	u8 reg;
 
-	if (iterm_ma <= 70)
-		reg = CHG_ITERM_70MA;
-	else if (iterm_ma <= 100)
-		reg = CHG_ITERM_100MA;
-	else if (iterm_ma <= 200)
+	if (iterm_ma <= 200)
 		reg = CHG_ITERM_200MA;
 	else if (iterm_ma <= 300)
 		reg = CHG_ITERM_300MA;
@@ -887,6 +901,28 @@ static int smb1351_regulator_init(struct smb1351_charger *chip)
 	return rc;
 }
 
+static int smb_chip_get_version(struct smb1351_charger *chip)
+{
+	u8 ver;
+	int rc = 0;
+
+	if (chip->version == SMB_UNKNOWN) {
+		rc = smb1351_read_reg(chip, VERSION_REG, &ver);
+		if (rc) {
+			pr_err("Couldn't read version rc=%d\n", rc);
+			return rc;
+		}
+
+		/* If bit 1 is set, it is SMB1350 */
+		if (ver & VERSION_MASK)
+			chip->version = SMB1350;
+		else
+			chip->version = SMB1351;
+	}
+
+	return rc;
+}
+
 static int smb1351_hw_init(struct smb1351_charger *chip)
 {
 	int rc;
@@ -911,6 +947,12 @@ static int smb1351_hw_init(struct smb1351_charger *chip)
 	if (chip->chg_autonomous_mode) {
 		pr_debug("Charger configured for autonomous mode\n");
 		return 0;
+	}
+
+	rc = smb_chip_get_version(chip);
+	if (rc) {
+		pr_err("Couldn't get version rc = %d\n", rc);
+		return rc;
 	}
 
 	rc = smb1351_enable_volatile_writes(chip);
@@ -1403,6 +1445,12 @@ static int smb1351_parallel_set_chg_present(struct smb1351_charger *chip,
 		if (rc) {
 			pr_debug("Failed to detect smb1351-parallel-charger, may be absent\n");
 			return -ENODEV;
+		}
+
+		rc = smb_chip_get_version(chip);
+		if (rc) {
+			pr_err("Couldn't get version rc = %d\n", rc);
+			return rc;
 		}
 
 		rc = smb1351_enable_volatile_writes(chip);
@@ -2997,9 +3045,10 @@ static int smb1351_main_charger_probe(struct i2c_client *client,
 
 	dump_regs(chip);
 
-	pr_info("smb1351 successfully probed. charger=%d, batt=%d\n",
+	pr_info("smb1351 successfully probed. charger=%d, batt=%d version=%s\n",
 			chip->chg_present,
-			smb1351_get_prop_batt_present(chip));
+			smb1351_get_prop_batt_present(chip),
+			smb1351_version_str[chip->version]);
 	return 0;
 
 fail_smb1351_hw_init:

@@ -32,6 +32,9 @@
 #include <soc/qcom/subsystem_notif.h>
 #include "ipa_qmi_service.h"
 #include <linux/rmnet_ipa_fd_ioctl.h>
+#include <linux/ipa.h>
+
+#include "ipa_trace.h"
 
 #define WWAN_METADATA_SHFT 24
 #define WWAN_METADATA_MASK 0xFF000000
@@ -1152,10 +1155,13 @@ static void apps_ipa_packet_receive_notify(void *priv,
 	skb->dev = ipa3_netdevs[0];
 	skb->protocol = htons(ETH_P_MAP);
 
-	if (dev->stats.rx_packets % IPA_WWAN_RX_SOFTIRQ_THRESH == 0)
+	if (dev->stats.rx_packets % IPA_WWAN_RX_SOFTIRQ_THRESH == 0) {
+		trace_rmnet_ipa_netifni3(dev->stats.rx_packets);
 		result = netif_rx_ni(skb);
-	else
+	} else {
+		trace_rmnet_ipa_netifrx3(dev->stats.rx_packets);
 		result = netif_rx(skb);
+	}
 
 	if (result)	{
 		pr_err_ratelimited(DEV_NAME " %s:%d fail on netif_rx\n",
@@ -1835,16 +1841,39 @@ static int get_ipa_rmnet_dts_configuration(struct platform_device *pdev,
 }
 
 struct ipa3_rmnet_context ipa3_rmnet_ctx;
+static int ipa3_wwan_probe(struct platform_device *pdev);
+struct platform_device *m_pdev;
+
+static void ipa3_delayed_probe(struct work_struct *work)
+{
+	(void)ipa3_wwan_probe(m_pdev);
+}
+
+static DECLARE_WORK(ipa3_scheduled_probe, ipa3_delayed_probe);
+
+static void ipa3_ready_cb(void *user_data)
+{
+	struct platform_device *pdev = (struct platform_device *)(user_data);
+
+	m_pdev = pdev;
+
+	IPAWANDBG("IPA ready callback has been triggered!\n");
+
+	schedule_work(&ipa3_scheduled_probe);
+}
 
 /**
  * ipa3_wwan_probe() - Initialized the module and registers as a
  * network interface to the network stack
  *
+ * Note: In case IPA driver hasn't initialized already, the probe function
+ * will return immediately after registering a callback to be invoked when
+ * IPA driver initialization is complete.
+ *
  * Return codes:
  * 0: success
  * -ENOMEM: No memory available
  * -EFAULT: Internal error
- * -ENODEV: IPA driver not loaded
  */
 static int ipa3_wwan_probe(struct platform_device *pdev)
 {
@@ -1856,9 +1885,19 @@ static int ipa3_wwan_probe(struct platform_device *pdev)
 
 	pr_info("rmnet_ipa3 started initialization\n");
 
-	if (!ipa_is_ready()) {
-		IPAWANERR("IPA3 driver not loaded\n");
-		return -ENODEV;
+	if (!ipa3_is_ready()) {
+		IPAWANDBG("IPA driver not ready, registering callback\n");
+		ret = ipa_register_ipa_ready_cb(ipa3_ready_cb, (void *)pdev);
+
+		/*
+		 * If we received -EEXIST, IPA has initialized. So we need
+		 * to continue the probing process.
+		 */
+		if (ret != -EEXIST) {
+			if (ret)
+				IPAWANERR("IPA CB reg failed - %d\n", ret);
+			return ret;
+		}
 	}
 
 	ret = get_ipa_rmnet_dts_configuration(pdev, &ipa3_rmnet_res);
@@ -1870,7 +1909,7 @@ static int ipa3_wwan_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	/* initialize tx/rx enpoint setup */
+	/* initialize tx/rx endpoint setup */
 	memset(&apps_to_ipa_ep_cfg, 0, sizeof(struct ipa_sys_connect_params));
 	memset(&ipa_to_apps_ep_cfg, 0, sizeof(struct ipa_sys_connect_params));
 
@@ -2677,8 +2716,6 @@ void ipa3_q6_handshake_complete(bool ssr_bootup)
 		 * SSR recovery
 		 */
 		rmnet_ipa_get_network_stats_and_update();
-	} else {
-		ipa3_uc_load_notify();
 	}
 }
 

@@ -1291,7 +1291,7 @@ void mdss_mdp_handoff_cleanup_pipes(struct msm_fb_data_type *mfd,
 		pipe = &pipes[i];
 		if (pipe->is_handed_off) {
 			pr_debug("Unmapping handed off pipe %d\n", pipe->num);
-			list_add(&pipe->list, &mdp5_data->pipes_cleanup);
+			list_move(&pipe->list, &mdp5_data->pipes_cleanup);
 			mdss_mdp_mixer_pipe_unstage(pipe, pipe->mixer_left);
 			pipe->is_handed_off = false;
 		}
@@ -1318,7 +1318,6 @@ int mdss_mdp_overlay_start(struct msm_fb_data_type *mfd)
 		if (!mdp5_data->mdata->batfet)
 			mdss_mdp_batfet_ctrl(mdp5_data->mdata, true);
 		mdss_mdp_release_splash_pipe(mfd);
-		mdss_mdp_splash_cleanup(mfd, true);
 		return 0;
 	} else if (mfd->panel_info->cont_splash_enabled) {
 		mutex_lock(&mdp5_data->list_lock);
@@ -1893,9 +1892,7 @@ int mdss_mdp_overlay_kickoff(struct msm_fb_data_type *mfd,
 	struct mdss_mdp_ctl *ctl = mfd_to_ctl(mfd);
 	int ret = 0;
 	int sd_in_pipe = 0;
-	bool need_cleanup = false;
 	struct mdss_mdp_commit_cb commit_cb;
-	LIST_HEAD(destroy_pipes);
 
 	if (!ctl)
 		return -ENODEV;
@@ -1956,6 +1953,7 @@ int mdss_mdp_overlay_kickoff(struct msm_fb_data_type *mfd,
 
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
 
+	mdss_mdp_check_ctl_reset_status(ctl);
 	__vsync_set_vsync_handler(mfd);
 	__validate_and_set_roi(mfd, data);
 
@@ -1970,8 +1968,7 @@ int mdss_mdp_overlay_kickoff(struct msm_fb_data_type *mfd,
 		mdss_mdp_mixer_pipe_unstage(pipe, pipe->mixer_left);
 		mdss_mdp_mixer_pipe_unstage(pipe, pipe->mixer_right);
 		pipe->mixer_stage = MDSS_MDP_STAGE_UNUSED;
-		list_move(&pipe->list, &destroy_pipes);
-		need_cleanup = true;
+		list_move(&pipe->list, &mdp5_data->pipes_destroy);
 	}
 
 	ATRACE_BEGIN("sspp_programming");
@@ -1983,25 +1980,16 @@ int mdss_mdp_overlay_kickoff(struct msm_fb_data_type *mfd,
 
 	if (mfd->panel.type == WRITEBACK_PANEL) {
 		ATRACE_BEGIN("wb_kickoff");
-		if (!need_cleanup) {
-			commit_cb.commit_cb_fnc = mdss_mdp_commit_cb;
-			commit_cb.data = mfd;
-			ret = mdss_mdp_wfd_kickoff(mdp5_data->wfd, &commit_cb);
-		} else  {
-			ret = mdss_mdp_wfd_kickoff(mdp5_data->wfd, NULL);
-		}
+		commit_cb.commit_cb_fnc = mdss_mdp_commit_cb;
+		commit_cb.data = mfd;
+		ret = mdss_mdp_wfd_kickoff(mdp5_data->wfd, &commit_cb);
 		ATRACE_END("wb_kickoff");
 	} else {
 		ATRACE_BEGIN("display_commit");
-		if (!need_cleanup) {
-			commit_cb.commit_cb_fnc = mdss_mdp_commit_cb;
-			commit_cb.data = mfd;
-			ret = mdss_mdp_display_commit(mdp5_data->ctl, NULL,
-				&commit_cb);
-		} else  {
-			ret = mdss_mdp_display_commit(mdp5_data->ctl, NULL,
-				NULL);
-		}
+		commit_cb.commit_cb_fnc = mdss_mdp_commit_cb;
+		commit_cb.data = mfd;
+		ret = mdss_mdp_display_commit(mdp5_data->ctl, NULL,
+			&commit_cb);
 		ATRACE_END("display_commit");
 	}
 
@@ -2012,7 +2000,7 @@ int mdss_mdp_overlay_kickoff(struct msm_fb_data_type *mfd,
 	 */
 	mfd->validate_pending = false;
 
-	if ((!need_cleanup) && (!mdp5_data->kickoff_released))
+	if (!mdp5_data->kickoff_released)
 		mdss_mdp_ctl_notify(ctl, MDP_NOTIFY_FRAME_CTX_DONE);
 
 	if (IS_ERR_VALUE(ret))
@@ -2024,6 +2012,7 @@ int mdss_mdp_overlay_kickoff(struct msm_fb_data_type *mfd,
 	ATRACE_BEGIN("display_wait4comp");
 	ret = mdss_mdp_display_wait4comp(mdp5_data->ctl);
 	ATRACE_END("display_wait4comp");
+	mdss_mdp_splash_cleanup(mfd, true);
 
 	/*
 	 * Configure Timing Engine, if new fps was set.
@@ -2059,7 +2048,7 @@ int mdss_mdp_overlay_kickoff(struct msm_fb_data_type *mfd,
 	mdss_fb_update_notify_update(mfd);
 commit_fail:
 	ATRACE_BEGIN("overlay_cleanup");
-	mdss_mdp_overlay_cleanup(mfd, &destroy_pipes);
+	mdss_mdp_overlay_cleanup(mfd, &mdp5_data->pipes_destroy);
 	ATRACE_END("overlay_cleanup");
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
 	mdss_mdp_ctl_notify(ctl, MDP_NOTIFY_FRAME_FLUSHED);
@@ -2651,7 +2640,8 @@ int mdss_mdp_overlay_vsync_ctrl(struct msm_fb_data_type *mfd, int en)
 	if (!ctl->ops.add_vsync_handler || !ctl->ops.remove_vsync_handler)
 		return -EOPNOTSUPP;
 	if (!ctl->panel_data->panel_info.cont_splash_enabled
-			&& !mdss_mdp_ctl_is_power_on(ctl)) {
+		&& (!mdss_mdp_ctl_is_power_on(ctl) ||
+		mdss_panel_is_power_on_ulp(ctl->power_state))) {
 		pr_debug("fb%d vsync pending first update en=%d\n",
 				mfd->index, en);
 		return -EPERM;
@@ -2779,8 +2769,7 @@ static void mdss_mdp_dfps_update_params(struct mdss_panel_data *pdata,
 			pdata->panel_info.saved_fporch + add_h_pixels;
 		pdata->panel_info.mipi.frame_rate = new_fps;
 	} else {
-		/* in clock method we are not updating panel data here */
-		pdata->panel_info.new_fps = new_fps;
+		pdata->panel_info.mipi.frame_rate = new_fps;
 	}
 }
 
@@ -4704,6 +4693,11 @@ static int mdss_mdp_overlay_off(struct msm_fb_data_type *mfd)
 
 ctl_stop:
 	mutex_lock(&mdp5_data->ov_lock);
+	/* set the correct pipe_mapped before ctl_stop */
+	mdss_mdp_mixer_update_pipe_map(mdp5_data->ctl,
+			MDSS_MDP_MIXER_MUX_LEFT);
+	mdss_mdp_mixer_update_pipe_map(mdp5_data->ctl,
+			MDSS_MDP_MIXER_MUX_RIGHT);
 	rc = mdss_mdp_ctl_stop(mdp5_data->ctl, mfd->panel_power_state);
 	if (rc == 0) {
 		if (mdss_fb_is_power_off(mfd)) {
@@ -4749,16 +4743,19 @@ ctl_stop:
 	return rc;
 }
 
-static int __mdss_mdp_ctl_handoff(struct mdss_mdp_ctl *ctl,
-	struct mdss_data_type *mdata)
+static int __mdss_mdp_ctl_handoff(struct msm_fb_data_type *mfd,
+	struct mdss_mdp_ctl *ctl, struct mdss_data_type *mdata)
 {
 	int rc = 0;
 	int i, j;
 	u32 mixercfg;
 	struct mdss_mdp_pipe *pipe = NULL;
+	struct mdss_overlay_private *mdp5_data;
 
 	if (!ctl || !mdata)
 		return -EINVAL;
+
+	mdp5_data = mfd_to_mdp5_data(mfd);
 
 	for (i = 0; i < mdata->nmixers_intf; i++) {
 		mixercfg = mdss_mdp_ctl_read(ctl, MDSS_MDP_REG_CTL_LAYER(i));
@@ -4786,6 +4783,11 @@ static int __mdss_mdp_ctl_handoff(struct mdss_mdp_ctl *ctl,
 						pipe->num);
 					goto exit;
 				}
+
+				pipe->mfd = mfd;
+				mutex_lock(&mdp5_data->list_lock);
+				list_add(&pipe->list, &mdp5_data->pipes_used);
+				mutex_unlock(&mdp5_data->list_lock);
 
 				rc = mdss_mdp_mixer_handoff(ctl, i, pipe);
 				if (rc) {
@@ -4840,7 +4842,7 @@ static int mdss_mdp_overlay_handoff(struct msm_fb_data_type *mfd)
 	ctl->clk_rate = mdss_mdp_get_clk_rate(MDSS_CLK_MDP_CORE, false);
 	pr_debug("Set the ctl clock rate to %d Hz\n", ctl->clk_rate);
 
-	rc = __mdss_mdp_ctl_handoff(ctl, mdata);
+	rc = __mdss_mdp_ctl_handoff(mfd, ctl, mdata);
 	if (rc) {
 		pr_err("primary ctl handoff failed. rc=%d\n", rc);
 		goto error;
@@ -4853,7 +4855,7 @@ static int mdss_mdp_overlay_handoff(struct msm_fb_data_type *mfd)
 			rc = -EPERM;
 			goto error;
 		}
-		rc = __mdss_mdp_ctl_handoff(sctl, mdata);
+		rc = __mdss_mdp_ctl_handoff(mfd, sctl, mdata);
 		if (rc) {
 			pr_err("secondary ctl handoff failed. rc=%d\n", rc);
 			goto error;
@@ -5029,13 +5031,15 @@ static int mdss_mdp_update_panel_info(struct msm_fb_data_type *mfd,
 		mdss_mdp_ctl_destroy(mdp5_data->ctl);
 		mdp5_data->ctl = NULL;
 	} else {
-		if (is_panel_split(mfd) && mdp5_data->mdata->has_pingpong_split)
+		pdata = dev_get_platdata(&mfd->pdev->dev);
+
+		if (mdp5_data->mdata->has_pingpong_split &&
+			pdata->panel_info.use_pingpong_split)
 			mfd->split_mode = MDP_PINGPONG_SPLIT;
 		/*
 		 * Dynamic change so we need to reconfig instead of
 		 * destroying current ctrl sturcture.
 		 */
-		pdata = dev_get_platdata(&mfd->pdev->dev);
 		mdss_mdp_ctl_reconfig(ctl, pdata);
 
 		sctl = mdss_mdp_get_split_ctl(ctl);
@@ -5133,6 +5137,7 @@ int mdss_mdp_overlay_init(struct msm_fb_data_type *mfd)
 
 	INIT_LIST_HEAD(&mdp5_data->pipes_used);
 	INIT_LIST_HEAD(&mdp5_data->pipes_cleanup);
+	INIT_LIST_HEAD(&mdp5_data->pipes_destroy);
 	INIT_LIST_HEAD(&mdp5_data->bufs_pool);
 	INIT_LIST_HEAD(&mdp5_data->bufs_chunks);
 	INIT_LIST_HEAD(&mdp5_data->bufs_used);

@@ -41,14 +41,6 @@
 		status = "disabled";
 	};
 
-	gdsc_hlos1_vote_gpu_smmu: qcom,gdsc@17d024 {
-		compatible = "qcom,gdsc";
-		regulator-name = "gdsc_hlos1_vote_gpu_smmu";
-		reg = <0x17d024 0x4>;
-		qcom,no-status-check-on-disable;
-		status = "disabled";
-	};
-
 	gdsc_hlos1_vote_lpass_adsp: qcom,gdsc@17d034 {
 		compatible = "qcom,gdsc";
 		regulator-name = "gdsc_hlos1_vote_lpass_adsp";
@@ -69,7 +61,10 @@
 	gdsc_bimc_smmu: qcom,gdsc@c8ce020 {
 		compatible = "qcom,gdsc";
 		regulator-name = "gdsc_bimc_smmu";
-		reg = <0xc8ce020 0x4>;
+		reg = <0xc8ce020 0x4>,
+		      <0xc8ce024 0x4>;
+		reg-names = "base", "hw_ctrl_addr";
+		qcom,no-status-check-on-disable;
 		status = "disabled";
 	};
 
@@ -133,7 +128,10 @@
 	gdsc_gpu_cx: qcom,gdsc@5066004 {
 		compatible = "qcom,gdsc";
 		regulator-name = "gdsc_gpu_cx";
-		reg = <0x5066004 0x4>;
+		reg = <0x5066004 0x4>,
+		      <0x5066008 0x4>;
+		reg-names = "base", "hw_ctrl_addr";
+		qcom,no-status-check-on-disable;
 		status = "disabled";
 	};
 

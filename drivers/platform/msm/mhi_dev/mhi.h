@@ -479,7 +479,6 @@ struct mhi_dev {
 	struct mhi_dev_ch_ctx		*cmd_ctx_cache;
 	dma_addr_t			cmd_ctx_cache_dma_handle;
 	struct mhi_dev_ring		*ring;
-	int				mhi_irq;
 	struct mhi_dev_channel		*ch;
 
 	int				ctrl_int;
@@ -504,8 +503,10 @@ struct mhi_dev {
 	uint32_t			ev_ring_start;
 	uint32_t			ch_ring_start;
 
-	/* IPA Handles*/
+	/* IPA Handles */
 	u32				ipa_clnt_hndl[4];
+	struct workqueue_struct		*ring_init_wq;
+	struct work_struct		ring_init_cb_work;
 
 	/* EP PCIe registration */
 	struct ep_pcie_register_event	event_reg;
@@ -515,7 +516,6 @@ struct mhi_dev {
 	atomic_t			write_active;
 	atomic_t			is_suspended;
 	struct mutex			mhi_write_test;
-	u32				device_local_pa_base;
 	u32				mhi_ep_msi_num;
 	u32				mhi_version;
 	void				*dma_cache;

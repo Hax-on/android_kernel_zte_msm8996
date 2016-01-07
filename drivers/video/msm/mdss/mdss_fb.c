@@ -95,7 +95,7 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 			     int op_enable);
 static int mdss_fb_suspend_sub(struct msm_fb_data_type *mfd);
 static int mdss_fb_ioctl(struct fb_info *info, unsigned int cmd,
-			 unsigned long arg);
+			 unsigned long arg, struct file *file);
 static int mdss_fb_fbmem_ion_mmap(struct fb_info *info,
 		struct vm_area_struct *vma);
 static int mdss_fb_alloc_fb_ion_memory(struct msm_fb_data_type *mfd,
@@ -540,13 +540,14 @@ static ssize_t mdss_fb_get_panel_info(struct device *dev,
 			"pu_en=%d\nxstart=%d\nwalign=%d\nystart=%d\nhalign=%d\n"
 			"min_w=%d\nmin_h=%d\nroi_merge=%d\ndyn_fps_en=%d\n"
 			"min_fps=%d\nmax_fps=%d\npanel_name=%s\n"
-			"primary_panel=%d\n",
+			"primary_panel=%d\nis_pluggable=%d\ndisplay_id=%s\n",
 			pinfo->partial_update_enabled, pinfo->xstart_pix_align,
 			pinfo->width_pix_align, pinfo->ystart_pix_align,
 			pinfo->height_pix_align, pinfo->min_width,
 			pinfo->min_height, pinfo->partial_update_roi_merge,
 			pinfo->dynamic_fps, pinfo->min_fps, pinfo->max_fps,
-			pinfo->panel_name, pinfo->is_prim_panel);
+			pinfo->panel_name, pinfo->is_prim_panel,
+			pinfo->is_pluggable, pinfo->display_id);
 
 	return ret;
 }
@@ -661,7 +662,7 @@ static int mdss_fb_blanking_mode_switch(struct msm_fb_data_type *mfd, int mode)
 	unlock_fb_info(mfd->fbi);
 
 	mutex_lock(&mfd->bl_lock);
-	mfd->bl_updated = true;
+	mfd->allow_bl_update = true;
 	mdss_fb_set_backlight(mfd, bl_lvl);
 	mutex_unlock(&mfd->bl_lock);
 
@@ -938,9 +939,11 @@ static void mdss_fb_videomode_from_panel_timing(struct fb_videomode *videomode,
 		v_total = videomode->yres + videomode->lower_margin
 			+ videomode->upper_margin + videomode->vsync_len;
 		clk_rate = h_total * v_total * videomode->refresh;
-		videomode->pixclock = KHZ2PICOS(clk_rate / 1000);
+		videomode->pixclock =
+			KHZ2PICOS(clk_rate / 1000);
 	} else {
-		videomode->pixclock = KHZ2PICOS(pt->clk_rate / 1000);
+		videomode->pixclock =
+			KHZ2PICOS((unsigned long)pt->clk_rate / 1000);
 	}
 }
 
@@ -1023,6 +1026,11 @@ static int mdss_fb_probe(struct platform_device *pdev)
 	pdata = dev_get_platdata(&pdev->dev);
 	if (!pdata)
 		return -EPROBE_DEFER;
+
+	if (!mdp_instance) {
+		pr_err("mdss mdp resource not initialized yet\n");
+		return -ENODEV;
+	}
 
 	/*
 	 * alloc framebuffer info + par data
@@ -1471,7 +1479,7 @@ void mdss_fb_set_backlight(struct msm_fb_data_type *mfd, u32 bkl_lvl)
 	bool bl_notify_needed = false;
 
 	if ((((mdss_fb_is_power_off(mfd) && mfd->dcm_state != DCM_ENTER)
-		|| !mfd->bl_updated) && !IS_CALIB_MODE_BL(mfd)) ||
+		|| !mfd->allow_bl_update) && !IS_CALIB_MODE_BL(mfd)) ||
 		mfd->panel_info->cont_splash_enabled) {
 		mfd->unset_bl_level = bkl_lvl;
 		return;
@@ -1525,7 +1533,7 @@ void mdss_fb_update_backlight(struct msm_fb_data_type *mfd)
 	if (!mfd->unset_bl_level)
 		return;
 	mutex_lock(&mfd->bl_lock);
-	if (!mfd->bl_updated) {
+	if (!mfd->allow_bl_update) {
 		pdata = dev_get_platdata(&mfd->pdev->dev);
 		if ((pdata) && (pdata->set_backlight)) {
 			mfd->bl_level = mfd->unset_bl_level;
@@ -1538,7 +1546,7 @@ void mdss_fb_update_backlight(struct msm_fb_data_type *mfd)
 					NOTIFY_TYPE_BL_AD_ATTEN_UPDATE);
 			pdata->set_backlight(pdata, temp);
 			mfd->bl_level_scaled = mfd->unset_bl_level;
-			mfd->bl_updated = 1;
+			mfd->allow_bl_update = true;
 		}
 	}
 	mutex_unlock(&mfd->bl_lock);
@@ -1644,7 +1652,7 @@ static int mdss_fb_blank_blank(struct msm_fb_data_type *mfd,
 		mutex_lock(&mfd->bl_lock);
 		current_bl = mfd->bl_level;
 		mdss_fb_set_backlight(mfd, 0);
-		mfd->bl_updated = 0;
+		mfd->allow_bl_update = false;
 		mfd->unset_bl_level = current_bl;
 		mutex_unlock(&mfd->bl_lock);
 	}
@@ -1721,8 +1729,8 @@ static int mdss_fb_blank_unblank(struct msm_fb_data_type *mfd)
 	/* Reset the backlight only if the panel was off */
 	if (mdss_panel_is_power_off(cur_power_state)) {
 		mutex_lock(&mfd->bl_lock);
-		if (!mfd->bl_updated) {
-			mfd->bl_updated = 1;
+		if (!mfd->allow_bl_update) {
+			mfd->allow_bl_update = true;
 			/*
 			 * If in AD calibration mode then frameworks would not
 			 * be allowed to update backlight hence post unblank
@@ -1733,6 +1741,13 @@ static int mdss_fb_blank_unblank(struct msm_fb_data_type *mfd)
 				mdss_fb_set_backlight(mfd, mfd->unset_bl_level);
 			else
 				mdss_fb_set_backlight(mfd, mfd->calib_mode_bl);
+
+			/*
+			 * it blocks the backlight update between unblank and
+			 * first kickoff to avoid backlight turn on before black
+			 * frame is transferred to panel through unblank call.
+			 */
+			mfd->allow_bl_update = false;
 		}
 		mutex_unlock(&mfd->bl_lock);
 	}
@@ -2184,9 +2199,9 @@ static struct fb_ops mdss_fb_ops = {
 	.fb_set_par = mdss_fb_set_par,	/* set the video mode */
 	.fb_blank = mdss_fb_blank,	/* blank display */
 	.fb_pan_display = mdss_fb_pan_display,	/* pan display */
-	.fb_ioctl = mdss_fb_ioctl,	/* perform fb specific ioctl */
+	.fb_ioctl_v2 = mdss_fb_ioctl,	/* perform fb specific ioctl */
 #ifdef CONFIG_COMPAT
-	.fb_compat_ioctl = mdss_fb_compat_ioctl,
+	.fb_compat_ioctl_v2 = mdss_fb_compat_ioctl,
 #endif
 	.fb_mmap = mdss_fb_mmap,
 };
@@ -3073,11 +3088,10 @@ static int __ioctl_transition_dyn_mode_state(struct msm_fb_data_type *mfd,
 }
 
 int mdss_fb_atomic_commit(struct fb_info *info,
-	struct mdp_layer_commit  *commit)
+	struct mdp_layer_commit  *commit, struct file *file)
 {
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
 	struct mdp_layer_commit_v1 *commit_v1;
-	struct file *file = info->file;
 	bool wait_for_finish;
 	int ret = -EPERM;
 
@@ -3270,8 +3284,10 @@ void mdss_panelinfo_to_fb_var(struct mdss_panel_info *pinfo,
 	var->right_margin = pinfo->lcdc.h_front_porch;
 	var->left_margin = pinfo->lcdc.h_back_porch;
 	var->hsync_len = pinfo->lcdc.h_pulse_width;
-	var->pixclock = KHZ2PICOS(pinfo->clk_rate / 1000);
 
+	if (pinfo->clk_rate)
+		var->pixclock = KHZ2PICOS((unsigned long int)
+			pinfo->clk_rate/1000);
 	if (pinfo->physical_width)
 		var->width = pinfo->physical_width;
 	if (pinfo->physical_height)
@@ -4028,7 +4044,7 @@ static int mdss_fb_display_commit(struct fb_info *info,
 }
 
 static int mdss_fb_atomic_commit_ioctl(struct fb_info *info,
-						unsigned long *argp)
+	unsigned long *argp, struct file *file)
 {
 	int ret, i = 0, j = 0, rc;
 	struct mdp_layer_commit  commit;
@@ -4130,7 +4146,7 @@ static int mdss_fb_atomic_commit_ioctl(struct fb_info *info,
 		}
 	}
 
-	ret = mdss_fb_atomic_commit(info, &commit);
+	ret = mdss_fb_atomic_commit(info, &commit, file);
 	if (ret)
 		pr_err("atomic commit failed ret:%d\n", ret);
 
@@ -4297,7 +4313,7 @@ static int __ioctl_wait_idle(struct msm_fb_data_type *mfd, u32 cmd)
  * by compat ioctl or regular ioctl to handle the supported commands.
  */
 int mdss_fb_do_ioctl(struct fb_info *info, unsigned int cmd,
-			 unsigned long arg)
+			 unsigned long arg, struct file *file)
 {
 	struct msm_fb_data_type *mfd;
 	void __user *argp = (void __user *)arg;
@@ -4379,7 +4395,7 @@ int mdss_fb_do_ioctl(struct fb_info *info, unsigned int cmd,
 		ret = mdss_fb_mode_switch(mfd, dsi_mode);
 		break;
 	case MSMFB_ATOMIC_COMMIT:
-		ret = mdss_fb_atomic_commit_ioctl(info, argp);
+		ret = mdss_fb_atomic_commit_ioctl(info, argp, file);
 		break;
 
 	case MSMFB_ASYNC_POSITION_UPDATE:
@@ -4403,12 +4419,12 @@ exit:
 }
 
 static int mdss_fb_ioctl(struct fb_info *info, unsigned int cmd,
-			 unsigned long arg)
+			 unsigned long arg, struct file *file)
 {
 	if (!info || !info->par)
 		return -EINVAL;
 
-	return mdss_fb_do_ioctl(info, cmd, arg);
+	return mdss_fb_do_ioctl(info, cmd, arg, file);
 }
 
 struct fb_info *msm_fb_get_writeback_fb(void)
@@ -4452,7 +4468,7 @@ int mdss_register_panel(struct platform_device *pdev,
 	struct mdss_panel_data *pdata)
 {
 	struct platform_device *fb_pdev, *mdss_pdev;
-	struct device_node *node;
+	struct device_node *node = NULL;
 	int rc = 0;
 	bool master_panel = true;
 
@@ -4466,11 +4482,17 @@ int mdss_register_panel(struct platform_device *pdev,
 		return -EPROBE_DEFER;
 	}
 
-	node = of_parse_phandle(pdev->dev.of_node, "qcom,mdss-fb-map", 0);
+	if (pdata->get_fb_node)
+		node = pdata->get_fb_node(pdev);
+
 	if (!node) {
-		pr_err("Unable to find fb node for device: %s\n",
-				pdev->name);
-		return -ENODEV;
+		node = of_parse_phandle(pdev->dev.of_node,
+			"qcom,mdss-fb-map", 0);
+		if (!node) {
+			pr_err("Unable to find fb node for device: %s\n",
+					pdev->name);
+			return -ENODEV;
+		}
 	}
 	mdss_pdev = of_find_device_by_node(node->parent);
 	if (!mdss_pdev) {

@@ -42,6 +42,7 @@
 
 /* 8996 */
 #define DATALANE_OFFSET_FROM_BASE_8996	0x100
+#define DSIPHY_CMN_PLL_CNTRL		0x0048
 #define DATALANE_SIZE_8996			0x80
 
 #define DSIPHY_CMN_GLBL_TEST_CTRL		0x0018
@@ -50,6 +51,365 @@
 #define DSIPHY_CMN_LDO_CNTRL			0x004c
 #define DSIPHY_PLL_CLKBUFLR_EN			0x041c
 #define DSIPHY_PLL_PLL_BANDGAP			0x0508
+
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL0		0x214
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL1		0x218
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL2		0x21C
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL3		0x220
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL4		0x224
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL5		0x228
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL6		0x22C
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL7		0x230
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL8		0x234
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL9		0x238
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL10		0x23C
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL11		0x240
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL12		0x244
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL13		0x248
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL14		0x24C
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL15		0x250
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL16		0x254
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL17		0x258
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL18		0x25C
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL19		0x260
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL19		0x260
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL20		0x264
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL21		0x268
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL22		0x26C
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL23		0x270
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL24		0x274
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL25		0x278
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL26		0x27C
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL27		0x280
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL28		0x284
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL29		0x288
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL30		0x28C
+#define DSI_DYNAMIC_REFRESH_PLL_CTRL31		0x290
+#define DSI_DYNAMIC_REFRESH_PLL_UPPER_ADDR	0x294
+#define DSI_DYNAMIC_REFRESH_PLL_UPPER_ADDR2	0x298
+
+#define DSIPHY_DLN0_CFG1		0x0104
+#define DSIPHY_DLN0_TIMING_CTRL_4	0x0118
+#define DSIPHY_DLN0_TIMING_CTRL_5	0x011C
+#define DSIPHY_DLN0_TIMING_CTRL_6	0x0120
+#define DSIPHY_DLN0_TIMING_CTRL_7	0x0124
+#define DSIPHY_DLN0_TIMING_CTRL_8	0x0128
+
+#define DSIPHY_DLN1_CFG1		0x0184
+#define DSIPHY_DLN1_TIMING_CTRL_4	0x0198
+#define DSIPHY_DLN1_TIMING_CTRL_5	0x019C
+#define DSIPHY_DLN1_TIMING_CTRL_6	0x01A0
+#define DSIPHY_DLN1_TIMING_CTRL_7	0x01A4
+#define DSIPHY_DLN1_TIMING_CTRL_8	0x01A8
+
+#define DSIPHY_DLN2_CFG1		0x0204
+#define DSIPHY_DLN2_TIMING_CTRL_4	0x0218
+#define DSIPHY_DLN2_TIMING_CTRL_5	0x021C
+#define DSIPHY_DLN2_TIMING_CTRL_6	0x0220
+#define DSIPHY_DLN2_TIMING_CTRL_7	0x0224
+#define DSIPHY_DLN2_TIMING_CTRL_8	0x0228
+
+#define DSIPHY_DLN3_CFG1		0x0284
+#define DSIPHY_DLN3_TIMING_CTRL_4	0x0298
+#define DSIPHY_DLN3_TIMING_CTRL_5	0x029C
+#define DSIPHY_DLN3_TIMING_CTRL_6	0x02A0
+#define DSIPHY_DLN3_TIMING_CTRL_7	0x02A4
+#define DSIPHY_DLN3_TIMING_CTRL_8	0x02A8
+
+#define DSIPHY_CKLN_CFG1		0x0304
+#define DSIPHY_CKLN_TIMING_CTRL_4	0x0318
+#define DSIPHY_CKLN_TIMING_CTRL_5	0x031C
+#define DSIPHY_CKLN_TIMING_CTRL_6	0x0320
+#define DSIPHY_CKLN_TIMING_CTRL_7	0x0324
+#define DSIPHY_CKLN_TIMING_CTRL_8	0x0328
+
+#define DSIPHY_PLL_RESETSM_CNTRL5	0x043c
+
+#define PLL_CALC_DATA(addr0, addr1, data0, data1)      \
+	(((data1) << 24) | ((((addr1)/4) & 0xFF) << 16) | \
+	 ((data0) << 8) | (((addr0)/4) & 0xFF))
+
+#define MDSS_DYN_REF_REG_W(base, offset, addr0, addr1, data0, data1)   \
+	writel_relaxed(PLL_CALC_DATA(addr0, addr1, data0, data1), \
+			(base) + (offset))
+
+void mdss_dsi_dfps_config_8996(struct mdss_dsi_ctrl_pdata *ctrl)
+{
+	struct mdss_panel_data *pdata;
+	struct mdss_panel_info *pinfo;
+	struct mdss_dsi_phy_ctrl *pd;
+	int glbl_tst_cntrl =
+		MIPI_INP(ctrl->phy_io.base + DSIPHY_CMN_GLBL_TEST_CTRL);
+
+	pdata = &ctrl->panel_data;
+	if (!pdata) {
+		pr_err("%s: Invalid panel data\n", __func__);
+		return;
+	}
+	pinfo = &pdata->panel_info;
+	pd = &(((ctrl->panel_data).panel_info.mipi).dsi_phy_db);
+
+	if (mdss_dsi_is_ctrl_clk_slave(ctrl)) {
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL0,
+				DSIPHY_DLN0_CFG1, DSIPHY_DLN1_CFG1,
+				0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL1,
+				DSIPHY_DLN2_CFG1, DSIPHY_DLN3_CFG1,
+				0x0, 0x0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL2,
+				DSIPHY_CKLN_CFG1, DSIPHY_DLN0_TIMING_CTRL_4,
+				0x0, pd->timing_8996[0]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL3,
+				DSIPHY_DLN1_TIMING_CTRL_4,
+				DSIPHY_DLN2_TIMING_CTRL_4,
+				pd->timing_8996[8],
+				pd->timing_8996[16]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL4,
+				DSIPHY_DLN3_TIMING_CTRL_4,
+				DSIPHY_CKLN_TIMING_CTRL_4,
+				pd->timing_8996[24],
+				pd->timing_8996[32]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL5,
+				DSIPHY_DLN0_TIMING_CTRL_5,
+				DSIPHY_DLN1_TIMING_CTRL_5,
+				pd->timing_8996[1],
+				pd->timing_8996[9]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL6,
+				DSIPHY_DLN2_TIMING_CTRL_5,
+				DSIPHY_DLN3_TIMING_CTRL_5,
+				pd->timing_8996[17],
+				pd->timing_8996[25]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL7,
+				DSIPHY_CKLN_TIMING_CTRL_5,
+				DSIPHY_DLN0_TIMING_CTRL_6,
+				pd->timing_8996[33],
+				pd->timing_8996[2]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL8,
+				DSIPHY_DLN1_TIMING_CTRL_6,
+				DSIPHY_DLN2_TIMING_CTRL_6,
+				pd->timing_8996[10],
+				pd->timing_8996[18]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL9,
+				DSIPHY_DLN3_TIMING_CTRL_6,
+				DSIPHY_CKLN_TIMING_CTRL_6,
+				pd->timing_8996[26],
+				pd->timing_8996[34]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL10,
+				DSIPHY_DLN0_TIMING_CTRL_7,
+				DSIPHY_DLN1_TIMING_CTRL_7,
+				pd->timing_8996[3],
+				pd->timing_8996[11]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL11,
+				DSIPHY_DLN2_TIMING_CTRL_7,
+				DSIPHY_DLN3_TIMING_CTRL_7,
+				pd->timing_8996[19],
+				pd->timing_8996[27]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL12,
+				DSIPHY_CKLN_TIMING_CTRL_7,
+				DSIPHY_DLN0_TIMING_CTRL_8,
+				pd->timing_8996[35],
+				pd->timing_8996[4]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL13,
+				DSIPHY_DLN1_TIMING_CTRL_8,
+				DSIPHY_DLN2_TIMING_CTRL_8,
+				pd->timing_8996[12],
+				pd->timing_8996[20]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL14,
+				DSIPHY_DLN3_TIMING_CTRL_8,
+				DSIPHY_CKLN_TIMING_CTRL_8,
+				pd->timing_8996[28],
+				pd->timing_8996[36]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL15,
+				0x0110, 0x0110,	0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL16,
+				0x0110, 0x0110,	0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL17,
+				0x0110, 0x0110, 0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL18,
+				0x0110, 0x0110,	0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL19,
+				0x0110, 0x0110,	0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL20,
+				0x110, 0x110, 0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL21,
+				0x110, 0x110, 0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL22,
+				0x110, 0x110, 0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL23,
+				0x110, 0x110, 0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL24,
+				0x110, 0x110, 0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL25,
+				0x110, 0x110, 0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL26,
+				0x110, 0x110, 0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL27,
+				0x110, 0x110, 0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL28,
+				0x110, 0x110, 0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL29,
+				0x110, 0x110, 0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL30,
+				0x110, 0x110, 0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL31,
+				0x110, 0x110, 0, 0);
+		MIPI_OUTP(ctrl->ctrl_base +
+				DSI_DYNAMIC_REFRESH_PLL_UPPER_ADDR, 0x0);
+		MIPI_OUTP(ctrl->ctrl_base +
+				DSI_DYNAMIC_REFRESH_PLL_UPPER_ADDR2, 0x0);
+	} else {
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL0,
+				DSIPHY_CMN_GLBL_TEST_CTRL,
+				DSIPHY_PLL_PLL_BANDGAP,
+				glbl_tst_cntrl | BIT(1), 0x1);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL1,
+				DSIPHY_PLL_RESETSM_CNTRL5,
+				DSIPHY_PLL_PLL_BANDGAP,
+				0x0D, 0x03);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL2,
+				DSIPHY_PLL_RESETSM_CNTRL5,
+				DSIPHY_CMN_PLL_CNTRL,
+				0x1D, 0x00);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL3,
+				DSIPHY_CMN_CTRL_1, DSIPHY_DLN0_CFG1,
+				0x20, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL4,
+				DSIPHY_DLN1_CFG1, DSIPHY_DLN2_CFG1,
+				0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL5,
+				DSIPHY_DLN3_CFG1, DSIPHY_CKLN_CFG1,
+				0, 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL6,
+				DSIPHY_DLN0_TIMING_CTRL_4,
+				DSIPHY_DLN1_TIMING_CTRL_4,
+				pd->timing_8996[0],
+				pd->timing_8996[8]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL7,
+				DSIPHY_DLN2_TIMING_CTRL_4,
+				DSIPHY_DLN3_TIMING_CTRL_4,
+				pd->timing_8996[16],
+				pd->timing_8996[24]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL8,
+				DSIPHY_CKLN_TIMING_CTRL_4,
+				DSIPHY_DLN0_TIMING_CTRL_5,
+				pd->timing_8996[32],
+				pd->timing_8996[1]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL9,
+				DSIPHY_DLN1_TIMING_CTRL_5,
+				DSIPHY_DLN2_TIMING_CTRL_5,
+				pd->timing_8996[9],
+				pd->timing_8996[17]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL10,
+				DSIPHY_DLN3_TIMING_CTRL_5,
+				DSIPHY_CKLN_TIMING_CTRL_5,
+				pd->timing_8996[25],
+				pd->timing_8996[33]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL11,
+				DSIPHY_DLN0_TIMING_CTRL_6,
+				DSIPHY_DLN1_TIMING_CTRL_6,
+				pd->timing_8996[2],
+				pd->timing_8996[10]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL12,
+				DSIPHY_DLN2_TIMING_CTRL_6,
+				DSIPHY_DLN3_TIMING_CTRL_6,
+				pd->timing_8996[18],
+				pd->timing_8996[26]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL13,
+				DSIPHY_CKLN_TIMING_CTRL_6,
+				DSIPHY_DLN0_TIMING_CTRL_7,
+				pd->timing_8996[34],
+				pd->timing_8996[3]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL14,
+				DSIPHY_DLN1_TIMING_CTRL_7,
+				DSIPHY_DLN2_TIMING_CTRL_7,
+				pd->timing_8996[11],
+				pd->timing_8996[19]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL15,
+				DSIPHY_DLN3_TIMING_CTRL_7,
+				DSIPHY_CKLN_TIMING_CTRL_7,
+				pd->timing_8996[27],
+				pd->timing_8996[35]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL16,
+				DSIPHY_DLN0_TIMING_CTRL_8,
+				DSIPHY_DLN1_TIMING_CTRL_8,
+				pd->timing_8996[4],
+				pd->timing_8996[12]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL17,
+				DSIPHY_DLN2_TIMING_CTRL_8,
+				DSIPHY_DLN3_TIMING_CTRL_8,
+				pd->timing_8996[20],
+				pd->timing_8996[28]);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL18,
+				DSIPHY_CKLN_TIMING_CTRL_8,
+				DSIPHY_CMN_CTRL_1,
+				pd->timing_8996[36], 0);
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL30,
+				DSIPHY_CMN_GLBL_TEST_CTRL,
+				DSIPHY_CMN_GLBL_TEST_CTRL,
+				((glbl_tst_cntrl) & (~BIT(2))),
+				((glbl_tst_cntrl) & (~BIT(2))));
+		MDSS_DYN_REF_REG_W(ctrl->ctrl_base,
+				DSI_DYNAMIC_REFRESH_PLL_CTRL31,
+				DSIPHY_CMN_GLBL_TEST_CTRL,
+				DSIPHY_CMN_GLBL_TEST_CTRL,
+				((glbl_tst_cntrl) & (~BIT(2))),
+				((glbl_tst_cntrl) & (~BIT(2))));
+	}
+
+	wmb(); /* make sure phy timings are updated*/
+}
 
 static void mdss_dsi_ctrl_phy_reset(struct mdss_dsi_ctrl_pdata *ctrl)
 {
@@ -81,7 +441,9 @@ void mdss_dsi_phy_sw_reset(struct mdss_dsi_ctrl_pdata *ctrl)
 	}
 
 	if (IS_MDSS_MAJOR_MINOR_SAME(ctrl->shared_data->hw_rev,
-		MDSS_DSI_HW_REV_104)) {
+		MDSS_DSI_HW_REV_104) &&
+		(MDSS_GET_STEP(ctrl->shared_data->hw_rev) !=
+		MDSS_DSI_HW_REV_STEP_2)) {
 		if (mdss_dsi_is_ctrl_clk_master(ctrl))
 			sctrl = mdss_dsi_get_ctrl_clk_slave();
 		else
@@ -119,7 +481,9 @@ static void mdss_dsi_phy_regulator_disable(struct mdss_dsi_ctrl_pdata *ctrl)
 	}
 
 	if (IS_MDSS_MAJOR_MINOR_SAME(ctrl->shared_data->hw_rev,
-		MDSS_DSI_HW_REV_104))
+		MDSS_DSI_HW_REV_104) &&
+		(MDSS_GET_STEP(ctrl->shared_data->hw_rev) !=
+		MDSS_DSI_HW_REV_STEP_2))
 		return;
 
 	MIPI_OUTP(ctrl->phy_regulator_io.base + 0x018, 0x000);
@@ -133,7 +497,9 @@ static void mdss_dsi_phy_shutdown(struct mdss_dsi_ctrl_pdata *ctrl)
 	}
 
 	if (IS_MDSS_MAJOR_MINOR_SAME(ctrl->shared_data->hw_rev,
-		MDSS_DSI_HW_REV_104)) {
+		MDSS_DSI_HW_REV_104) &&
+		(MDSS_GET_STEP(ctrl->shared_data->hw_rev) !=
+		MDSS_DSI_HW_REV_STEP_2)) {
 		MIPI_OUTP(ctrl->phy_io.base + DSIPHY_PLL_CLKBUFLR_EN, 0);
 		MIPI_OUTP(ctrl->phy_io.base + DSIPHY_CMN_GLBL_TEST_CTRL, 0);
 		MIPI_OUTP(ctrl->phy_io.base + DSIPHY_CMN_CTRL_0, 0);
@@ -159,7 +525,9 @@ void mdss_dsi_lp_cd_rx(struct mdss_dsi_ctrl_pdata *ctrl)
 	}
 
 	if (IS_MDSS_MAJOR_MINOR_SAME(ctrl->shared_data->hw_rev,
-		MDSS_DSI_HW_REV_104))
+		MDSS_DSI_HW_REV_104) &&
+		(MDSS_GET_STEP(ctrl->shared_data->hw_rev) !=
+		MDSS_DSI_HW_REV_STEP_2))
 		return;
 
 	pd = &(((ctrl->panel_data).panel_info.mipi).dsi_phy_db);
@@ -199,7 +567,10 @@ static void mdss_dsi_28nm_phy_regulator_enable(
 		MIPI_OUTP((ctrl_pdata->phy_regulator_io.base)
 				+ 0x10, pd->regulator[4]);
 		/* LDO ctrl */
-		if (MIPI_INP(ctrl_pdata->ctrl_base) == MDSS_DSI_HW_REV_103_1)
+		if ((ctrl_pdata->shared_data->hw_rev ==
+			MDSS_DSI_HW_REV_103_1)
+			|| (ctrl_pdata->shared_data->hw_rev ==
+			MDSS_DSI_HW_REV_104_2))
 			MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x1dc, 0x05);
 		else
 			MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x1dc, 0x0d);
@@ -245,7 +616,7 @@ static void mdss_dsi_28nm_phy_config(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 	pd = &(((ctrl_pdata->panel_data).panel_info.mipi).dsi_phy_db);
 
 	/* Strength ctrl 0 for 28nm PHY*/
-	if ((ctrl_pdata->shared_data->hw_rev <= MDSS_DSI_HW_REV_103_1) &&
+	if ((ctrl_pdata->shared_data->hw_rev <= MDSS_DSI_HW_REV_104_2) &&
 		(ctrl_pdata->shared_data->hw_rev != MDSS_DSI_HW_REV_103)) {
 		MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x0170, 0x5b);
 		MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x0184, pd->strength[0]);
@@ -278,11 +649,16 @@ static void mdss_dsi_28nm_phy_config(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 	wmb();
 
 	/* DSI_0_PHY_DSIPHY_GLBL_TEST_CTRL */
-	if (((ctrl_pdata->panel_data).panel_info.pdest == DISPLAY_1) ||
-		(ctrl_pdata->shared_data->hw_rev == MDSS_DSI_HW_REV_103_1))
+	if (!mdss_dsi_is_hw_config_split(ctrl_pdata->shared_data)) {
 		MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x01d4, 0x01);
-	else
-		MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x01d4, 0x00);
+	} else {
+		if (((ctrl_pdata->panel_data).panel_info.pdest == DISPLAY_1) ||
+		(ctrl_pdata->shared_data->hw_rev == MDSS_DSI_HW_REV_103_1))
+			MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x01d4, 0x01);
+		else
+			MIPI_OUTP((ctrl_pdata->phy_io.base) + 0x01d4, 0x00);
+	}
+	/* ensure DSIPHY_GLBL_TEST_CTRL is set */
 	wmb();
 
 	/* MMSS_DSI_0_PHY_DSIPHY_CTRL_0 */
@@ -994,6 +1370,15 @@ error:
 	return rc;
 }
 
+bool is_diff_frame_rate(struct mdss_panel_info *panel_info,
+	u32 frame_rate)
+{
+	if (panel_info->dynamic_fps && panel_info->current_fps)
+		return (frame_rate != panel_info->current_fps);
+	else
+		return (frame_rate != panel_info->mipi.frame_rate);
+}
+
 int mdss_dsi_clk_div_config(struct mdss_panel_info *panel_info,
 			    int frame_rate)
 {
@@ -1032,9 +1417,8 @@ int mdss_dsi_clk_div_config(struct mdss_panel_info *panel_info,
 	h_period = mdss_panel_get_htotal(panel_info, true);
 	v_period = mdss_panel_get_vtotal(panel_info);
 
-	if (ctrl_pdata->refresh_clk_rate || (frame_rate !=
-	     panel_info->mipi.frame_rate) ||
-	    (!panel_info->clk_rate)) {
+	if (ctrl_pdata->refresh_clk_rate || is_diff_frame_rate(panel_info,
+			frame_rate) || (!panel_info->clk_rate)) {
 		if (lanes > 0) {
 			panel_info->clk_rate = h_period * v_period * frame_rate
 				* bpp * 8;
@@ -1151,9 +1535,9 @@ static int mdss_dsi_ulps_config(struct mdss_dsi_ctrl_pdata *ctrl,
 		/*
 		 * Clear out any phy errors prior to exiting ULPS
 		 * This fixes certain instances where phy does not exit
-		 * ULPS cleanly.
+		 * ULPS cleanly. Also, do not print error during such cases.
 		 */
-		mdss_dsi_dln0_phy_err(ctrl);
+		mdss_dsi_dln0_phy_err(ctrl, false);
 
 		/*
 		 * ULPS Exit Request
@@ -1275,7 +1659,9 @@ static int mdss_dsi_clamp_ctrl(struct mdss_dsi_ctrl_pdata *ctrl, int enable)
 		 * out of power collapse
 		 */
 		if (IS_MDSS_MAJOR_MINOR_SAME(ctrl->shared_data->hw_rev,
-			MDSS_DSI_HW_REV_104)) {
+			MDSS_DSI_HW_REV_104) &&
+			(MDSS_GET_STEP(ctrl->shared_data->hw_rev) !=
+			MDSS_DSI_HW_REV_STEP_2)) {
 
 			regval = MIPI_INP(ctrl->mmss_misc_io.base +
 				clamp_reg_off);
@@ -1290,7 +1676,9 @@ static int mdss_dsi_clamp_ctrl(struct mdss_dsi_ctrl_pdata *ctrl, int enable)
 		ctrl->mmss_clamp = true;
 	} else if (!enable && ctrl->mmss_clamp) {
 		if (IS_MDSS_MAJOR_MINOR_SAME(ctrl->shared_data->hw_rev,
-			MDSS_DSI_HW_REV_104)) {
+			MDSS_DSI_HW_REV_104) &&
+			(MDSS_GET_STEP(ctrl->shared_data->hw_rev) !=
+			MDSS_DSI_HW_REV_STEP_2)) {
 
 			regval = MIPI_INP(ctrl->mmss_misc_io.base +
 				clamp_reg_off);
@@ -1454,8 +1842,7 @@ int mdss_dsi_pre_clkoff_cb(void *priv,
 		 * However, when blanking the panel, we should enter ULPS
 		 * only if ULPS during suspend feature is enabled.
 		 */
-		if (pdata->panel_info.blank_state ==
-			MDSS_PANEL_BLANK_BLANK) {
+		if (!(ctrl->ctrl_state & CTRL_STATE_DSI_ACTIVE)) {
 			if (pdata->panel_info.ulps_suspend_enabled)
 				mdss_dsi_ulps_config(ctrl, 1);
 		} else if (mdss_dsi_ulps_feature_enabled(pdata)) {
@@ -1473,7 +1860,7 @@ int mdss_dsi_pre_clkoff_cb(void *priv,
 		 * Enable DSI clamps only if entering idle power collapse or
 		 * when ULPS during suspend is enabled.
 		 */
-		if ((pdata->panel_info.blank_state != MDSS_PANEL_BLANK_BLANK) ||
+		if ((ctrl->ctrl_state & CTRL_STATE_DSI_ACTIVE) ||
 			pdata->panel_info.ulps_suspend_enabled) {
 			rc = mdss_dsi_clamp_ctrl(ctrl, 1);
 			if (rc)
@@ -1575,8 +1962,7 @@ int mdss_dsi_post_clkoff_cb(void *priv,
 
 		for (i = DSI_MAX_PM - 1; i >= DSI_CORE_PM; i--) {
 			if ((i != DSI_CORE_PM) &&
-			    (pdata->panel_info.blank_state !=
-			     MDSS_PANEL_BLANK_BLANK))
+			    (ctrl->ctrl_state & CTRL_STATE_DSI_ACTIVE))
 				continue;
 			rc = msm_dss_enable_vreg(
 				sdata->power_data[i].vreg_config,
@@ -1625,8 +2011,7 @@ int mdss_dsi_pre_clkon_cb(void *priv,
 		pr_debug("%s: Enable DSI core power\n", __func__);
 		for (i = DSI_CORE_PM; i < DSI_MAX_PM; i++) {
 			if ((i != DSI_CORE_PM) &&
-			    (pdata->panel_info.blank_state !=
-				MDSS_PANEL_BLANK_BLANK) &&
+			    (ctrl->ctrl_state & CTRL_STATE_DSI_ACTIVE) &&
 				!pdata->panel_info.cont_splash_enabled)
 				continue;
 			rc = msm_dss_enable_vreg(

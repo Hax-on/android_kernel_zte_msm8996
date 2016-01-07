@@ -371,6 +371,7 @@ struct mdss_mdp_ctl {
 
 	u64 last_input_time;
 	int pending_mode_switch;
+	u16 frame_rate;
 };
 
 struct mdss_mdp_mixer {
@@ -452,6 +453,8 @@ struct mdss_mdp_img_data {
 	unsigned long len;
 	u32 offset;
 	u32 flags;
+	u32 dir;
+	u32 domain;
 	bool mapped;
 	bool skip_detach;
 	struct fd srcp_f;
@@ -662,6 +665,7 @@ struct mdss_overlay_private {
 	struct mutex list_lock;
 	struct list_head pipes_used;
 	struct list_head pipes_cleanup;
+	struct list_head pipes_destroy;
 	struct list_head rot_proc_list;
 	bool mixer_swap;
 	u32 resources_state;
@@ -698,6 +702,7 @@ struct mdss_mdp_set_ot_params {
 	u32 num;
 	u32 width;
 	u32 height;
+	u16 frame_rate;
 	bool is_rot;
 	bool is_wb;
 	bool is_yuv;
@@ -932,7 +937,9 @@ static inline int mdss_mdp_panic_signal_support_mode(
 				MDSS_MDP_HW_REV_110))
 		signal_mode = MDSS_MDP_PANIC_COMMON_REG_CFG;
 	else if (IS_MDSS_MAJOR_MINOR_SAME(mdata->mdp_rev,
-				MDSS_MDP_HW_REV_107))
+				MDSS_MDP_HW_REV_107) ||
+		IS_MDSS_MAJOR_MINOR_SAME(mdata->mdp_rev,
+				MDSS_MDP_HW_REV_114))
 		signal_mode = MDSS_MDP_PANIC_PER_PIPE_CFG;
 
 	return signal_mode;
@@ -1083,15 +1090,15 @@ static inline uint8_t pp_vig_csc_pipe_val(struct mdss_mdp_pipe *pipe)
 }
 
 /*
- * when DUAL_LM_SINGLE_DISPLAY is used with 2 DSC encoders, DSC_MERGE is
- * used during full frame updates. Now when we go from full frame update
- * to right-only update, we need to disable DSC_MERGE. However, DSC_MERGE
- * is controlled through DSC0_COMMON_MODE register which is double buffered,
- * and this double buffer update is tied to LM0. Now for right-only update,
- * LM0 will not get double buffer update signal. So DSC_MERGE is not disabled
- * for right-only update which is wrong HW state and leads ping-pong timeout.
- * Workaround for this is to use LM0->DSC0 pair for right-only update
- * and disable DSC_MERGE.
+ * when split_lm topology is used without 3D_Mux, either DSC_MERGE or
+ * split_panel is used during full frame updates. Now when we go from
+ * full frame update to right-only update, we need to disable DSC_MERGE or
+ * split_panel. However, those are controlled through DSC0_COMMON_MODE
+ * register which is double buffered, and this double buffer update is tied to
+ * LM0. Now for right-only update, LM0 will not get double buffer update signal.
+ * So DSC_MERGE or split_panel is not disabled for right-only update which is
+ * a wrong HW state and leads ping-pong timeout. Workaround for this is to use
+ * LM0->DSC0 pair for right-only update and disable DSC_MERGE or split_panel.
  *
  * However using LM0->DSC0 pair for right-only update requires many changes
  * at various levels of SW. To lower the SW impact and still support
@@ -1107,11 +1114,12 @@ static inline bool mdss_mdp_is_lm_swap_needed(struct mdss_data_type *mdata,
 	    !mctl->panel_data || !mctl->mfd)
 		return false;
 
-	return (is_dual_lm_single_display(mctl->mfd)) &&
+	return (is_dsc_compression(&mctl->panel_data->panel_info)) &&
 	       (mctl->panel_data->panel_info.partial_update_enabled) &&
 	       (mdss_has_quirk(mdata, MDSS_QUIRK_DSC_RIGHT_ONLY_PU)) &&
-	       (is_dsc_compression(&mctl->panel_data->panel_info)) &&
-	       (mctl->panel_data->panel_info.dsc_enc_total == 2) &&
+	       ((mctl->mfd->split_mode == MDP_DUAL_LM_DUAL_DISPLAY) ||
+		((mctl->mfd->split_mode == MDP_DUAL_LM_SINGLE_DISPLAY) &&
+		 (mctl->panel_data->panel_info.dsc_enc_total == 2))) &&
 	       (!mctl->mixer_left->valid_roi) &&
 	       (mctl->mixer_right->valid_roi);
 }
@@ -1126,6 +1134,8 @@ int mdss_mdp_hist_irq_enable(u32 irq);
 void mdss_mdp_hist_irq_disable(u32 irq);
 void mdss_mdp_irq_disable_nosync(u32 intr_type, u32 intf_num);
 int mdss_mdp_set_intr_callback(u32 intr_type, u32 intf_num,
+			       void (*fnc_ptr)(void *), void *arg);
+int mdss_mdp_set_intr_callback_nosync(u32 intr_type, u32 intf_num,
 			       void (*fnc_ptr)(void *), void *arg);
 
 void mdss_mdp_footswitch_ctrl_splash(int on);
@@ -1169,6 +1179,8 @@ int mdp_pipe_tune_perf(struct mdss_mdp_pipe *pipe,
 int mdss_mdp_overlay_setup_scaling(struct mdss_mdp_pipe *pipe);
 struct mdss_mdp_pipe *mdss_mdp_pipe_assign(struct mdss_data_type *mdata,
 	struct mdss_mdp_mixer *mixer, u32 ndx);
+struct mdss_mdp_pipe *mdss_mdp_overlay_pipe_reuse(
+	struct msm_fb_data_type *mfd, int pipe_ndx);
 void mdss_mdp_pipe_position_update(struct mdss_mdp_pipe *pipe,
 		struct mdss_rect *src, struct mdss_rect *dst);
 int mdss_mdp_video_addr_setup(struct mdss_data_type *mdata,
@@ -1197,6 +1209,7 @@ int mdss_mdp_video_reconfigure_splash_done(struct mdss_mdp_ctl *ctl,
 int mdss_mdp_cmd_reconfigure_splash_done(struct mdss_mdp_ctl *ctl,
 		bool handoff);
 int mdss_mdp_ctl_splash_finish(struct mdss_mdp_ctl *ctl, bool handoff);
+void mdss_mdp_check_ctl_reset_status(struct mdss_mdp_ctl *ctl);
 int mdss_mdp_ctl_setup(struct mdss_mdp_ctl *ctl);
 int mdss_mdp_ctl_split_display_setup(struct mdss_mdp_ctl *ctl,
 		struct mdss_panel_data *pdata);
@@ -1409,7 +1422,8 @@ struct mdss_mdp_ctl *mdss_mdp_ctl_mixer_switch(struct mdss_mdp_ctl *ctl,
 					       u32 return_type);
 void mdss_mdp_set_roi(struct mdss_mdp_ctl *ctl,
 	struct mdss_rect *l_roi, struct mdss_rect *r_roi);
-
+void mdss_mdp_mixer_update_pipe_map(struct mdss_mdp_ctl *master_ctl,
+		int mixer_mux);
 int mdss_mdp_wb_set_format(struct msm_fb_data_type *mfd, u32 dst_format);
 int mdss_mdp_wb_get_format(struct msm_fb_data_type *mfd,
 					struct mdp_mixer_cfg *mixer_cfg);
@@ -1441,8 +1455,23 @@ struct mdss_mdp_writeback *mdss_mdp_wb_assign(u32 id, u32 reg_index);
 struct mdss_mdp_writeback *mdss_mdp_wb_alloc(u32 caps, u32 reg_index);
 void mdss_mdp_wb_free(struct mdss_mdp_writeback *wb);
 
-void mdss_dsc_parameters_calc(struct dsc_desc *dsc, int width, int height);
 void mdss_mdp_ctl_dsc_setup(struct mdss_mdp_ctl *ctl,
 	struct mdss_panel_info *pinfo);
 
+#ifdef CONFIG_FB_MSM_MDP_NONE
+struct mdss_data_type *mdss_mdp_get_mdata(void)
+{
+	return NULL;
+}
+
+int mdss_mdp_copy_layer_pp_info(struct mdp_input_layer *layer)
+{
+	return -EFAULT;
+}
+
+void mdss_mdp_free_layer_pp_info(struct mdp_input_layer *layer)
+{
+}
+
+#endif /* CONFIG_FB_MSM_MDP_NONE */
 #endif /* MDSS_MDP_H */

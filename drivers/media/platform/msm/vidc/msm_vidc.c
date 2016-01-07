@@ -221,7 +221,8 @@ struct buffer_info *get_registered_buf(struct msm_vidc_inst *inst,
 			bool overlaps = OVERLAPS(buff_off, size,
 					temp->buff_off[i], temp->size[i]);
 
-			if ((fd_matches || device_addr_matches) &&
+			if (!temp->inactive &&
+				(fd_matches || device_addr_matches) &&
 				(contains_within || overlaps)) {
 				dprintk(VIDC_DBG,
 						"This memory region is already mapped\n");
@@ -443,6 +444,13 @@ int map_and_register_buf(struct msm_vidc_inst *inst, struct v4l2_buffer *b)
 		}
 		mutex_lock(&inst->registeredbufs.lock);
 		temp = get_registered_buf(inst, b, i, &plane);
+		if (temp && !is_dynamic_output_buffer_mode(b, inst)) {
+			dprintk(VIDC_DBG,
+				"This memory region has already been prepared\n");
+			rc = 0;
+			mutex_unlock(&inst->registeredbufs.lock);
+			goto exit;
+		}
 
 		if (temp && is_dynamic_output_buffer_mode(b, inst) && !i) {
 			/*
@@ -983,7 +991,7 @@ EXPORT_SYMBOL(msm_vidc_streamoff);
 int msm_vidc_enum_framesizes(void *instance, struct v4l2_frmsizeenum *fsize)
 {
 	struct msm_vidc_inst *inst = instance;
-	struct msm_vidc_core_capability *capability = NULL;
+	struct msm_vidc_capability *capability = NULL;
 
 	if (!inst || !fsize) {
 		dprintk(VIDC_ERR, "%s: invalid parameter: %p %p\n",
@@ -1098,6 +1106,30 @@ int msm_vidc_dqevent(void *inst, struct v4l2_event *event)
 }
 EXPORT_SYMBOL(msm_vidc_dqevent);
 
+static bool msm_vidc_check_for_inst_overload(struct msm_vidc_core *core)
+{
+	u32 instance_count = 0;
+	u32 secure_instance_count = 0;
+	struct msm_vidc_inst *inst = NULL;
+	bool overload = false;
+
+	mutex_lock(&core->lock);
+	list_for_each_entry(inst, &core->instances, list) {
+		instance_count++;
+		/* This flag is not updated yet for the current instance */
+		if (inst->flags & VIDC_SECURE)
+			secure_instance_count++;
+	}
+	mutex_unlock(&core->lock);
+
+	/* Instance count includes current instance as well. */
+
+	if ((instance_count > core->resources.max_inst_count) ||
+		(secure_instance_count > core->resources.max_secure_inst_count))
+		overload = true;
+	return overload;
+}
+
 void *msm_vidc_open(int core_id, int session_type)
 {
 	struct msm_vidc_inst *inst = NULL;
@@ -1189,12 +1221,19 @@ void *msm_vidc_open(int core_id, int session_type)
 	list_add_tail(&inst->list, &core->instances);
 	mutex_unlock(&core->lock);
 
-	rc = msm_comm_try_state(inst, MSM_VIDC_CORE_INIT);
+	rc = msm_comm_try_state(inst, MSM_VIDC_CORE_INIT_DONE);
 	if (rc) {
 		dprintk(VIDC_ERR,
 			"Failed to move video instance to init state\n");
 		goto fail_init;
 	}
+
+	if (msm_vidc_check_for_inst_overload(core)) {
+		dprintk(VIDC_ERR,
+			"Instance count reached Max limit, rejecting session");
+		goto fail_init;
+	}
+
 	inst->debugfs_root =
 		msm_vidc_debugfs_init_inst(inst, core->debugfs_root);
 
@@ -1275,6 +1314,8 @@ int msm_vidc_destroy(struct msm_vidc_inst *inst)
 	list_del(&inst->list);
 	mutex_unlock(&core->lock);
 
+	msm_comm_ctrl_deinit(inst);
+
 	v4l2_fh_del(&inst->event_handler);
 	v4l2_fh_exit(&inst->event_handler);
 
@@ -1314,7 +1355,7 @@ int msm_vidc_close(void *instance)
 
 			for (i = 0; i < min(bi->num_planes, VIDEO_MAX_PLANES);
 					i++) {
-				if (bi->handle[i])
+				if (bi->handle[i] && bi->mapped[i])
 					msm_comm_smem_free(inst, bi->handle[i]);
 			}
 
@@ -1322,8 +1363,6 @@ int msm_vidc_close(void *instance)
 		}
 	}
 	mutex_unlock(&inst->registeredbufs.lock);
-
-	msm_comm_ctrl_deinit(inst);
 
 	cleanup_instance(inst);
 	if (inst->state != MSM_VIDC_CORE_INVALID &&

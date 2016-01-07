@@ -40,9 +40,38 @@ enum {
 	VREF_FILT_R_100KOHM,
 };
 
+enum {
+	DELTA_I_0MA,
+	DELTA_I_10MA,
+	DELTA_I_20MA,
+	DELTA_I_30MA,
+	DELTA_I_40MA,
+	DELTA_I_50MA,
+};
+
 static void (*clsh_state_fp[NUM_CLSH_STATES_V2])(struct snd_soc_codec *,
 					      struct wcd_clsh_cdc_data *,
 					      u8 req_state, bool en, int mode);
+
+static bool is_native_44_1_active(struct snd_soc_codec *codec)
+{
+	bool native_active = false;
+	u8 native_clk, rx1_rate, rx2_rate;
+
+	native_clk = snd_soc_read(codec,
+				 WCD9XXX_CDC_CLK_RST_CTRL_MCLK_CONTROL);
+	rx1_rate = snd_soc_read(codec, WCD9XXX_CDC_RX1_RX_PATH_CTL);
+	rx2_rate = snd_soc_read(codec, WCD9XXX_CDC_RX2_RX_PATH_CTL);
+
+	dev_dbg(codec->dev, "%s: native_clk %x rx1_rate= %x rx2_rate= %x",
+		__func__, native_clk, rx1_rate, rx2_rate);
+
+	if ((native_clk & 0x2) &&
+	    ((rx1_rate & 0x0F) == 0x9 || (rx2_rate & 0x0F) == 0x9))
+		native_active = true;
+
+	return native_active;
+}
 
 static const char *mode_to_str(int mode)
 {
@@ -264,6 +293,7 @@ static void wcd_clsh_set_hph_mode(struct snd_soc_codec *codec,
 	u8 val;
 	u8 gain;
 	u8 res_val = VREF_FILT_R_0OHM;
+	u8 ipeak = DELTA_I_50MA;
 
 	struct wcd9xxx *wcd9xxx = dev_get_drvdata(codec->dev->parent);
 
@@ -272,18 +302,21 @@ static void wcd_clsh_set_hph_mode(struct snd_soc_codec *codec,
 		res_val = VREF_FILT_R_50KOHM;
 		val = 0x00;
 		gain = DAC_GAIN_0DB;
+		ipeak = DELTA_I_50MA;
 		break;
 	case CLS_AB:
 		val = 0x00;
 		gain = DAC_GAIN_0DB;
+		ipeak = DELTA_I_50MA;
 		break;
 	case CLS_H_HIFI:
 		val = 0x08;
 		gain = DAC_GAIN_M0P2DB;
+		ipeak = DELTA_I_50MA;
 		break;
 	case CLS_H_LP:
 		val = 0x04;
-		gain = DAC_GAIN_0P2DB;
+		ipeak = DELTA_I_30MA;
 		break;
 	};
 
@@ -291,8 +324,11 @@ static void wcd_clsh_set_hph_mode(struct snd_soc_codec *codec,
 	if (TASHA_IS_2_0(wcd9xxx->version)) {
 		snd_soc_update_bits(codec, WCD9XXX_CLASSH_CTRL_VCL_2,
 				    0x30, (res_val << 4));
-		snd_soc_update_bits(codec, WCD9XXX_HPH_REFBUFF_UHQA_CTL,
-				    0x07, gain);
+		if (mode != CLS_H_LP)
+			snd_soc_update_bits(codec, WCD9XXX_HPH_REFBUFF_UHQA_CTL,
+					    0x07, gain);
+		snd_soc_update_bits(codec, WCD9XXX_CLASSH_CTRL_CCL_1,
+				    0xF0, (ipeak << 4));
 	}
 }
 
@@ -371,11 +407,24 @@ static void wcd_clsh_state_hph_ear(struct snd_soc_codec *codec,
 			else if (clsh_d->state & WCD_CLSH_STATE_HPHR)
 				hph_mode = wcd_clsh_get_int_mode(clsh_d,
 						WCD_CLSH_STATE_HPHR);
-			if (hph_mode != CLS_AB)
+			if (hph_mode != CLS_AB && !is_native_44_1_active(codec))
 				snd_soc_update_bits(codec,
 						WCD9XXX_A_CDC_RX0_RX_PATH_CFG0,
 						0x40, 0x40);
 		}
+
+		if (is_native_44_1_active(codec)) {
+			snd_soc_write(codec, WCD9XXX_CDC_CLSH_HPH_V_PA, 0x39);
+			snd_soc_update_bits(codec,
+					WCD9XXX_CDC_RX0_RX_PATH_SEC0,
+					0x03, 0x00);
+			if ((req_state == WCD_CLSH_STATE_HPHL) ||
+			    (req_state == WCD_CLSH_STATE_HPHR))
+				snd_soc_update_bits(codec,
+						WCD9XXX_A_CDC_RX0_RX_PATH_CFG0,
+						0x40, 0x00);
+		}
+
 		if (req_state == WCD_CLSH_STATE_HPHL)
 			snd_soc_update_bits(codec,
 					    WCD9XXX_A_CDC_RX1_RX_PATH_CFG0,
@@ -403,6 +452,21 @@ static void wcd_clsh_state_hph_ear(struct snd_soc_codec *codec,
 						WCD9XXX_A_CDC_RX0_RX_PATH_CFG0,
 						0x40, 0x00);
 		}
+
+		if (is_native_44_1_active(codec)) {
+			snd_soc_write(codec, WCD9XXX_CDC_CLSH_HPH_V_PA, 0x1C);
+			snd_soc_update_bits(codec,
+					WCD9XXX_CDC_RX0_RX_PATH_SEC0,
+					0x03, 0x01);
+			if (((clsh_d->state & WCD_CLSH_STATE_HPH_ST)
+				  != WCD_CLSH_STATE_HPH_ST) &&
+			    ((req_state == WCD_CLSH_STATE_HPHL) ||
+			     (req_state == WCD_CLSH_STATE_HPHR)))
+				snd_soc_update_bits(codec,
+						WCD9XXX_A_CDC_RX0_RX_PATH_CFG0,
+						0x40, 0x40);
+		}
+
 		if (req_state == WCD_CLSH_STATE_HPHL)
 			snd_soc_update_bits(codec,
 					WCD9XXX_A_CDC_RX1_RX_PATH_CFG0,
@@ -612,13 +676,13 @@ static void wcd_clsh_state_hph_r(struct snd_soc_codec *codec,
 					    0x40, 0x40);
 		}
 		wcd_clsh_set_buck_regulator_mode(codec, mode);
-		wcd_clsh_set_buck_mode(codec, mode);
 		wcd_clsh_set_flyback_mode(codec, mode);
 		wcd_clsh_flyback_ctrl(codec, clsh_d, mode, true);
 		wcd_clsh_set_flyback_current(codec, mode);
+		wcd_clsh_set_buck_mode(codec, mode);
 		wcd_clsh_buck_ctrl(codec, clsh_d, mode, true);
-		wcd_clsh_set_gain_path(codec, mode);
 		wcd_clsh_set_hph_mode(codec, mode);
+		wcd_clsh_set_gain_path(codec, mode);
 	} else {
 		wcd_clsh_set_hph_mode(codec, CLS_H_NORMAL);
 
@@ -666,13 +730,13 @@ static void wcd_clsh_state_hph_l(struct snd_soc_codec *codec,
 					    0x40, 0x40);
 		}
 		wcd_clsh_set_buck_regulator_mode(codec, mode);
-		wcd_clsh_set_buck_mode(codec, mode);
 		wcd_clsh_set_flyback_mode(codec, mode);
 		wcd_clsh_flyback_ctrl(codec, clsh_d, mode, true);
 		wcd_clsh_set_flyback_current(codec, mode);
+		wcd_clsh_set_buck_mode(codec, mode);
 		wcd_clsh_buck_ctrl(codec, clsh_d, mode, true);
-		wcd_clsh_set_gain_path(codec, mode);
 		wcd_clsh_set_hph_mode(codec, mode);
+		wcd_clsh_set_gain_path(codec, mode);
 	} else {
 		wcd_clsh_set_hph_mode(codec, CLS_H_NORMAL);
 

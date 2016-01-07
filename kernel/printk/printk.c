@@ -2149,18 +2149,19 @@ void resume_console(void)
  * will be spooled but will not show up on the console.  This function is
  * called when a new CPU comes online (or fails to come up), and ensures
  * that any such output gets printed.
+ *
+ * Special handling must be done for cases invoked from an atomic context,
+ * as we can't be taking the console semaphore here.
  */
 static int console_cpu_notify(struct notifier_block *self,
 	unsigned long action, void *hcpu)
 {
 	switch (action) {
 	case CPU_ONLINE:
-		console_lock();
-		console_unlock();
-		break;
 	case CPU_DEAD:
 	case CPU_DOWN_FAILED:
 	case CPU_UP_CANCELED:
+	case CPU_DYING:
 #ifdef CONFIG_CONSOLE_FLUSH_ON_HOTPLUG
 		console_lock();
 		console_unlock();

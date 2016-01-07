@@ -108,8 +108,14 @@ int ipa3_disable_data_path(u32 clnt_hdl)
 	aggr_init = ipa_read_reg(ipa3_ctx->mmio,
 			IPA_ENDP_INIT_AGGR_N_OFST_v3_0(clnt_hdl));
 	if (((aggr_init & IPA_ENDP_INIT_AGGR_N_AGGR_EN_BMSK) >>
-	    IPA_ENDP_INIT_AGGR_N_AGGR_EN_SHFT) == IPA_ENABLE_AGGR)
-		ipa3_tag_aggr_force_close(clnt_hdl);
+	    IPA_ENDP_INIT_AGGR_N_AGGR_EN_SHFT) == IPA_ENABLE_AGGR) {
+		res = ipa3_tag_aggr_force_close(clnt_hdl);
+		if (res) {
+			IPAERR("tag process timeout, client:%d err:%d\n",
+				   clnt_hdl, res);
+			BUG();
+		}
+	}
 
 	return res;
 }
@@ -304,7 +310,7 @@ int ipa3_connect(const struct ipa_connect_params *in,
 	}
 
 	memset(&ipa3_ctx->ep[ipa_ep_idx], 0, sizeof(struct ipa3_ep_context));
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(in->client);
 
 	ep->skip_ep_cfg = in->skip_ep_cfg;
 	ep->valid = 1;
@@ -437,7 +443,7 @@ int ipa3_connect(const struct ipa_connect_params *in,
 		ipa3_install_dflt_flt_rules(ipa_ep_idx);
 
 	if (!ep->keep_ipa_awake)
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_EP(in->client);
 
 	IPADBG("client %d (ep: %d) connected\n", in->client, ipa_ep_idx);
 
@@ -491,7 +497,7 @@ desc_mem_alloc_fail:
 	sps_free_endpoint(ep->ep_hdl);
 ipa_cfg_ep_fail:
 	memset(&ipa3_ctx->ep[ipa_ep_idx], 0, sizeof(struct ipa3_ep_context));
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(in->client);
 fail:
 	return result;
 }
@@ -555,7 +561,7 @@ int ipa3_disconnect(u32 clnt_hdl)
 	ep = &ipa3_ctx->ep[clnt_hdl];
 
 	if (!ep->keep_ipa_awake)
-		ipa3_inc_client_enable_clks();
+		IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	/* Set Disconnect in Progress flag. */
 	spin_lock(&ipa3_ctx->disconnect_lock);
@@ -655,8 +661,7 @@ int ipa3_disconnect(u32 clnt_hdl)
 	spin_lock(&ipa3_ctx->disconnect_lock);
 	memset(&ipa3_ctx->ep[clnt_hdl], 0, sizeof(struct ipa3_ep_context));
 	spin_unlock(&ipa3_ctx->disconnect_lock);
-
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	IPADBG("client (ep: %d) disconnected\n", clnt_hdl);
 
@@ -681,8 +686,7 @@ int ipa3_reset_endpoint(u32 clnt_hdl)
 		return -EFAULT;
 	}
 	ep = &ipa3_ctx->ep[clnt_hdl];
-
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 	res = sps_disconnect(ep->ep_hdl);
 	if (res) {
 		IPAERR("sps_disconnect() failed, res=%d.\n", res);
@@ -697,8 +701,7 @@ int ipa3_reset_endpoint(u32 clnt_hdl)
 	}
 
 bail:
-	ipa3_dec_client_disable_clks();
-
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 	return res;
 }
 
@@ -762,15 +765,7 @@ static void ipa_chan_err_cb(struct gsi_chan_err_notify *notify)
 
 static void ipa_xfer_cb(struct gsi_chan_xfer_notify *notify)
 {
-	struct ipa3_mem_buffer *xfer_data;
-
-	IPADBG("event %d notified\n", notify->evt_id);
-	BUG_ON(notify->xfer_user_data == NULL);
-
-	xfer_data = (struct ipa3_mem_buffer *)notify->xfer_user_data;
-	dma_free_coherent(ipa3_ctx->pdev, xfer_data->size,
-		xfer_data->base, xfer_data->phys_base);
-	kfree(xfer_data);
+	return;
 }
 
 static int ipa3_reconfigure_channel_to_gpi(struct ipa3_ep_context *ep,
@@ -847,7 +842,6 @@ static int ipa3_reset_with_open_aggr_frame_wa(u32 clnt_hdl,
 	void *buff;
 	dma_addr_t dma_addr;
 	struct gsi_xfer_elem xfer_elem;
-	struct ipa3_mem_buffer *xfer_data;
 	int i;
 	int aggr_active_bitmap = 0;
 
@@ -891,17 +885,7 @@ static int ipa3_reset_with_open_aggr_frame_wa(u32 clnt_hdl,
 	xfer_elem.len = 1;
 	xfer_elem.flags = GSI_XFER_FLAG_EOT;
 	xfer_elem.type = GSI_XFER_ELEM_DATA;
-	xfer_data = kzalloc(sizeof(struct ipa3_mem_buffer),
-		GFP_ATOMIC);
-	if (xfer_data == NULL) {
-		IPAERR("Error allocating memory\n");
-		goto xfer_data_alloc_fail;
-	}
-	memset(xfer_data, 0, sizeof(struct ipa3_mem_buffer));
-	xfer_data->base = buff;
-	xfer_data->phys_base = dma_addr;
-	xfer_data->size = 1;
-	xfer_elem.xfer_user_data = (void *)xfer_data;
+
 	gsi_res = gsi_queue_xfer(ep->gsi_chan_hdl, 1, &xfer_elem,
 		true);
 	if (gsi_res != GSI_STATUS_SUCCESS) {
@@ -925,6 +909,8 @@ static int ipa3_reset_with_open_aggr_frame_wa(u32 clnt_hdl,
 		BUG();
 	}
 
+	dma_free_coherent(ipa3_ctx->pdev, 1, buff, dma_addr);
+
 	result = ipa3_stop_gsi_channel(clnt_hdl);
 	if (result) {
 		IPAERR("Error stopping channel: %d\n", result);
@@ -947,13 +933,10 @@ static int ipa3_reset_with_open_aggr_frame_wa(u32 clnt_hdl,
 	dma_free_coherent(ipa3_ctx->pdev, chan_dma.size,
 		chan_dma.base, chan_dma.phys_base);
 
-
 	return 0;
 
 queue_xfer_fail:
 	ipa3_stop_gsi_channel(clnt_hdl);
-	kfree(xfer_data);
-xfer_data_alloc_fail:
 	dma_free_coherent(ipa3_ctx->pdev, 1, buff, dma_addr);
 start_chan_fail:
 	ipa3_restore_channel_properties(ep, &orig_chan_props,
@@ -981,8 +964,7 @@ int ipa3_reset_gsi_channel(u32 clnt_hdl)
 	ep = &ipa3_ctx->ep[clnt_hdl];
 
 	if (!ep->keep_ipa_awake)
-		ipa3_inc_client_enable_clks();
-
+		IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 	/*
 	 * Check for open aggregation frame on Consumer EP -
 	 * reset with open aggregation frame WA
@@ -1009,14 +991,14 @@ int ipa3_reset_gsi_channel(u32 clnt_hdl)
 
 finish_reset:
 	if (!ep->keep_ipa_awake)
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	IPADBG("ipa3_reset_gsi_channel: exit\n");
 	return 0;
 
 reset_chan_fail:
 	if (!ep->keep_ipa_awake)
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 	return result;
 }
 
@@ -1036,8 +1018,7 @@ int ipa3_reset_gsi_event_ring(u32 clnt_hdl)
 	ep = &ipa3_ctx->ep[clnt_hdl];
 
 	if (!ep->keep_ipa_awake)
-		ipa3_inc_client_enable_clks();
-
+		IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 	/* Reset event ring */
 	gsi_res = gsi_reset_evt_ring(ep->gsi_evt_ring_hdl);
 	if (gsi_res != GSI_STATUS_SUCCESS) {
@@ -1047,14 +1028,14 @@ int ipa3_reset_gsi_event_ring(u32 clnt_hdl)
 	}
 
 	if (!ep->keep_ipa_awake)
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	IPADBG("ipa3_reset_gsi_event_ring: exit\n");
 	return 0;
 
 reset_evt_fail:
 	if (!ep->keep_ipa_awake)
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 	return result;
 }
 
@@ -1099,7 +1080,7 @@ int ipa3_request_gsi_channel(struct ipa_request_gsi_channel_params *params,
 	}
 
 	memset(&ipa3_ctx->ep[ipa_ep_idx], 0, sizeof(struct ipa3_ep_context));
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	ep->skip_ep_cfg = params->skip_ep_cfg;
 	ep->valid = 1;
@@ -1199,7 +1180,7 @@ int ipa3_request_gsi_channel(struct ipa_request_gsi_channel_params *params,
 	if (!ep->skip_ep_cfg && IPA_CLIENT_IS_PROD(params->client))
 		ipa3_install_dflt_flt_rules(ipa_ep_idx);
 
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 
 	IPADBG("client %d (ep: %d) connected\n", params->client, ipa_ep_idx);
 	IPADBG("exit\n");
@@ -1212,7 +1193,7 @@ write_evt_scratch_fail:
 	gsi_dealloc_evt_ring(ep->gsi_evt_ring_hdl);
 ipa_cfg_ep_fail:
 	memset(&ipa3_ctx->ep[ipa_ep_idx], 0, sizeof(struct ipa3_ep_context));
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 fail:
 	return result;
 }
@@ -1225,7 +1206,7 @@ int ipa3_set_usb_max_packet_size(
 
 	IPADBG("entry\n");
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	memset(&dev_scratch, 0, sizeof(struct gsi_device_scratch));
 	dev_scratch.mhi_base_chan_idx_valid = false;
@@ -1238,8 +1219,7 @@ int ipa3_set_usb_max_packet_size(
 		IPAERR("Error writing device scratch: %d\n", gsi_res);
 		return -EFAULT;
 	}
-
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 
 	IPADBG("exit\n");
 	return 0;
@@ -1260,8 +1240,7 @@ int ipa3_xdci_connect(u32 clnt_hdl, u8 xferrscidx, bool xferrscidx_valid)
 	}
 
 	ep = &ipa3_ctx->ep[clnt_hdl];
-
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	if (xferrscidx_valid) {
 		ep->chan_scratch.xdci.xferrscidx = xferrscidx;
@@ -1278,13 +1257,13 @@ int ipa3_xdci_connect(u32 clnt_hdl, u8 xferrscidx, bool xferrscidx_valid)
 		goto write_chan_scratch_fail;
 	}
 	if (!ep->keep_ipa_awake)
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	IPADBG("exit\n");
 	return 0;
 
 write_chan_scratch_fail:
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 	return result;
 }
 
@@ -1442,7 +1421,7 @@ int ipa3_xdci_disconnect(u32 clnt_hdl, bool should_force_clear, u32 qmi_req_id)
 	ep = &ipa3_ctx->ep[clnt_hdl];
 
 	if (!ep->keep_ipa_awake)
-		ipa3_inc_client_enable_clks();
+		IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	ipa3_disable_data_path(clnt_hdl);
 
@@ -1460,15 +1439,14 @@ int ipa3_xdci_disconnect(u32 clnt_hdl, bool should_force_clear, u32 qmi_req_id)
 		IPAERR("Error stopping channel: %d\n", result);
 		goto stop_chan_fail;
 	}
-
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	IPADBG("ipa3_xdci_disconnect: exit\n");
 	return 0;
 
 stop_chan_fail:
 	if (!ep->keep_ipa_awake)
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 	return result;
 }
 
@@ -1488,7 +1466,7 @@ int ipa3_release_gsi_channel(u32 clnt_hdl)
 	ep = &ipa3_ctx->ep[clnt_hdl];
 
 	if (!ep->keep_ipa_awake)
-		ipa3_inc_client_enable_clks();
+		IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	gsi_res = gsi_dealloc_channel(ep->gsi_chan_hdl);
 	if (gsi_res != GSI_STATUS_SUCCESS) {
@@ -1506,7 +1484,7 @@ int ipa3_release_gsi_channel(u32 clnt_hdl)
 		ipa3_delete_dflt_flt_rules(clnt_hdl);
 
 	if (!ep->keep_ipa_awake)
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	memset(&ipa3_ctx->ep[clnt_hdl], 0, sizeof(struct ipa3_ep_context));
 
@@ -1515,7 +1493,7 @@ int ipa3_release_gsi_channel(u32 clnt_hdl)
 
 dealloc_chan_fail:
 	if (!ep->keep_ipa_awake)
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 	return result;
 }
 
@@ -1546,7 +1524,7 @@ int ipa3_xdci_suspend(u32 ul_clnt_hdl, u32 dl_clnt_hdl,
 	dl_ep = &ipa3_ctx->ep[dl_clnt_hdl];
 
 	if (!ul_ep->keep_ipa_awake && !dl_ep->keep_ipa_awake)
-		ipa3_inc_client_enable_clks();
+		IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(ul_clnt_hdl));
 
 	result = ipa3_get_gsi_chan_info(&ul_gsi_chan_info,
 		ul_ep->gsi_chan_hdl);
@@ -1624,14 +1602,16 @@ int ipa3_xdci_suspend(u32 ul_clnt_hdl, u32 dl_clnt_hdl,
 	}
 
 	if (!ul_ep->keep_ipa_awake && !dl_ep->keep_ipa_awake)
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(
+				ul_clnt_hdl));
 
 	IPADBG("ipa3_xdci_suspend: exit\n");
 	return 0;
 
 query_chan_info_fail:
 	if (!ul_ep->keep_ipa_awake && !dl_ep->keep_ipa_awake)
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(
+				ul_clnt_hdl));
 	return result;
 }
 
@@ -1651,7 +1631,7 @@ int ipa3_start_gsi_channel(u32 clnt_hdl)
 	ep = &ipa3_ctx->ep[clnt_hdl];
 
 	if (!ep->keep_ipa_awake)
-		ipa3_inc_client_enable_clks();
+		IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	gsi_res = gsi_start_channel(ep->gsi_chan_hdl);
 	if (gsi_res != GSI_STATUS_SUCCESS) {
@@ -1660,14 +1640,14 @@ int ipa3_start_gsi_channel(u32 clnt_hdl)
 	}
 
 	if (!ep->keep_ipa_awake)
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	IPADBG("ipa3_start_gsi_channel: exit\n");
 	return 0;
 
 start_chan_fail:
 	if (!ep->keep_ipa_awake)
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 	return result;
 }
 
@@ -1690,7 +1670,7 @@ int ipa3_xdci_resume(u32 ul_clnt_hdl, u32 dl_clnt_hdl)
 	dl_ep = &ipa3_ctx->ep[dl_clnt_hdl];
 
 	if (!ul_ep->keep_ipa_awake && !dl_ep->keep_ipa_awake)
-		ipa3_inc_client_enable_clks();
+		IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(ul_clnt_hdl));
 
 	/* Unsuspend the DL EP */
 	memset(&ep_cfg_ctrl, 0 , sizeof(struct ipa_ep_cfg_ctrl));
@@ -1703,7 +1683,7 @@ int ipa3_xdci_resume(u32 ul_clnt_hdl, u32 dl_clnt_hdl)
 		IPAERR("Error starting UL channel: %d\n", gsi_res);
 
 	if (!ul_ep->keep_ipa_awake && !dl_ep->keep_ipa_awake)
-		ipa3_dec_client_disable_clks();
+		IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(ul_clnt_hdl));
 
 	IPADBG("ipa3_xdci_resume: exit\n");
 	return 0;
@@ -1755,7 +1735,7 @@ int ipa3_clear_endpoint_delay(u32 clnt_hdl)
 		ep->qmi_request_sent = true;
 	}
 
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_EP(ipa3_get_client_mapping(clnt_hdl));
 	/* Set disconnect in progress flag so further flow control events are
 	 * not honored.
 	 */
@@ -1768,7 +1748,7 @@ int ipa3_clear_endpoint_delay(u32 clnt_hdl)
 	ep_ctrl.ipa_ep_suspend = false;
 	ipa3_cfg_ep_ctrl(clnt_hdl, &ep_ctrl);
 
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_DEC_EP(ipa3_get_client_mapping(clnt_hdl));
 
 	IPADBG("client (ep: %d) removed ep delay\n", clnt_hdl);
 

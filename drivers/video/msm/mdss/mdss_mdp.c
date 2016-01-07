@@ -941,6 +941,7 @@ void mdss_mdp_clk_ctrl(int enable)
 {
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
 	static int mdp_clk_cnt;
+	unsigned long flags;
 	int changed = 0;
 	int rc = 0;
 
@@ -982,7 +983,10 @@ void mdss_mdp_clk_ctrl(int enable)
 				false, mdata->curr_bw_uc_idx);
 		}
 
+		spin_lock_irqsave(&mdp_lock, flags);
 		mdata->clk_ena = enable;
+		spin_unlock_irqrestore(&mdp_lock, flags);
+
 		mdss_mdp_clk_update(MDSS_CLK_AHB, enable);
 		mdss_mdp_clk_update(MDSS_CLK_AXI, enable);
 		mdss_mdp_clk_update(MDSS_CLK_MDP_CORE, enable);
@@ -1273,6 +1277,23 @@ static void mdss_mdp_hw_rev_caps_init(struct mdss_data_type *mdata)
 		mdata->max_cursor_size = 64;
 		mdata->min_prefill_lines = 12;
 		set_bit(MDSS_QOS_OTLIM, mdata->mdss_qos_map);
+		break;
+	case MDSS_MDP_HW_REV_114:
+		mdata->max_target_zorder = 4; /* excluding base layer */
+		mdata->max_cursor_size = 64;
+		mdata->min_prefill_lines = 12;
+		mdata->has_ubwc = true;
+		mdata->pixel_ram_size = 38 * 1024;
+		mdata->apply_post_scale_bytes = false;
+		mdata->hflip_buffer_reused = false;
+		set_bit(MDSS_QOS_OVERHEAD_FACTOR, mdata->mdss_qos_map);
+		set_bit(MDSS_QOS_CDP, mdata->mdss_qos_map);
+		set_bit(MDSS_QOS_PER_PIPE_LUT, mdata->mdss_qos_map);
+		set_bit(MDSS_QOS_SIMPLIFIED_PREFILL, mdata->mdss_qos_map);
+		set_bit(MDSS_CAPS_YUV_CONFIG, mdata->mdss_caps_map);
+		mdss_mdp_init_default_prefill_factors(mdata);
+		set_bit(MDSS_QOS_OTLIM, mdata->mdss_qos_map);
+		mdss_set_quirk(mdata, MDSS_QUIRK_DMA_BI_DIR);
 		break;
 	default:
 		mdata->max_target_zorder = 4; /* excluding base layer */
@@ -1623,7 +1644,46 @@ static ssize_t mdss_mdp_show_capabilities(struct device *dev,
 		SPRINT(" src_split");
 	if (mdata->has_rot_dwnscale)
 		SPRINT(" rotator_downscale");
+	if (mdata->max_bw_settings_cnt)
+		SPRINT(" dynamic_bw_limit");
 	SPRINT("\n");
+
+	return cnt;
+}
+
+static ssize_t mdss_mdp_read_max_limit_bw(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct mdss_data_type *mdata = dev_get_drvdata(dev);
+	size_t len = PAGE_SIZE;
+	u32 cnt = 0;
+	int i;
+
+	char bw_names[4][8] = {"default", "camera", "hflip", "vflip"};
+	char pipe_bw_names[4][16] = {"default_pipe", "camera_pipe",
+				"hflip_pipe", "vflip_pipe"};
+	struct mdss_max_bw_settings *bw_settings;
+	struct mdss_max_bw_settings *pipe_bw_settings;
+
+	bw_settings = mdata->max_bw_settings;
+	pipe_bw_settings = mdata->max_per_pipe_bw_settings;
+
+#define SPRINT(fmt, ...) \
+		(cnt += scnprintf(buf + cnt, len - cnt, fmt, ##__VA_ARGS__))
+
+	SPRINT("bw_mode_bitmap=%d\n", mdata->bw_mode_bitmap);
+	SPRINT("bw_limit_pending=%d\n", mdata->bw_limit_pending);
+
+	for (i = 0; i < mdata->max_bw_settings_cnt; i++) {
+		SPRINT("%s=%d\n", bw_names[i], bw_settings->mdss_max_bw_val);
+		bw_settings++;
+	}
+
+	for (i = 0; i < mdata->mdss_per_pipe_bw_cnt; i++) {
+		SPRINT("%s=%d\n", pipe_bw_names[i],
+					pipe_bw_settings->mdss_max_bw_val);
+		pipe_bw_settings++;
+	}
 
 	return cnt;
 }
@@ -1638,6 +1698,7 @@ static ssize_t mdss_mdp_store_max_limit_bw(struct device *dev,
 		pr_info("Not able scan to bw_mode_bitmap\n");
 	} else {
 		mdata->bw_mode_bitmap = data;
+		mdata->bw_limit_pending = true;
 		pr_debug("limit use case, bw_mode_bitmap = %d\n", data);
 	}
 
@@ -1645,8 +1706,8 @@ static ssize_t mdss_mdp_store_max_limit_bw(struct device *dev,
 }
 
 static DEVICE_ATTR(caps, S_IRUGO, mdss_mdp_show_capabilities, NULL);
-static DEVICE_ATTR(bw_mode_bitmap, S_IRUGO | S_IWUSR | S_IWGRP, NULL,
-		mdss_mdp_store_max_limit_bw);
+static DEVICE_ATTR(bw_mode_bitmap, S_IRUGO | S_IWUSR | S_IWGRP,
+		mdss_mdp_read_max_limit_bw, mdss_mdp_store_max_limit_bw);
 
 static struct attribute *mdp_fs_attrs[] = {
 	&dev_attr_caps.attr,
@@ -3642,14 +3703,26 @@ static void apply_dynamic_ot_limit(u32 *ot_lim,
 	if (false == test_bit(MDSS_QOS_OTLIM, mdata->mdss_qos_map))
 		return;
 
+	/* Dynamic OT setting done only for rotator and WFD */
+	if (!((params->is_rot && params->is_yuv) || params->is_wb))
+		return;
+
 	res = params->width * params->height;
 
 	pr_debug("w:%d h:%d rot:%d yuv:%d wb:%d res:%d\n",
 		params->width, params->height, params->is_rot,
 		params->is_yuv, params->is_wb, res);
 
-	if ((params->is_rot && params->is_yuv) ||
-		params->is_wb) {
+	switch (mdata->mdp_rev) {
+	case MDSS_MDP_HW_REV_114:
+		if ((res <= RES_1080p) && (params->frame_rate <= 30))
+			*ot_lim = 2;
+		else if (params->is_rot && params->is_yuv)
+			*ot_lim = 4;
+		else
+			*ot_lim = 6;
+		break;
+	default:
 		if (res <= RES_1080p) {
 			*ot_lim = 2;
 		} else if (res <= RES_UHD) {
@@ -3658,6 +3731,7 @@ static void apply_dynamic_ot_limit(u32 *ot_lim,
 			else
 				*ot_lim = 16;
 		}
+		break;
 	}
 }
 

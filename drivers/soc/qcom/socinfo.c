@@ -520,14 +520,15 @@ static struct msm_soc_info cpu_of_id[] = {
 	/* Titanium ID */
 	[293] = {MSM_CPU_TITANIUM, "MSMTITANIUM"},
 
-	/* FERMIUM ID */
-	[290] = {MSM_CPU_FERMIUM, "MDMFERMIUM"},
-	[296] = {MSM_CPU_FERMIUM, "MDMFERMIUM"},
-	[297] = {MSM_CPU_FERMIUM, "MDMFERMIUM"},
-	[298] = {MSM_CPU_FERMIUM, "MDMFERMIUM"},
-	[299] = {MSM_CPU_FERMIUM, "MDMFERMIUM"},
+	/* 9607 IDs */
+	[290] = {MSM_CPU_9607, "MDM9607"},
+	[296] = {MSM_CPU_9607, "MDM8207"},
+	[297] = {MSM_CPU_9607, "MDM9207"},
+	[298] = {MSM_CPU_9607, "MDM9307"},
+	[299] = {MSM_CPU_9607, "MDM9628"},
 
 	/* Californium IDs */
+	[279] = {MSM_CPU_CALIFORNIUM, "MDMCALIFORNIUM"},
 	[283] = {MSM_CPU_CALIFORNIUM, "MDMCALIFORNIUM"},
 	[284] = {MSM_CPU_CALIFORNIUM, "MDMCALIFORNIUM"},
 	[285] = {MSM_CPU_CALIFORNIUM, "MDMCALIFORNIUM"},
@@ -536,6 +537,12 @@ static struct msm_soc_info cpu_of_id[] = {
 	/*MSM8937 ID  */
 	[294] = {MSM_CPU_8937, "MSM8937"},
 	[295] = {MSM_CPU_8937, "APQ8937"},
+
+	/* MSMGOLD IDs */
+	[303] = {MSM_CPU_GOLD, "MSMGOLD"},
+	[307] = {MSM_CPU_GOLD, "APQGOLD"},
+	[308] = {MSM_CPU_GOLD, "MSMGOLD"},
+	[309] = {MSM_CPU_GOLD, "MSMGOLD"},
 
 	/* Uninitialized IDs are not known to run Linux.
 	   MSM_CPU_UNKNOWN is set to 0 to ensure these IDs are
@@ -1225,9 +1232,9 @@ static void * __init setup_dummy_socinfo(void)
 		dummy_socinfo.id = 293;
 		strlcpy(dummy_socinfo.build_id, "msmtitanium - ",
 			sizeof(dummy_socinfo.build_id));
-	} else if (early_machine_is_mdmfermium()) {
+	} else if (early_machine_is_mdm9607()) {
 		dummy_socinfo.id = 290;
-		strlcpy(dummy_socinfo.build_id, "mdmfermium - ",
+		strlcpy(dummy_socinfo.build_id, "mdm9607 - ",
 			sizeof(dummy_socinfo.build_id));
 	} else if (early_machine_is_msmcobalt()) {
 		dummy_socinfo.id = 292;
@@ -1236,6 +1243,10 @@ static void * __init setup_dummy_socinfo(void)
 	} else if (early_machine_is_msm8937()) {
 		dummy_socinfo.id = 294;
 		strlcpy(dummy_socinfo.build_id, "msm8937 - ",
+			sizeof(dummy_socinfo.build_id));
+	} else if (early_machine_is_msmgold()) {
+		dummy_socinfo.id = 303;
+		strlcpy(dummy_socinfo.build_id, "msmgold - ",
 			sizeof(dummy_socinfo.build_id));
 	}
 

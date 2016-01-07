@@ -30,7 +30,6 @@
 #include <linux/device.h>
 #include <linux/notifier.h>
 #include <linux/slab.h>
-#include <linux/workqueue.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
@@ -103,8 +102,6 @@ int msm_rpm_unregister_notifier(struct notifier_block *nb)
 {
 	return atomic_notifier_chain_unregister(&msm_rpm_sleep_notifier, nb);
 }
-
-static struct workqueue_struct *msm_rpm_smd_wq;
 
 enum {
 	MSM_RPM_MSG_REQUEST_TYPE = 0,
@@ -1139,13 +1136,16 @@ static int msm_rpm_glink_send_buffer(char *buf, uint32_t size, bool noirq)
 	do {
 		ret = glink_tx(glink_data->glink_handle, buf, buf,
 					size, GLINK_TX_SINGLE_THREADED);
-		if (ret == -EBUSY) {
-			pr_warn("%s: Channel is not ready. ret = %d\n",
-							__func__, ret);
-			spin_unlock_irqrestore(&msm_rpm_data.smd_lock_write,
-									flags);
-			udelay(5);
-			spin_lock_irqsave(&msm_rpm_data.smd_lock_write, flags);
+		if (ret == -EBUSY || ret == -ENOSPC) {
+			if (!noirq) {
+				spin_unlock_irqrestore(
+					&msm_rpm_data.smd_lock_write, flags);
+				cpu_relax();
+				spin_lock_irqsave(
+					&msm_rpm_data.smd_lock_write, flags);
+			} else {
+				udelay(5);
+			}
 			timeout--;
 		} else {
 			ret = 0;
@@ -1860,15 +1860,6 @@ static int msm_rpm_dev_probe(struct platform_device *pdev)
 	wait_for_completion(&msm_rpm_data.smd_open);
 
 	smd_disable_read_intr(msm_rpm_data.ch_info);
-
-	msm_rpm_smd_wq = alloc_workqueue("rpm-smd",
-			WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_HIGHPRI, 1);
-	if (!msm_rpm_smd_wq) {
-		pr_err("%s: Unable to alloc rpm-smd workqueue\n", __func__);
-		ret = -EINVAL;
-		goto fail;
-	}
-	queue_work(msm_rpm_smd_wq, &msm_rpm_data.work);
 
 	probe_status = ret;
 skip_init:

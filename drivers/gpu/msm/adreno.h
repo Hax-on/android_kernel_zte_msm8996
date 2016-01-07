@@ -108,8 +108,6 @@
 #define ADRENO_LM BIT(8)
 /* The core uses 64 bit GPU addresses */
 #define ADRENO_64BIT BIT(9)
-/* Sync between SMMU operations and power collapse */
-#define ADRENO_SYNC_SMMU_PC BIT(10)
 
 /*
  * Adreno GPU quirks - control bits for various workarounds
@@ -117,6 +115,8 @@
 
 /* Set TWOPASSUSEWFI in PC_DBG_ECO_CNTL (5XX) */
 #define ADRENO_QUIRK_TWO_PASS_USE_WFI BIT(0)
+/* Lock/unlock mutex to sync with the IOMMU */
+#define ADRENO_QUIRK_IOMMU_SYNC BIT(1)
 
 /* Flags to control command packet settings */
 #define KGSL_CMD_FLAGS_NONE             0
@@ -157,6 +157,7 @@ enum adreno_gpurev {
 	ADRENO_REV_A305 = 305,
 	ADRENO_REV_A305C = 306,
 	ADRENO_REV_A306 = 307,
+	ADRENO_REV_A306A = 308,
 	ADRENO_REV_A310 = 310,
 	ADRENO_REV_A320 = 320,
 	ADRENO_REV_A330 = 330,
@@ -169,6 +170,7 @@ enum adreno_gpurev {
 	ADRENO_REV_A506 = 506,
 	ADRENO_REV_A510 = 510,
 	ADRENO_REV_A530 = 530,
+	ADRENO_REV_A540 = 540,
 };
 
 #define ADRENO_START_WARM 0
@@ -307,6 +309,7 @@ struct adreno_gpu_core {
  * @lm_threshold_count: register value for counter for lm threshold breakin
  * @lm_threshold_cross: number of current peaks exceeding threshold
  * @speed_bin: Indicate which power level set to use
+ * @csdev: Pointer to a coresight device (if applicable)
  */
 struct adreno_device {
 	struct kgsl_device dev;    /* Must be first field in this struct */
@@ -364,6 +367,8 @@ struct adreno_device {
 
 	unsigned int speed_bin;
 	unsigned int quirks;
+
+	struct coresight_device *csdev;
 };
 
 /**
@@ -609,7 +614,6 @@ struct adreno_irq_funcs {
 struct adreno_irq {
 	unsigned int mask;
 	struct adreno_irq_funcs *funcs;
-	int funcs_count;
 };
 
 /*
@@ -677,8 +681,6 @@ struct adreno_gpudev {
 	void (*init)(struct adreno_device *);
 	int (*rb_init)(struct adreno_device *, struct adreno_ringbuffer *);
 	int (*hw_init)(struct adreno_device *);
-	int (*switch_to_unsecure_mode)(struct adreno_device *,
-				struct adreno_ringbuffer *);
 	int (*microcode_read)(struct adreno_device *);
 	int (*microcode_load)(struct adreno_device *, unsigned int start_type);
 	void (*perfcounter_init)(struct adreno_device *);
@@ -703,6 +705,7 @@ struct adreno_gpudev {
 	int (*preemption_init)(struct adreno_device *);
 	void (*preemption_schedule)(struct adreno_device *);
 	void (*enable_64bit)(struct adreno_device *);
+	void (*pre_reset)(struct adreno_device *);
 };
 
 struct log_field {
@@ -814,9 +817,6 @@ void adreno_shadermem_regread(struct kgsl_device *device,
 						unsigned int offsetwords,
 						unsigned int *value);
 
-unsigned int adreno_a3xx_rbbm_clock_ctl_default(struct adreno_device
-							*adreno_dev);
-
 void adreno_snapshot(struct kgsl_device *device,
 		struct kgsl_snapshot *snapshot,
 		struct kgsl_context *context);
@@ -896,6 +896,7 @@ ADRENO_TARGET(a305, ADRENO_REV_A305)
 ADRENO_TARGET(a305b, ADRENO_REV_A305B)
 ADRENO_TARGET(a305c, ADRENO_REV_A305C)
 ADRENO_TARGET(a306, ADRENO_REV_A306)
+ADRENO_TARGET(a306a, ADRENO_REV_A306A)
 ADRENO_TARGET(a310, ADRENO_REV_A310)
 ADRENO_TARGET(a320, ADRENO_REV_A320)
 ADRENO_TARGET(a330, ADRENO_REV_A330)
@@ -946,6 +947,7 @@ ADRENO_TARGET(a505, ADRENO_REV_A505)
 ADRENO_TARGET(a506, ADRENO_REV_A506)
 ADRENO_TARGET(a510, ADRENO_REV_A510)
 ADRENO_TARGET(a530, ADRENO_REV_A530)
+ADRENO_TARGET(a540, ADRENO_REV_A540)
 
 static inline int adreno_is_a530v1(struct adreno_device *adreno_dev)
 {
@@ -969,6 +971,12 @@ static inline int adreno_is_a505_or_a506(struct adreno_device *adreno_dev)
 {
 	return ADRENO_GPUREV(adreno_dev) >= 505 &&
 			ADRENO_GPUREV(adreno_dev) <= 506;
+}
+
+static inline int adreno_is_a540v1(struct adreno_device *adreno_dev)
+{
+	return (ADRENO_GPUREV(adreno_dev) == ADRENO_REV_A540) &&
+		(ADRENO_CHIPID_PATCH(adreno_dev->chipid) == 0);
 }
 /**
  * adreno_context_timestamp() - Return the last queued timestamp for the context
@@ -1396,5 +1404,22 @@ static inline bool adreno_long_ib_detect(struct adreno_device *adreno_dev)
 	return adreno_dev->long_ib_detect &&
 		!test_bit(ADRENO_DEVICE_ISDB_ENABLED, &adreno_dev->priv);
 }
+
+/*
+ * adreno_support_64bit() - Check the feature flag only if it is in
+ * 64bit kernel otherwise return false
+ * adreno_dev: The adreno device
+ */
+#if BITS_PER_LONG == 64
+static inline bool adreno_support_64bit(struct adreno_device *adreno_dev)
+{
+	return ADRENO_FEATURE(adreno_dev, ADRENO_64BIT);
+}
+#else
+static inline bool adreno_support_64bit(struct adreno_device *adreno_dev)
+{
+	return false;
+}
+#endif /*BITS_PER_LONG*/
 
 #endif /*__ADRENO_H */

@@ -308,7 +308,10 @@
 	};
 
 	clock_gcc: qcom,gcc@100000 {
-		compatible = "qcom,dummycc";
+		compatible = "qcom,gcc-cobalt";
+		reg = <0x100000 0xb0000>;
+		reg-names = "cc_base";
+		vdd_dig-supply = <&pmcobalt_s1_level>;
 		#clock-cells = <1>;
 	};
 
@@ -323,7 +326,9 @@
 	};
 
 	clock_debug: qcom,debugcc@162000 {
-		compatible = "qcom,dummycc";
+		compatible = "qcom,cc-debug-cobalt";
+		reg = <0x162000 0x4>;
+		reg-names = "cc_base";
 		#clock-cells = <1>;
 	};
 
@@ -336,7 +341,7 @@
 	qcom,smem@86000000 {
 		compatible = "qcom,smem";
 		reg = <0x86000000 0x200000>,
-			<0x17820010 0x4>,
+			<0x17911008 0x4>,
 			<0x778000 0x7000>,
 			<0x1fd4000 0x8>;
 		reg-names = "smem", "irq-reg-base", "aux-mem1",
@@ -443,7 +448,7 @@
 	qcom,glink-smem-native-xprt-modem@86000000 {
 		compatible = "qcom,glink-smem-native-xprt";
 		reg = <0x86000000 0x200000>,
-			<0x17820010 0x4>;
+			<0x17911008 0x4>;
 		reg-names = "smem", "irq-reg-base";
 		qcom,irq-mask = <0x8000>;
 		interrupts = <0 452 1>;
@@ -453,7 +458,7 @@
 	qcom,glink-smem-native-xprt-adsp@86000000 {
 		compatible = "qcom,glink-smem-native-xprt";
 		reg = <0x86000000 0x200000>,
-			<0x17820010 0x4>;
+			<0x17911008 0x4>;
 		reg-names = "smem", "irq-reg-base";
 		qcom,irq-mask = <0x200>;
 		interrupts = <0 157 1>;
@@ -463,7 +468,7 @@
 	qcom,glink-smem-native-xprt-dsps@86000000 {
 		compatible = "qcom,glink-smem-native-xprt";
 		reg = <0x86000000 0x200000>,
-			<0x17820010 0x4>;
+			<0x17911008 0x4>;
 		reg-names = "smem", "irq-reg-base";
 		qcom,irq-mask = <0x8000000>;
 		interrupts = <0 179 1>;
@@ -473,7 +478,7 @@
 	qcom,glink-smem-native-xprt-rpm@778000 {
 		compatible = "qcom,glink-rpm-native-xprt";
 		reg = <0x778000 0x7000>,
-			<0x17820010 0x4>;
+			<0x17911008 0x4>;
 		reg-names = "msgram", "irq-reg-base";
 		qcom,irq-mask = <0x1>;
 		interrupts = <0 168 1>;
@@ -555,6 +560,14 @@
 		qcom,fragmented-data;
 	};
 
+	qcom,spcom {
+		compatible = "qcom,spcom";
+
+		/* predefined channels, remote side is server */
+		qcom,spcom-ch-names = "sp_kernel" , "sp_ssr";
+		status = "ok";
+	};
+
 	sdhc_2: sdhci@c0a4900 {
 		compatible = "qcom,sdhci-msm";
 		reg = <0xc0a4900 0x314>, <0xc0a4000 0x800>;
@@ -606,6 +619,41 @@
 		status = "disabled";
 	};
 
+	ufs_ice: ufsice@1db0000 {
+		compatible = "qcom,ice";
+		reg = <0x1db0000 0x8000>;
+		qcom,enable-ice-clk;
+		clock-names =   "ufs_core_clk_src",
+				"ufs_core_clk",
+				"bus_clk",
+				"iface_clk",
+				"ice_core_clk_src",
+				"ice_core_clk";
+		clocks = <&clock_gcc clk_ufs_axi_clk_src>,
+			 <&clock_gcc clk_gcc_ufs_axi_clk>,
+			 <&clock_gcc clk_gcc_aggre1_ufs_axi_clk>,
+			 <&clock_gcc clk_gcc_ufs_ahb_clk>,
+			 <&clock_gcc clk_ufs_ice_core_clk_src>,
+			 <&clock_gcc clk_gcc_ufs_ice_core_clk>;
+		qcom,op-freq-hz =	<0>,
+					<0>,
+					<0>,
+					<0>,
+					<300000000>,
+					<0>;
+		vdd-hba-supply = <&gdsc_ufs>;
+		qcom,msm-bus,name = "ufs_ice_noc";
+		qcom,msm-bus,num-cases = <2>;
+		qcom,msm-bus,num-paths = <1>;
+		qcom,msm-bus,vectors-KBps =
+				<1 650 0 0>,    /* No vote */
+				<1 650 1000 0>; /* Max. bandwidth */
+		qcom,bus-vector-names = "MIN",
+					"MAX";
+		qcom,instance-type = "ufs";
+		status = "disabled";
+	};
+
 	ufs1: ufshc@1da4000 {
 		compatible = "jedec,ufs-1.1";
 		reg = <0x1da4000 0x2500>;
@@ -617,6 +665,7 @@
 		vcc-max-microamp = <750000>;
 		vccq-max-microamp = <450000>;
 		vccq2-max-microamp = <750000>;
+		ufs-qcom-crypto = <&ufs_ice>;
 
 		clock-names =
 			"core_clk_src",
@@ -1024,7 +1073,7 @@
 		reg = <0x5c00000 0x4000>;
 		interrupts = <0 390 1>;
 
-		vdd_cx-supply = <&pmcobalt_l26>;
+		vdd_cx-supply = <&pmcobalt_l27_level>;
 		vdd_px-supply = <&pmcobalt_lvs2>;
 		qcom,vdd_cx-uV-uA = <RPM_SMD_REGULATOR_LEVEL_TURBO 0>;
 		qcom,proxy-reg-names = "vdd_cx", "vdd_px";
@@ -1075,9 +1124,31 @@
 		memory-region = <&peripheral_mem>;
 	};
 
-};
+	wdog: qcom,wdt@17817000 {
+		compatible = "qcom,msm-watchdog";
+		reg = <0x17817000 0x1000>;
+		reg-names = "wdt-base";
+		interrupts = <0 3 0>, <0 4 0>;
+		qcom,bark-time = <11000>;
+		qcom,pet-time = <10000>;
+		qcom,ipi-ping;
+		qcom,wakeup-enable;
+	};
 
-#include "msmcobalt-regulator.dtsi"
+	qcom,msm-imem@146bf000 {
+		compatible = "qcom,msm-imem";
+		reg = <0x146bf000 0x1000>;
+		ranges = <0x0 0x146bf000 0x1000>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		mem_dump_table@10 {
+			compatible = "qcom,msm-imem-mem_dump_table";
+			reg = <0x10 8>;
+		};
+	};
+
+};
 
 &gdsc_mmss {
 	status = "ok";
@@ -1107,11 +1178,7 @@
 
 &gdsc_bimc_smmu {
 	clock-names = "bus_clk";
-	clocks = <&clock_gcc clk_bimc_smmu_axi_clk>;
-	status = "ok";
-};
-
-&gdsc_hlos1_vote_gpu_smmu {
+	clocks = <&clock_mmss clk_bimc_smmu_axi_clk>;
 	status = "ok";
 };
 
@@ -1196,3 +1263,6 @@
 };
 
 #include "msm-arm-smmu-cobalt.dtsi"
+#include "msmcobalt-ion.dtsi"
+#include "msm-pmcobalt-rpm-regulator.dtsi"
+#include "msmcobalt-regulator.dtsi"

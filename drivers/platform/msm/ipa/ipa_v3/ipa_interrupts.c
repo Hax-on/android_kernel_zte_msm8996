@@ -40,7 +40,7 @@ static void ipa3_enable_tx_suspend_wa(struct work_struct *work);
 static DECLARE_DELAYED_WORK(dwork_en_suspend_int,
 						ipa3_enable_tx_suspend_wa);
 static spinlock_t suspend_wa_lock;
-static void ipa3_process_interrupts(void);
+static void ipa3_process_interrupts(bool isr_context);
 
 static int ipa3_irq_mapping[IPA_IRQ_MAX] = {
 	[IPA_UC_TX_CMD_Q_NOT_FULL_IRQ]		= -1,
@@ -93,7 +93,7 @@ static bool ipa3_is_valid_ep(u32 ep_suspend_data)
 	return false;
 }
 
-static int ipa3_handle_interrupt(int irq_num)
+static int ipa3_handle_interrupt(int irq_num, bool isr_context)
 {
 	struct ipa3_interrupt_info interrupt_info;
 	struct ipa3_interrupt_work_wrap *work_data;
@@ -113,8 +113,19 @@ static int ipa3_handle_interrupt(int irq_num)
 	case IPA_TX_SUSPEND_IRQ:
 		IPADBG("processing TX_SUSPEND interrupt work-around\n");
 		ipa3_tx_suspend_interrupt_wa();
-		suspend_data = ipa_read_reg(ipa3_ctx->mmio,
-					IPA_IRQ_SUSPEND_INFO_EE_n_ADDR(ipa_ee));
+		if (ipa3_ctx->ipa_hw_type == IPA_HW_v3_0) {
+			suspend_data = ipa_read_reg(ipa3_ctx->mmio,
+				IPA_IRQ_SUSPEND_INFO_EE_n_ADDR_v3_0(ipa_ee));
+			IPADBG("get interrupt %d\n", suspend_data);
+		} else {
+			suspend_data = ipa_read_reg(ipa3_ctx->mmio,
+				IPA_IRQ_SUSPEND_INFO_EE_n_ADDR_v3_1(ipa_ee));
+			IPADBG("get interrupt %d\n", suspend_data);
+			/* Clearing L2 interrupts status */
+			ipa_write_reg(ipa3_ctx->mmio,
+				IPA_SUSPEND_IRQ_CLR_EE_n_ADDR(ipa_ee),
+				suspend_data);
+		}
 		if (!ipa3_is_valid_ep(suspend_data))
 			return 0;
 
@@ -131,7 +142,8 @@ static int ipa3_handle_interrupt(int irq_num)
 		break;
 	}
 
-	if (interrupt_info.deferred_flag) {
+	/* Force defer processing if in ISR context. */
+	if (interrupt_info.deferred_flag || isr_context) {
 		work_data = kzalloc(sizeof(struct ipa3_interrupt_work_wrap),
 				GFP_ATOMIC);
 		if (!work_data) {
@@ -173,7 +185,7 @@ static void ipa3_enable_tx_suspend_wa(struct work_struct *work)
 	BUG_ON(irq_num == -1);
 
 	/* make sure ipa hw is clocked on*/
-	ipa3_inc_client_enable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	en = ipa_read_reg(ipa3_ctx->mmio, IPA_IRQ_EN_EE_n_ADDR(ipa_ee));
 	suspend_bmask = 1 << irq_num;
@@ -183,8 +195,8 @@ static void ipa3_enable_tx_suspend_wa(struct work_struct *work)
 		, en);
 	ipa3_uc_rg10_write_reg(ipa3_ctx->mmio,
 		IPA_IRQ_EN_EE_n_ADDR(ipa_ee), en);
-	ipa3_process_interrupts();
-	ipa3_dec_client_disable_clks();
+	ipa3_process_interrupts(false);
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 
 	IPADBG("Exit\n");
 }
@@ -215,7 +227,7 @@ static void ipa3_tx_suspend_interrupt_wa(void)
 	IPADBG("Exit\n");
 }
 
-static void ipa3_process_interrupts(void)
+static void ipa3_process_interrupts(bool isr_context)
 {
 	u32 reg;
 	u32 bmsk;
@@ -231,8 +243,18 @@ static void ipa3_process_interrupts(void)
 	while (en & reg) {
 		bmsk = 1;
 		for (i = 0; i < IPA_IRQ_NUM_MAX; i++) {
-			if (en & reg & bmsk)
-				ipa3_handle_interrupt(i);
+			if (en & reg & bmsk) {
+				/*
+				 * handle the interrupt with spin_lock
+				 * unlocked to avoid calling client in atomic
+				 * context. mutual exclusion still preserved
+				 * as the read/clr is done with spin_lock
+				 * locked.
+				 */
+				spin_unlock_irqrestore(&suspend_wa_lock, flags);
+				ipa3_handle_interrupt(i, isr_context);
+				spin_lock_irqsave(&suspend_wa_lock, flags);
+			}
 			bmsk = bmsk << 1;
 		}
 		ipa3_uc_rg10_write_reg(ipa3_ctx->mmio,
@@ -252,9 +274,9 @@ static void ipa3_process_interrupts(void)
 static void ipa3_interrupt_defer(struct work_struct *work)
 {
 	IPADBG("processing interrupts in wq\n");
-	ipa3_inc_client_enable_clks();
-	ipa3_process_interrupts();
-	ipa3_dec_client_disable_clks();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
+	ipa3_process_interrupts(false);
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 	IPADBG("Done\n");
 }
 
@@ -276,7 +298,7 @@ static irqreturn_t ipa3_isr(int irq, void *ctxt)
 		goto bail;
 	}
 
-	ipa3_process_interrupts();
+	ipa3_process_interrupts(true);
 	IPADBG("Exit\n");
 
 bail:
@@ -302,8 +324,9 @@ int ipa3_add_interrupt_handler(enum ipa_irq_type interrupt,
 	u32 val;
 	u32 bmsk;
 	int irq_num;
+	int client_idx, ep_idx;
 
-	IPADBG("in ipa3_add_interrupt_handler\n");
+	IPADBG("in ipa3_add_interrupt_handler interrupt_enum(%d)\n", interrupt);
 	if (interrupt < IPA_BAD_SNOC_ACCESS_IRQ ||
 		interrupt >= IPA_IRQ_MAX) {
 		IPAERR("invalid interrupt number %d\n", interrupt);
@@ -316,6 +339,7 @@ int ipa3_add_interrupt_handler(enum ipa_irq_type interrupt,
 		WARN_ON(1);
 		return -EFAULT;
 	}
+	IPADBG("ipa_interrupt_to_cb irq_num(%d)\n", irq_num);
 
 	ipa_interrupt_to_cb[irq_num].deferred_flag = deferred_flag;
 	ipa_interrupt_to_cb[irq_num].handler = handler;
@@ -329,6 +353,27 @@ int ipa3_add_interrupt_handler(enum ipa_irq_type interrupt,
 	ipa3_uc_rg10_write_reg(ipa3_ctx->mmio,
 		IPA_IRQ_EN_EE_n_ADDR(ipa_ee), val);
 	IPADBG("wrote IPA_IRQ_EN_EE_n_ADDR register. reg = %d\n", val);
+
+	/* register SUSPEND_IRQ_EN_EE_n_ADDR for L2 interrupt*/
+	if ((interrupt == IPA_TX_SUSPEND_IRQ) &&
+		(ipa3_ctx->ipa_hw_type == IPA_HW_v3_1)) {
+		val = ~0;
+		for (client_idx = 0; client_idx < IPA_CLIENT_MAX; client_idx++)
+			if (IPA_CLIENT_IS_Q6_CONS(client_idx) ||
+				IPA_CLIENT_IS_Q6_PROD(client_idx)) {
+				ep_idx = ipa3_get_ep_mapping(client_idx);
+				IPADBG("modem ep_idx(%d) client_idx = %d\n",
+					ep_idx, client_idx);
+			if (ep_idx == -1)
+				IPADBG("Invalid IPA client\n");
+			else
+				val &= ~(1 << ep_idx);
+		}
+
+		ipa_write_reg(ipa3_ctx->mmio,
+			IPA_SUSPEND_IRQ_EN_EE_n_ADDR(ipa_ee), val);
+		IPADBG("wrote IPA_SUSPEND_IRQ_EN_EE_n_ADDR reg = %d\n", val);
+	}
 	return 0;
 }
 
@@ -362,6 +407,14 @@ int ipa3_remove_interrupt_handler(enum ipa_irq_type interrupt)
 	ipa_interrupt_to_cb[irq_num].handler = NULL;
 	ipa_interrupt_to_cb[irq_num].private_data = NULL;
 	ipa_interrupt_to_cb[irq_num].interrupt = -1;
+
+	/* clean SUSPEND_IRQ_EN_EE_n_ADDR for L2 interrupt */
+	if ((interrupt == IPA_TX_SUSPEND_IRQ) &&
+		(ipa3_ctx->ipa_hw_type == IPA_HW_v3_1)) {
+		ipa_write_reg(ipa3_ctx->mmio,
+			IPA_SUSPEND_IRQ_EN_EE_n_ADDR(ipa_ee), 0);
+		IPADBG("wrote IPA_SUSPEND_IRQ_EN_EE_n_ADDR reg = %d\n", 0);
+	}
 
 	val = ipa_read_reg(ipa3_ctx->mmio, IPA_IRQ_EN_EE_n_ADDR(ipa_ee));
 	bmsk = 1 << irq_num;
@@ -404,9 +457,14 @@ int ipa3_interrupts_init(u32 ipa_irq, u32 ee, struct device *ipa_dev)
 		return -ENOMEM;
 	}
 
-	/*Clearing interrupts status*/
+	/* Clearing interrupts status */
 	ipa3_uc_rg10_write_reg(ipa3_ctx->mmio,
 		IPA_IRQ_CLR_EE_n_ADDR(ipa_ee), reg);
+
+	/* Clearing L2 interrupts status */
+	if (ipa3_ctx->ipa_hw_type == IPA_HW_v3_1)
+		ipa_write_reg(ipa3_ctx->mmio,
+			IPA_SUSPEND_IRQ_CLR_EE_n_ADDR(ipa_ee), reg);
 
 	res = request_irq(ipa_irq, (irq_handler_t) ipa3_isr,
 				IRQF_TRIGGER_RISING, "ipa", ipa_dev);

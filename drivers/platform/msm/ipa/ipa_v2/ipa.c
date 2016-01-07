@@ -31,8 +31,12 @@
 #include <linux/netdevice.h>
 #include <linux/delay.h>
 #include <linux/qcom_iommu.h>
+#include <linux/time.h>
 #include "ipa_i.h"
 #include "ipa_rm_i.h"
+
+#define CREATE_TRACE_POINTS
+#include "ipa_trace.h"
 
 #define IPA_SUMMING_THRESHOLD (0x10)
 #define IPA_PIPE_MEM_START_OFST (0x0)
@@ -191,6 +195,160 @@ static bool smmu_present;
 static bool arm_smmu;
 static bool smmu_disable_htw;
 
+const char *ipa2_clients_strings[IPA_CLIENT_MAX] = {
+	__stringify(IPA_CLIENT_HSIC1_PROD),
+	__stringify(IPA_CLIENT_WLAN1_PROD),
+	__stringify(IPA_CLIENT_USB2_PROD),
+	__stringify(IPA_CLIENT_HSIC3_PROD),
+	__stringify(IPA_CLIENT_HSIC2_PROD),
+	__stringify(IPA_CLIENT_USB3_PROD),
+	__stringify(IPA_CLIENT_HSIC4_PROD),
+	__stringify(IPA_CLIENT_USB4_PROD),
+	__stringify(IPA_CLIENT_HSIC5_PROD),
+	__stringify(IPA_CLIENT_USB_PROD),
+	__stringify(IPA_CLIENT_A5_WLAN_AMPDU_PROD),
+	__stringify(IPA_CLIENT_A2_EMBEDDED_PROD),
+	__stringify(IPA_CLIENT_A2_TETHERED_PROD),
+	__stringify(IPA_CLIENT_APPS_LAN_WAN_PROD),
+	__stringify(IPA_CLIENT_APPS_CMD_PROD),
+	__stringify(IPA_CLIENT_ODU_PROD),
+	__stringify(IPA_CLIENT_MHI_PROD),
+	__stringify(IPA_CLIENT_Q6_LAN_PROD),
+	__stringify(IPA_CLIENT_Q6_WAN_PROD),
+	__stringify(IPA_CLIENT_Q6_CMD_PROD),
+	__stringify(IPA_CLIENT_MEMCPY_DMA_SYNC_PROD),
+	__stringify(IPA_CLIENT_MEMCPY_DMA_ASYNC_PROD),
+	__stringify(IPA_CLIENT_Q6_DECOMP_PROD),
+	__stringify(IPA_CLIENT_Q6_DECOMP2_PROD),
+	__stringify(IPA_CLIENT_UC_USB_PROD),
+
+	/* Below PROD client type is only for test purpose */
+	__stringify(IPA_CLIENT_TEST_PROD),
+	__stringify(IPA_CLIENT_TEST1_PROD),
+	__stringify(IPA_CLIENT_TEST2_PROD),
+	__stringify(IPA_CLIENT_TEST3_PROD),
+	__stringify(IPA_CLIENT_TEST4_PROD),
+
+	__stringify(IPA_CLIENT_HSIC1_CONS),
+	__stringify(IPA_CLIENT_WLAN1_CONS),
+	__stringify(IPA_CLIENT_HSIC2_CONS),
+	__stringify(IPA_CLIENT_USB2_CONS),
+	__stringify(IPA_CLIENT_WLAN2_CONS),
+	__stringify(IPA_CLIENT_HSIC3_CONS),
+	__stringify(IPA_CLIENT_USB3_CONS),
+	__stringify(IPA_CLIENT_WLAN3_CONS),
+	__stringify(IPA_CLIENT_HSIC4_CONS),
+	__stringify(IPA_CLIENT_USB4_CONS),
+	__stringify(IPA_CLIENT_WLAN4_CONS),
+	__stringify(IPA_CLIENT_HSIC5_CONS),
+	__stringify(IPA_CLIENT_USB_CONS),
+	__stringify(IPA_CLIENT_USB_DPL_CONS),
+	__stringify(IPA_CLIENT_A2_EMBEDDED_CONS),
+	__stringify(IPA_CLIENT_A2_TETHERED_CONS),
+	__stringify(IPA_CLIENT_A5_LAN_WAN_CONS),
+	__stringify(IPA_CLIENT_APPS_LAN_CONS),
+	__stringify(IPA_CLIENT_APPS_WAN_CONS),
+	__stringify(IPA_CLIENT_ODU_EMB_CONS),
+	__stringify(IPA_CLIENT_ODU_TETH_CONS),
+	__stringify(IPA_CLIENT_MHI_CONS),
+	__stringify(IPA_CLIENT_Q6_LAN_CONS),
+	__stringify(IPA_CLIENT_Q6_WAN_CONS),
+	__stringify(IPA_CLIENT_Q6_DUN_CONS),
+	__stringify(IPA_CLIENT_MEMCPY_DMA_SYNC_CONS),
+	__stringify(IPA_CLIENT_MEMCPY_DMA_ASYNC_CONS),
+	__stringify(IPA_CLIENT_Q6_DECOMP_CONS),
+	__stringify(IPA_CLIENT_Q6_DECOMP2_CONS),
+	__stringify(IPA_CLIENT_Q6_LTE_WIFI_AGGR_CONS),
+	/* Below CONS client type is only for test purpose */
+	__stringify(IPA_CLIENT_TEST_CONS),
+	__stringify(IPA_CLIENT_TEST1_CONS),
+	__stringify(IPA_CLIENT_TEST2_CONS),
+	__stringify(IPA_CLIENT_TEST3_CONS),
+	__stringify(IPA_CLIENT_TEST4_CONS),
+};
+
+static int ipa2_active_clients_log_insert(const char *string)
+{
+	if (!ipa_ctx->ipa2_active_clients_logging.log_rdy)
+		return -EPERM;
+	strlcpy(ipa_ctx->ipa2_active_clients_logging.log_buffer
+			[ipa_ctx->ipa2_active_clients_logging.log_head],
+			string,
+			(size_t)IPA2_ACTIVE_CLIENTS_LOG_LINE_LEN);
+	ipa_ctx->ipa2_active_clients_logging.log_head =
+			(ipa_ctx->ipa2_active_clients_logging.log_head + 1) %
+			IPA2_ACTIVE_CLIENTS_LOG_BUFFER_SIZE_LINES;
+	if (ipa_ctx->ipa2_active_clients_logging.log_tail ==
+			ipa_ctx->ipa2_active_clients_logging.log_head) {
+		ipa_ctx->ipa2_active_clients_logging.log_tail =
+			(ipa_ctx->ipa2_active_clients_logging.log_tail + 1) %
+			IPA2_ACTIVE_CLIENTS_LOG_BUFFER_SIZE_LINES;
+	}
+	return 0;
+}
+
+static int ipa2_active_clients_log_init(void)
+{
+	int i;
+
+	ipa_ctx->ipa2_active_clients_logging.log_buffer[0] = kzalloc(
+			IPA2_ACTIVE_CLIENTS_LOG_BUFFER_SIZE_LINES *
+			sizeof(char[IPA2_ACTIVE_CLIENTS_LOG_LINE_LEN]),
+			GFP_KERNEL);
+	if (ipa_ctx->ipa2_active_clients_logging.log_buffer == NULL) {
+		IPAERR("Active Clients Logging memory allocation failed");
+		goto bail;
+	}
+	for (i = 0; i < IPA2_ACTIVE_CLIENTS_LOG_BUFFER_SIZE_LINES; i++) {
+		ipa_ctx->ipa2_active_clients_logging.log_buffer[i] =
+			ipa_ctx->ipa2_active_clients_logging.log_buffer[0] +
+			(IPA2_ACTIVE_CLIENTS_LOG_LINE_LEN * i);
+	}
+	ipa_ctx->ipa2_active_clients_logging.log_head = 0;
+	ipa_ctx->ipa2_active_clients_logging.log_tail =
+			IPA2_ACTIVE_CLIENTS_LOG_BUFFER_SIZE_LINES - 1;
+	ipa_ctx->ipa2_active_clients_logging.log_rdy = 1;
+
+	return 0;
+
+bail:
+	return -ENOMEM;
+}
+
+void ipa2_active_clients_log_clear(void)
+{
+	ipa_active_clients_lock();
+	ipa_ctx->ipa2_active_clients_logging.log_head = 0;
+	ipa_ctx->ipa2_active_clients_logging.log_tail =
+			IPA2_ACTIVE_CLIENTS_LOG_BUFFER_SIZE_LINES - 1;
+	ipa_active_clients_unlock();
+}
+
+static void ipa2_active_clients_log_destroy(void)
+{
+	ipa_ctx->ipa2_active_clients_logging.log_rdy = 0;
+	kfree(ipa_ctx->ipa2_active_clients_logging.log_buffer[0]);
+	ipa_ctx->ipa2_active_clients_logging.log_head = 0;
+	ipa_ctx->ipa2_active_clients_logging.log_tail =
+			IPA2_ACTIVE_CLIENTS_LOG_BUFFER_SIZE_LINES - 1;
+}
+
+void ipa2_active_clients_log_print_buffer(void)
+{
+	int i;
+
+	ipa_active_clients_lock();
+	for (i = (ipa_ctx->ipa2_active_clients_logging.log_tail + 1) %
+			IPA2_ACTIVE_CLIENTS_LOG_BUFFER_SIZE_LINES;
+		i != ipa_ctx->ipa2_active_clients_logging.log_head;
+		i = (i + 1) % IPA2_ACTIVE_CLIENTS_LOG_BUFFER_SIZE_LINES) {
+		pr_err("%s\n", ipa_ctx->ipa2_active_clients_logging
+				.log_buffer[i]);
+	}
+	ipa_active_clients_unlock();
+}
+
+
 enum ipa_smmu_cb_type {
 	IPA_SMMU_CB_AP,
 	IPA_SMMU_CB_WLAN,
@@ -200,26 +358,6 @@ enum ipa_smmu_cb_type {
 };
 
 static struct ipa_smmu_cb_ctx smmu_cb[IPA_SMMU_CB_MAX];
-
-#if !defined(CONFIG_ARM_DMA_USE_IOMMU) && !defined(CONFIG_ARM64_DMA_USE_IOMMU)
-struct dma_iommu_mapping *
-arm_iommu_create_mapping(struct bus_type *bus, dma_addr_t base,
-				size_t size)
-{
-	return NULL;
-}
-
-void arm_iommu_release_mapping(struct dma_iommu_mapping *mapping) { }
-
-int arm_iommu_attach_device(struct device *dev,
-					struct dma_iommu_mapping *mapping)
-{
-	return 0;
-}
-
-void arm_iommu_detach_device(struct device *dev) { }
-#endif
-
 
 struct iommu_domain *ipa2_get_smmu_domain(void)
 {
@@ -404,7 +542,7 @@ static long ipa_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	if (_IOC_NR(cmd) >= IPA_IOCTL_MAX)
 		return -ENOTTY;
 
-	ipa_inc_client_enable_clks();
+	IPA2_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	switch (cmd) {
 	case IPA_IOC_ALLOC_NAT_MEM:
@@ -1107,12 +1245,12 @@ static long ipa_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		break;
 
 	default:        /* redundant, as cmd was checked against MAXNR */
-		ipa_dec_client_disable_clks();
+		IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 		return -ENOTTY;
 	}
 	kfree(param);
 
-	ipa_dec_client_disable_clks();
+	IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 
 	return retval;
 }
@@ -1299,7 +1437,7 @@ int ipa_init_q6_smem(void)
 {
 	int rc;
 
-	ipa_inc_client_enable_clks();
+	IPA2_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	if (ipa_ctx->ipa_hw_type == IPA_HW_v2_0)
 		rc = ipa_init_smem_region(IPA_MEM_PART(modem_size) -
@@ -1311,7 +1449,7 @@ int ipa_init_q6_smem(void)
 
 	if (rc) {
 		IPAERR("failed to initialize Modem RAM memory\n");
-		ipa_dec_client_disable_clks();
+		IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 		return rc;
 	}
 
@@ -1319,7 +1457,7 @@ int ipa_init_q6_smem(void)
 		IPA_MEM_PART(modem_hdr_ofst));
 	if (rc) {
 		IPAERR("failed to initialize Modem HDRs RAM memory\n");
-		ipa_dec_client_disable_clks();
+		IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 		return rc;
 	}
 
@@ -1327,7 +1465,7 @@ int ipa_init_q6_smem(void)
 		IPA_MEM_PART(modem_hdr_proc_ctx_ofst));
 	if (rc) {
 		IPAERR("failed to initialize Modem proc ctx RAM memory\n");
-		ipa_dec_client_disable_clks();
+		IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 		return rc;
 	}
 
@@ -1335,11 +1473,11 @@ int ipa_init_q6_smem(void)
 		IPA_MEM_PART(modem_comp_decomp_ofst));
 	if (rc) {
 		IPAERR("failed to initialize Modem Comp/Decomp RAM memory\n");
-		ipa_dec_client_disable_clks();
+		IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 		return rc;
 	}
 
-	ipa_dec_client_disable_clks();
+	IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 
 	return rc;
 }
@@ -1349,31 +1487,60 @@ static void ipa_free_buffer(void *user1, int user2)
 	kfree(user1);
 }
 
-static int ipa_q6_pipe_delay(void)
+static int ipa_q6_pipe_delay(bool zip_pipes)
 {
 	u32 reg_val = 0;
 	int client_idx;
 	int ep_idx;
 
+	/* For ZIP pipes, processing is done in AFTER_SHUTDOWN callback. */
 	for (client_idx = 0; client_idx < IPA_CLIENT_MAX; client_idx++) {
-		if (IPA_CLIENT_IS_Q6_PROD(client_idx)) {
+		/* Skip the processing for non Q6 pipes. */
+		if (!IPA_CLIENT_IS_Q6_PROD(client_idx))
+			continue;
+		/* Skip the processing for NON-ZIP pipes. */
+		else if (zip_pipes && IPA_CLIENT_IS_Q6_NON_ZIP_PROD(client_idx))
+			continue;
+		/* Skip the processing for ZIP pipes. */
+		else if (!zip_pipes && IPA_CLIENT_IS_Q6_ZIP_PROD(client_idx))
+			continue;
+
+		ep_idx = ipa2_get_ep_mapping(client_idx);
+		if (ep_idx == -1)
+			continue;
+
+		IPA_SETFIELD_IN_REG(reg_val, 1,
+			IPA_ENDP_INIT_CTRL_N_ENDP_DELAY_SHFT,
+			IPA_ENDP_INIT_CTRL_N_ENDP_DELAY_BMSK);
+
+		ipa_write_reg(ipa_ctx->mmio,
+			IPA_ENDP_INIT_CTRL_N_OFST(ep_idx), reg_val);
+	}
+
+	return 0;
+}
+
+int ipa_q6_monitor_holb_mitigation(bool enable)
+{
+	int ep_idx;
+	int client_idx;
+
+	for (client_idx = 0; client_idx < IPA_CLIENT_MAX; client_idx++) {
+		if (IPA_CLIENT_IS_Q6_NON_ZIP_CONS(client_idx)) {
 			ep_idx = ipa2_get_ep_mapping(client_idx);
 			if (ep_idx == -1)
 				continue;
-
-			IPA_SETFIELD_IN_REG(reg_val, 1,
-				IPA_ENDP_INIT_CTRL_N_ENDP_DELAY_SHFT,
-				IPA_ENDP_INIT_CTRL_N_ENDP_DELAY_BMSK);
-
-			ipa_write_reg(ipa_ctx->mmio,
-				IPA_ENDP_INIT_CTRL_N_OFST(ep_idx), reg_val);
+			/* Send a command to Uc to enable/disable
+			 * holb monitoring.
+			 */
+			ipa_uc_monitor_holb(client_idx, enable);
 		}
 	}
 
 	return 0;
 }
 
-static int ipa_q6_avoid_holb(void)
+static int ipa_q6_avoid_holb(bool zip_pipes)
 {
 	u32 reg_val;
 	int ep_idx;
@@ -1383,38 +1550,47 @@ static int ipa_q6_avoid_holb(void)
 	memset(&avoid_holb, 0, sizeof(avoid_holb));
 	avoid_holb.ipa_ep_suspend = true;
 
+	/* For ZIP pipes, processing is done in AFTER_SHUTDOWN callback. */
 	for (client_idx = 0; client_idx < IPA_CLIENT_MAX; client_idx++) {
-		if (IPA_CLIENT_IS_Q6_CONS(client_idx)) {
-			ep_idx = ipa2_get_ep_mapping(client_idx);
-			if (ep_idx == -1)
-				continue;
+		/* Skip the processing for non Q6 pipes. */
+		if (!IPA_CLIENT_IS_Q6_CONS(client_idx))
+			continue;
+		/* Skip the processing for NON-ZIP pipes. */
+		else if (zip_pipes && IPA_CLIENT_IS_Q6_NON_ZIP_CONS(client_idx))
+			continue;
+		/* Skip the processing for ZIP pipes. */
+		else if (!zip_pipes && IPA_CLIENT_IS_Q6_ZIP_CONS(client_idx))
+			continue;
 
-			/*
-			 * ipa2_cfg_ep_holb is not used here because we are
-			 * setting HOLB on Q6 pipes, and from APPS perspective
-			 * they are not valid, therefore, the above function
-			 * will fail.
-			 */
-			reg_val = 0;
-			IPA_SETFIELD_IN_REG(reg_val, 0,
-				IPA_ENDP_INIT_HOL_BLOCK_TIMER_N_TIMER_SHFT,
-				IPA_ENDP_INIT_HOL_BLOCK_TIMER_N_TIMER_BMSK);
+		ep_idx = ipa2_get_ep_mapping(client_idx);
+		if (ep_idx == -1)
+			continue;
 
-			ipa_write_reg(ipa_ctx->mmio,
-			IPA_ENDP_INIT_HOL_BLOCK_TIMER_N_OFST_v2_0(ep_idx),
-				reg_val);
+		/*
+		 * ipa2_cfg_ep_holb is not used here because we are
+		 * setting HOLB on Q6 pipes, and from APPS perspective
+		 * they are not valid, therefore, the above function
+		 * will fail.
+		 */
+		reg_val = 0;
+		IPA_SETFIELD_IN_REG(reg_val, 0,
+			IPA_ENDP_INIT_HOL_BLOCK_TIMER_N_TIMER_SHFT,
+			IPA_ENDP_INIT_HOL_BLOCK_TIMER_N_TIMER_BMSK);
 
-			reg_val = 0;
-			IPA_SETFIELD_IN_REG(reg_val, 1,
-				IPA_ENDP_INIT_HOL_BLOCK_EN_N_EN_SHFT,
-				IPA_ENDP_INIT_HOL_BLOCK_EN_N_EN_BMSK);
+		ipa_write_reg(ipa_ctx->mmio,
+		IPA_ENDP_INIT_HOL_BLOCK_TIMER_N_OFST_v2_0(ep_idx),
+			reg_val);
 
-			ipa_write_reg(ipa_ctx->mmio,
-				IPA_ENDP_INIT_HOL_BLOCK_EN_N_OFST_v2_0(ep_idx),
-				reg_val);
+		reg_val = 0;
+		IPA_SETFIELD_IN_REG(reg_val, 1,
+			IPA_ENDP_INIT_HOL_BLOCK_EN_N_EN_SHFT,
+			IPA_ENDP_INIT_HOL_BLOCK_EN_N_EN_BMSK);
 
-			ipa2_cfg_ep_ctrl(ep_idx, &avoid_holb);
-		}
+		ipa_write_reg(ipa_ctx->mmio,
+			IPA_ENDP_INIT_HOL_BLOCK_EN_N_OFST_v2_0(ep_idx),
+			reg_val);
+
+		ipa2_cfg_ep_ctrl(ep_idx, &avoid_holb);
 	}
 
 	return 0;
@@ -1635,7 +1811,8 @@ static int ipa_q6_set_ex_path_dis_agg(void)
 
 	/* Disable AGGR on IPA->Q6 pipes */
 	for (client_idx = 0; client_idx < IPA_CLIENT_MAX; client_idx++) {
-		if (IPA_CLIENT_IS_Q6_CONS(client_idx)) {
+		if (IPA_CLIENT_IS_Q6_NON_ZIP_CONS(client_idx) ||
+			IPA_CLIENT_IS_Q6_ZIP_CONS(client_idx)) {
 			reg_write = kzalloc(sizeof(*reg_write), GFP_KERNEL);
 
 			if (!reg_write) {
@@ -1675,15 +1852,16 @@ static int ipa_q6_set_ex_path_dis_agg(void)
 }
 
 /**
-* ipa_q6_cleanup() - A cleanup for all Q6 related configuration
-*                    in IPA HW. This is performed in case of SSR.
+* ipa_q6_pre_shutdown_cleanup() - A cleanup for all Q6 related configuration
+*                    in IPA HW before modem shutdown. This is performed in
+*                    case of SSR.
 *
 * Return codes:
 * 0: success
 * This is a mandatory procedure, in case one of the steps fails, the
 * AP needs to restart.
 */
-int ipa_q6_cleanup(void)
+int ipa_q6_pre_shutdown_cleanup(void)
 {
 	/* If uC has notified the APPS upon a ZIP engine error,
 	 * APPS need to assert (This is a non recoverable error).
@@ -1691,13 +1869,22 @@ int ipa_q6_cleanup(void)
 	if (ipa_ctx->uc_ctx.uc_zip_error)
 		BUG();
 
-	ipa_inc_client_enable_clks();
-
-	if (ipa_q6_pipe_delay()) {
+	IPA2_ACTIVE_CLIENTS_INC_SPECIAL("Q6");
+	/*
+	 * pipe delay and holb discard for ZIP pipes are handled
+	 * in post shutdown callback.
+	 */
+	if (ipa_q6_pipe_delay(false)) {
 		IPAERR("Failed to delay Q6 pipes\n");
 		BUG();
 	}
-	if (ipa_q6_avoid_holb()) {
+
+	if (ipa_q6_monitor_holb_mitigation(false)) {
+		IPAERR("Failed to disable HOLB monitroing on Q6 pipes\n");
+		BUG();
+	}
+
+	if (ipa_q6_avoid_holb(false)) {
 		IPAERR("Failed to set HOLB on Q6 pipes\n");
 		BUG();
 	}
@@ -1715,18 +1902,32 @@ int ipa_q6_cleanup(void)
 }
 
 /**
-* ipa_q6_pipe_reset() - A cleanup for the Q6 pipes
-*                    in IPA HW. This is performed in case of SSR.
+* ipa_q6_post_shutdown_cleanup() - A cleanup for the Q6 pipes
+*                    in IPA HW after modem shutdown. This is performed
+*                    in case of SSR.
 *
 * Return codes:
 * 0: success
 * This is a mandatory procedure, in case one of the steps fails, the
 * AP needs to restart.
 */
-int ipa_q6_pipe_reset(void)
+int ipa_q6_post_shutdown_cleanup(void)
 {
 	int client_idx;
 	int res;
+
+	/*
+	 * pipe delay and holb discard for ZIP pipes are handled in
+	 * post shutdown.
+	 */
+	if (ipa_q6_pipe_delay(true)) {
+		IPAERR("Failed to delay Q6 ZIP pipes\n");
+		BUG();
+	}
+	if (ipa_q6_avoid_holb(true)) {
+		IPAERR("Failed to set HOLB on Q6 ZIP pipes\n");
+		BUG();
+	}
 
 	if (!ipa_ctx->uc_ctx.uc_loaded) {
 		IPAERR("uC is not loaded, won't reset Q6 pipes\n");
@@ -1734,8 +1935,10 @@ int ipa_q6_pipe_reset(void)
 	}
 
 	for (client_idx = 0; client_idx < IPA_CLIENT_MAX; client_idx++)
-		if (IPA_CLIENT_IS_Q6_CONS(client_idx) ||
-			IPA_CLIENT_IS_Q6_PROD(client_idx)) {
+		if (IPA_CLIENT_IS_Q6_NON_ZIP_CONS(client_idx) ||
+			IPA_CLIENT_IS_Q6_ZIP_CONS(client_idx) ||
+			IPA_CLIENT_IS_Q6_NON_ZIP_PROD(client_idx) ||
+			IPA_CLIENT_IS_Q6_ZIP_PROD(client_idx)) {
 			res = ipa_uc_reset_pipe(client_idx);
 			if (res)
 				BUG();
@@ -2719,7 +2922,7 @@ static void ipa_start_tag_process(struct work_struct *work)
 	if (res)
 		IPAERR("ipa_tag_aggr_force_close failed %d\n", res);
 
-	ipa_dec_client_disable_clks();
+	IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 
 	IPADBG("TAG process done\n");
 }
@@ -2728,12 +2931,28 @@ static void ipa_start_tag_process(struct work_struct *work)
 * ipa_inc_client_enable_clks() - Increase active clients counter, and
 * enable ipa clocks if necessary
 *
+* Please do not use this API, use the wrapper macros instead (ipa_i.h)
+* IPA2_ACTIVE_CLIENTS_INC_XXXX();
+*
 * Return codes:
 * None
 */
-void ipa_inc_client_enable_clks(void)
+void ipa2_inc_client_enable_clks(struct ipa2_active_client_logging_info *id)
 {
+	char temp_str[IPA2_ACTIVE_CLIENTS_LOG_LINE_LEN];
+	unsigned long long t;
+	unsigned long nanosec_rem;
+
 	ipa_active_clients_lock();
+	if (id->type != SIMPLE) {
+		t = cpu_clock(smp_processor_id());
+		nanosec_rem = do_div(t, 1000000000) / 1000;
+		snprintf(temp_str, IPA2_ACTIVE_CLIENTS_LOG_LINE_LEN,
+					"[%5lu.%06lu] ^ %s, %s: %d",
+					(unsigned long)t, nanosec_rem,
+					id->id_string, id->file, id->line);
+		ipa2_active_clients_log_insert(temp_str);
+	}
 	ipa_ctx->ipa_active_clients.cnt++;
 	if (ipa_ctx->ipa_active_clients.cnt == 1)
 		ipa_enable_clks();
@@ -2746,13 +2965,20 @@ void ipa_inc_client_enable_clks(void)
 * clients if no asynchronous actions should be done. Asynchronous actions are
 * locking a mutex and waking up IPA HW.
 *
+* Please do not use this API, use the wrapper macros instead (ipa_i.h)
+*
+*
 * Return codes: 0 for success
 *		-EPERM if an asynchronous action should have been done
 */
-int ipa_inc_client_enable_clks_no_block(void)
+int ipa2_inc_client_enable_clks_no_block(struct ipa2_active_client_logging_info
+		*id)
 {
 	int res = 0;
 	unsigned long flags;
+	char temp_str[IPA2_ACTIVE_CLIENTS_LOG_LINE_LEN];
+	unsigned long long t;
+	unsigned long nanosec_rem;
 
 	if (ipa_active_clients_trylock(&flags) == 0)
 		return -EPERM;
@@ -2760,6 +2986,16 @@ int ipa_inc_client_enable_clks_no_block(void)
 	if (ipa_ctx->ipa_active_clients.cnt == 0) {
 		res = -EPERM;
 		goto bail;
+	}
+
+	if (id->type != SIMPLE) {
+		t = cpu_clock(smp_processor_id());
+		nanosec_rem = do_div(t, 1000000000) / 1000;
+		snprintf(temp_str, IPA2_ACTIVE_CLIENTS_LOG_LINE_LEN,
+					"[%5lu.%06lu] ^ %s, %s: %d",
+					(unsigned long)t, nanosec_rem,
+					id->id_string, id->file, id->line);
+		ipa2_active_clients_log_insert(temp_str);
 	}
 
 	ipa_ctx->ipa_active_clients.cnt++;
@@ -2778,12 +3014,28 @@ bail:
  * start_tag_process_again flag is set during this function to signal TAG
  * process to start again as there was another client that may send data to ipa
  *
+ * Please do not use this API, use the wrapper macros instead (ipa_i.h)
+ * IPA2_ACTIVE_CLIENTS_DEC_XXXX();
+ *
  * Return codes:
  * None
  */
-void ipa_dec_client_disable_clks(void)
+void ipa2_dec_client_disable_clks(struct ipa2_active_client_logging_info *id)
 {
+	char temp_str[IPA2_ACTIVE_CLIENTS_LOG_LINE_LEN];
+	unsigned long long t;
+	unsigned long nanosec_rem;
+
 	ipa_active_clients_lock();
+	if (id->type != SIMPLE) {
+		t = cpu_clock(smp_processor_id());
+		nanosec_rem = do_div(t, 1000000000) / 1000;
+		snprintf(temp_str, IPA2_ACTIVE_CLIENTS_LOG_LINE_LEN,
+					"[%5lu.%06lu] v %s, %s: %d",
+					(unsigned long)t, nanosec_rem,
+					id->id_string, id->file, id->line);
+		ipa2_active_clients_log_insert(temp_str);
+	}
 	ipa_ctx->ipa_active_clients.cnt--;
 	IPADBG("active clients = %d\n", ipa_ctx->ipa_active_clients.cnt);
 	if (ipa_ctx->ipa_active_clients.cnt == 0) {
@@ -2800,6 +3052,45 @@ void ipa_dec_client_disable_clks(void)
 		}
 	}
 	ipa_active_clients_unlock();
+}
+
+/**
+* ipa_inc_acquire_wakelock() - Increase active clients counter, and
+* acquire wakelock if necessary
+*
+* Return codes:
+* None
+*/
+void ipa_inc_acquire_wakelock(void)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&ipa_ctx->wakelock_ref_cnt.spinlock, flags);
+	ipa_ctx->wakelock_ref_cnt.cnt++;
+	if (ipa_ctx->wakelock_ref_cnt.cnt == 1)
+		__pm_stay_awake(&ipa_ctx->w_lock);
+	IPADBG("active wakelock ref cnt = %d\n", ipa_ctx->wakelock_ref_cnt.cnt);
+	spin_unlock_irqrestore(&ipa_ctx->wakelock_ref_cnt.spinlock, flags);
+}
+
+/**
+ * ipa_dec_release_wakelock() - Decrease active clients counter
+ *
+ * In case if the ref count is 0, release the wakelock.
+ *
+ * Return codes:
+ * None
+ */
+void ipa_dec_release_wakelock(void)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&ipa_ctx->wakelock_ref_cnt.spinlock, flags);
+	ipa_ctx->wakelock_ref_cnt.cnt--;
+	IPADBG("active wakelock ref cnt = %d\n", ipa_ctx->wakelock_ref_cnt.cnt);
+	if (ipa_ctx->wakelock_ref_cnt.cnt == 0)
+		__pm_relax(&ipa_ctx->w_lock);
+	spin_unlock_irqrestore(&ipa_ctx->wakelock_ref_cnt.spinlock, flags);
 }
 
 static int ipa_setup_bam_cfg(const struct ipa_plat_drv_res *res)
@@ -3025,7 +3316,8 @@ void ipa_suspend_handler(enum ipa_irq_type interrupt,
 				if (!atomic_read(
 					&ipa_ctx->sps_pm.dec_clients)
 					) {
-					ipa_inc_client_enable_clks();
+					IPA2_ACTIVE_CLIENTS_INC_EP(
+							ipa_ctx->ep[i].client);
 					IPADBG("Pipes un-suspended.\n");
 					IPADBG("Enter poll mode.\n");
 					atomic_set(
@@ -3101,7 +3393,7 @@ static void ipa_sps_release_resource(struct work_struct *work)
 			ipa_sps_process_irq_schedule_rel();
 		} else {
 			atomic_set(&ipa_ctx->sps_pm.dec_clients, 0);
-			ipa_dec_client_disable_clks();
+			IPA2_ACTIVE_CLIENTS_DEC_SPECIAL("SPS_RESOURCE");
 		}
 	}
 	atomic_set(&ipa_ctx->sps_pm.eot_activity, 0);
@@ -3206,6 +3498,7 @@ static int ipa_init(const struct ipa_plat_drv_res *resource_p,
 	ipa_ctx->aggregation_type = IPA_MBIM_16;
 	ipa_ctx->aggregation_byte_limit = 1;
 	ipa_ctx->aggregation_time_limit = 0;
+	ipa_ctx->ipa2_active_clients_logging.log_rdy = false;
 
 	ipa_ctx->ctrl = kzalloc(sizeof(*ipa_ctx->ctrl), GFP_KERNEL);
 	if (!ipa_ctx->ctrl) {
@@ -3244,6 +3537,9 @@ static int ipa_init(const struct ipa_plat_drv_res *resource_p,
 	} else {
 		IPADBG("Skipping bus scaling registration on Virtual plat\n");
 	}
+
+	if (ipa2_active_clients_log_init())
+		goto fail_init_active_client;
 
 	/* get IPA clocks */
 	result = ipa_get_clks(master_dev);
@@ -3552,7 +3848,8 @@ static int ipa_init(const struct ipa_plat_drv_res *resource_p,
 
 
 	/* Create a wakeup source. */
-	ipa_ctx->pdev->power.wakeup = wakeup_source_register("IPA_WS");
+	wakeup_source_init(&ipa_ctx->w_lock, "IPA_WS");
+	spin_lock_init(&ipa_ctx->wakelock_ref_cnt.spinlock);
 
 	/* Initialize IPA RM (resource manager) */
 	result = ipa_rm_initialize();
@@ -3674,6 +3971,8 @@ fail_init_hw:
 fail_remap:
 	ipa_disable_clks();
 fail_clk:
+	ipa2_active_clients_log_destroy();
+fail_init_active_client:
 	msm_bus_scale_unregister_client(ipa_ctx->ipa_bus_hdl);
 fail_bus_reg:
 	if (bus_scale_table) {

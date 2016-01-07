@@ -357,6 +357,7 @@
 	pinctrl-1 = <&mdss_dsi_suspend &mdss_te_suspend>;
 	qcom,platform-te-gpio = <&tlmm 10 0>;
 	qcom,platform-reset-gpio = <&tlmm 8 0>;
+	zte,lcd-3v-vsp-enable-gpio = <&tlmm 40 0>;
 	//qcom,platform-bklight-en-gpio = <&pm8994_gpios 14 0>;
 };
 
@@ -383,6 +384,13 @@
 	qcom,panel-supply-entries = <&dsi_panel_pwr_supply>;
 };
 
+&dsi_sharp_1080_cmd {
+	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_wled";
+	qcom,mdss-dsi-bl-min-level = <1>;
+	qcom,mdss-dsi-bl-max-level = <4095>;
+	qcom,panel-supply-entries = <&dsi_panel_pwr_supply>;
+};
+
 &dsi_dual_nt35597_video {
 	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_wled";
 	qcom,mdss-dsi-bl-min-level = <1>;
@@ -399,8 +407,21 @@
 	qcom,panel-roi-alignment = <720 128 720 64 720 64>;
 };
 
+
 &dsi_SAM_S6E3FA3_SAM_6p0_1080P_video_vid {
 	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_dcs";
+	qcom,panel-supply-entries = <&dsi_panel_pwr_supply_no_labibb>;
+};
+&dsi_nt35950_4k_dsc_cmd {
+	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_wled";
+	qcom,mdss-dsi-bl-min-level = <1>;
+	qcom,mdss-dsi-bl-max-level = <4095>;
+	qcom,panel-supply-entries = <&dsi_panel_pwr_supply>;
+};
+
+&dsi_nt35597_dsc_video {
+	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_wled";
+
 	qcom,mdss-dsi-bl-min-level = <1>;
 
 	qcom,mdss-dsi-bl-max-level = <255>;
@@ -417,6 +438,13 @@
 	qcom,panel-supply-entries = <&dsi_panel_pwr_supply_no_labibb>;
 };
 &dsi_nt35597_dsc_cmd {
+	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_wled";
+	qcom,mdss-dsi-bl-min-level = <1>;
+	qcom,mdss-dsi-bl-max-level = <4095>;
+	qcom,panel-supply-entries = <&dsi_panel_pwr_supply>;
+};
+
+&dsi_dual_sharp_1080_120hz_cmd {
 	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_wled";
 	qcom,mdss-dsi-bl-min-level = <1>;
 	qcom,mdss-dsi-bl-max-level = <4095>;
@@ -692,27 +720,21 @@
 
 	};
 
-      spi@7579000 {
-                vfs74xx@0 {
-                        compatible = "validity,metallica";
-                        reg = <0x0>;
-                        spi-max-frequency = <19200000>;
-                        interrupt-parent = <&tlmm>;
-                        interrupts = <123 0x2>;
-			     qcom,qup_id=<5>;
-                        drdy-gpio = <&tlmm 123 0>;
-                        sleep-gpio = <&tlmm 39 0>;
-                        cs-gpio = <&tlmm 83 0>;
-                        id-gpio = <&tlmm 21 0>;
-                        vdd-1p8-en-gpio = <&tlmm 85 0>;
-                        vdd-3p3-en-gpio = <&tlmm 85 0>;
-                        /* fpc,vddtx_mv = <3300>;  */
-                        /* fpc,txout_boost_enable; */
-                        /*vcc_spi-supply = <&pm8941_s3>;*/
-                        /*vdd_ana-supply = <&pm8994_lvs2>;*/
-                        /*vdd_io-supply = <&pm8994_lvs2>;*/
-                };
-      };	
+
+    vfs74xx@0 {
+        compatible = "validity,metallica";
+        reg = <0x0>;
+        spi-max-frequency = <19200000>;
+        interrupt-parent = <&tlmm>;
+        interrupts = <123 0x2>;
+        qcom,qup_id=<5>;
+        validity,drdy-gpio = <&tlmm 123 0>;
+        validity,sleep-gpio = <&tlmm 39 0>;
+        validity,cs-gpio = <&tlmm 83 0>;
+        validity,id-gpio = <&tlmm 21 0>;
+        validity,vfsspi-vdd18_en = <&tlmm 85 0>;
+        validity,vfsspi-vdd33_en = <&tlmm 85 0>;
+    };
 
 // ZTE_chenjun
 #if 0
@@ -761,7 +783,7 @@
 		asoc-codec = <&stub_codec>, <&hdmi_audio>;
 		asoc-codec-names = "msm-stub-codec.1", "msm-hdmi-audio-codec-rx";
 		qcom,hph-en1-gpio = <&pmi8994_gpios 7 0>;
-		qcom,hph-en0-gpio = <&pm8994_gpios 13 0>;
+		qcom,hph-en0-gpio = <&pmi8994_gpios 7 0>;
 		qcom,us-euro-gpios = <&pm8994_mpps 2 0>;
 		qcom,wsa-max-devs = <2>;
 		qcom,wsa-devs = <&wsa881x_211>, <&wsa881x_212>,
@@ -861,13 +883,11 @@
 		status = "okay";
 	};
 
-	gpio@cc00 { /* GPIO 13 - HPH_EN0 */
+	gpio@cc00 { /* GPIO 13 - RCV_SPK_SWITCH */
 		qcom,mode = <1>;
-		qcom,output-type = <0>;
 		qcom,pull = <5>;
 		qcom,vin-sel = <2>;
-		qcom,out-strength = <1>;
-		qcom,src-sel = <2>;
+		qcom,src-sel = <0>;
 		qcom,master-en = <1>;
 		status = "okay";
 	};

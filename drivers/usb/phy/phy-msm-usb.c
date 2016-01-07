@@ -1389,7 +1389,7 @@ phcd_retry:
 	/* Ensure that above operation is completed before turning off clocks */
 	mb();
 	/* Consider clocks on workaround flag only in case of bus suspend */
-	if ((!phy->state == OTG_STATE_B_PERIPHERAL &&
+	if (!(phy->state == OTG_STATE_B_PERIPHERAL &&
 			test_bit(A_BUS_SUSPEND, &motg->inputs)) ||
 			!motg->pdata->core_clk_always_on_workaround) {
 		clk_disable_unprepare(motg->pclk);
@@ -1746,6 +1746,7 @@ static void msm_otg_set_online_status(struct msm_otg *motg)
 static void msm_otg_notify_charger(struct msm_otg *motg, unsigned mA)
 {
 	struct usb_gadget *g = motg->phy.otg->gadget;
+	struct msm_otg_platform_data *pdata = motg->pdata;
 
 	if (g && g->is_a_peripheral)
 		return;
@@ -1754,6 +1755,16 @@ static void msm_otg_notify_charger(struct msm_otg *motg, unsigned mA)
 					mA, motg->typec_current_max);
 	/* Save bc1.2 max_curr if type-c charger later moves to diff mode */
 	motg->bc1p2_current_max = mA;
+
+	/*
+	 * Limit type-c charger current to 500 for SDP charger to avoid more
+	 * current drawn than 500 with Hosts that don't support type C due to
+	 * non compliant type-c to standard A cables.
+	 */
+	if (pdata->enable_sdp_typec_current_limit &&
+			(motg->chg_type == USB_SDP_CHARGER) &&
+					motg->typec_current_max > 500)
+		motg->typec_current_max = 500;
 
 	/* Override mA if type-c charger used (use hvdcp/bc1.2 if it is 500) */
 	if (motg->typec_current_max > 500 && mA < motg->typec_current_max)
@@ -1851,7 +1862,9 @@ static void msm_otg_start_host(struct usb_otg *otg, int on)
 	}
 	msm_otg_dbg_log_event(&motg->phy, "PM RT: StartHost PUT",
 				     get_pm_runtime_counter(motg->phy.dev), 0);
-	pm_runtime_put_sync(otg->phy->dev);
+
+	pm_runtime_mark_last_busy(otg->phy->dev);
+	pm_runtime_put_autosuspend(otg->phy->dev);
 }
 
 static void msm_hsusb_vbus_power(struct msm_otg *motg, bool on)
@@ -2030,7 +2043,8 @@ static void msm_otg_start_peripheral(struct usb_otg *otg, int on)
 	}
 	msm_otg_dbg_log_event(&motg->phy, "PM RT: StartPeri PUT",
 				     get_pm_runtime_counter(motg->phy.dev), 0);
-	pm_runtime_put(otg->phy->dev);
+	pm_runtime_mark_last_busy(otg->phy->dev);
+	pm_runtime_put_autosuspend(otg->phy->dev);
 }
 
 static int msm_otg_set_peripheral(struct usb_otg *otg,
@@ -3379,6 +3393,7 @@ static int otg_power_set_property_usb(struct power_supply *psy,
 				  const union power_supply_propval *val)
 {
 	struct msm_otg *motg = container_of(psy, struct msm_otg, usb_psy);
+	struct msm_otg_platform_data *pdata = motg->pdata;
 
 	msm_otg_dbg_log_event(&motg->phy, "SET PWR PROPERTY", psp, psy->type);
 	pr_info("ZTE_CHG  psp=%d\n ",psp);
@@ -3406,7 +3421,17 @@ static int otg_power_set_property_usb(struct power_supply *psy,
 		motg->current_max = val->intval;
 		break;
 	case POWER_SUPPLY_PROP_INPUT_CURRENT_MAX:
-		motg->typec_current_max = val->intval;
+		/*
+		 * Limit type-c charger current to 500 for SDP charger
+		 * to avoid more current drawn than 500 with legacy Hosts.
+		 */
+		if (pdata->enable_sdp_typec_current_limit &&
+				(motg->chg_type == USB_SDP_CHARGER)
+					&& val->intval > 500)
+			motg->typec_current_max = 500;
+		else
+			motg->typec_current_max = val->intval;
+
 		msm_otg_dbg_log_event(&motg->phy, "type-c charger",
 					val->intval, motg->bc1p2_current_max);
 		/* Update chg_current as per type-c charger detection on VBUS */
@@ -4077,6 +4102,9 @@ struct msm_otg_platform_data *msm_otg_dt_to_pdata(struct platform_device *pdev)
 
 	pdata->enable_axi_prefetch = of_property_read_bool(node,
 						"qcom,axi-prefetch-enable");
+
+	pdata->enable_sdp_typec_current_limit = of_property_read_bool(node,
+					"qcom,enable-sdp-typec-current-limit");
 	return pdata;
 }
 

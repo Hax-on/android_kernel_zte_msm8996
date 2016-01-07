@@ -258,6 +258,7 @@ struct mmc_cmdq_context_info {
 #define	CMDQ_STATE_HALT 2
 	wait_queue_head_t	queue_empty_wq;
 	wait_queue_head_t	wait;
+	int active_small_sector_read_reqs;
 };
 
 /**
@@ -658,6 +659,12 @@ static inline int mmc_host_cmd23(struct mmc_host *host)
 static inline int mmc_boot_partition_access(struct mmc_host *host)
 {
 	return !(host->caps2 & MMC_CAP2_BOOTPART_NOACC);
+}
+
+static inline bool mmc_card_and_host_support_async_int(struct mmc_host *host)
+{
+	return ((host->caps2 & MMC_CAP2_ASYNC_SDIO_IRQ_4BIT_MODE) &&
+			(host->card->cccr.async_intr_sup));
 }
 
 static inline int mmc_host_uhs(struct mmc_host *host)

@@ -16,6 +16,7 @@
 #include <linux/list.h>
 #include <linux/netdevice.h>
 #include "ipa_i.h"
+#include "ipa_trace.h"
 
 #define IPA_LAST_DESC_CNT 0xFFFF
 #define POLLING_INACTIVITY_RX 40
@@ -94,11 +95,19 @@ static void ipa_wq_write_done_common(struct ipa_sys_context *sys, u32 cnt)
 		list_del(&tx_pkt_expected->link);
 		sys->len--;
 		spin_unlock_bh(&sys->spinlock);
-		if (!tx_pkt_expected->no_unmap_dma)
-			dma_unmap_single(ipa_ctx->pdev,
+		if (!tx_pkt_expected->no_unmap_dma) {
+			if (tx_pkt_expected->type != IPA_DATA_DESC_SKB_PAGED) {
+				dma_unmap_single(ipa_ctx->pdev,
 					tx_pkt_expected->mem.phys_base,
 					tx_pkt_expected->mem.size,
 					DMA_TO_DEVICE);
+			} else {
+				dma_unmap_page(ipa_ctx->pdev,
+					tx_pkt_expected->mem.phys_base,
+					tx_pkt_expected->mem.size,
+					DMA_TO_DEVICE);
+			}
+		}
 		if (tx_pkt_expected->callback)
 			tx_pkt_expected->callback(tx_pkt_expected->user1,
 					tx_pkt_expected->user2);
@@ -233,6 +242,7 @@ static void ipa_tx_switch_to_intr_mode(struct ipa_sys_context *sys)
 	}
 	atomic_set(&sys->curr_polling_state, 0);
 	ipa_handle_tx_core(sys, true, false);
+	ipa_dec_release_wakelock();
 	return;
 
 fail:
@@ -245,8 +255,7 @@ static void ipa_handle_tx(struct ipa_sys_context *sys)
 	int inactive_cycles = 0;
 	int cnt;
 
-	ipa_inc_client_enable_clks();
-	pm_stay_awake(ipa_ctx->pdev);
+	IPA2_ACTIVE_CLIENTS_INC_SIMPLE();
 	do {
 		cnt = ipa_handle_tx_core(sys, true, true);
 		if (cnt == 0) {
@@ -259,8 +268,7 @@ static void ipa_handle_tx(struct ipa_sys_context *sys)
 	} while (inactive_cycles <= POLLING_INACTIVITY_TX);
 
 	ipa_tx_switch_to_intr_mode(sys);
-	pm_relax(ipa_ctx->pdev);
-	ipa_dec_client_disable_clks();
+	IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 }
 
 static void ipa_wq_handle_tx(struct work_struct *work)
@@ -294,6 +302,8 @@ int ipa_send_one(struct ipa_sys_context *sys, struct ipa_desc *desc,
 	dma_addr_t dma_address;
 	u16 len;
 	u32 mem_flag = GFP_ATOMIC;
+	struct sps_iovec iov;
+	int ret;
 
 	if (unlikely(!in_atomic))
 		mem_flag = GFP_KERNEL;
@@ -346,6 +356,17 @@ int ipa_send_one(struct ipa_sys_context *sys, struct ipa_desc *desc,
 
 	spin_lock_bh(&sys->spinlock);
 	list_add_tail(&tx_pkt->link, &sys->head_desc_list);
+	if (sys->policy == IPA_POLICY_NOINTR_MODE) {
+		do {
+			ret = sps_get_iovec(sys->ep->ep_hdl, &iov);
+			if (ret) {
+				IPADBG("sps_get_iovec failed %d\n", ret);
+				break;
+			}
+			if ((iov.addr == 0x0) && (iov.size == 0x0))
+				break;
+		} while (1);
+	}
 	result = sps_transfer_one(sys->ep->ep_hdl, dma_address, len, tx_pkt,
 			sps_flags);
 	if (result) {
@@ -401,6 +422,8 @@ int ipa_send(struct ipa_sys_context *sys, u32 num_desc, struct ipa_desc *desc,
 	int fail_dma_wrap = 0;
 	uint size = num_desc * sizeof(struct sps_iovec);
 	u32 mem_flag = GFP_ATOMIC;
+	struct sps_iovec iov;
+	int ret;
 
 	if (unlikely(!in_atomic))
 		mem_flag = GFP_KERNEL;
@@ -459,18 +482,34 @@ int ipa_send(struct ipa_sys_context *sys, u32 num_desc, struct ipa_desc *desc,
 		INIT_LIST_HEAD(&tx_pkt->link);
 		tx_pkt->type = desc[i].type;
 
-		tx_pkt->mem.base = desc[i].pyld;
-		tx_pkt->mem.size = desc[i].len;
+		if (desc[i].type != IPA_DATA_DESC_SKB_PAGED) {
+			tx_pkt->mem.base = desc[i].pyld;
+			tx_pkt->mem.size = desc[i].len;
 
-		if (!desc->dma_address_valid) {
-			tx_pkt->mem.phys_base =
-				dma_map_single(ipa_ctx->pdev,
-				tx_pkt->mem.base,
-				tx_pkt->mem.size,
-				DMA_TO_DEVICE);
+			if (!desc[i].dma_address_valid) {
+				tx_pkt->mem.phys_base =
+					dma_map_single(ipa_ctx->pdev,
+					tx_pkt->mem.base,
+					tx_pkt->mem.size,
+					DMA_TO_DEVICE);
+			} else {
+				tx_pkt->mem.phys_base = desc[i].dma_address;
+				tx_pkt->no_unmap_dma = true;
+			}
 		} else {
-			tx_pkt->mem.phys_base = desc->dma_address;
-			tx_pkt->no_unmap_dma = true;
+			tx_pkt->mem.base = desc[i].frag;
+			tx_pkt->mem.size = skb_frag_size(desc[i].frag);
+
+			if (!desc[i].dma_address_valid) {
+				tx_pkt->mem.phys_base =
+					skb_frag_dma_map(ipa_ctx->pdev,
+					desc[i].frag,
+					0, tx_pkt->mem.size,
+					DMA_TO_DEVICE);
+			} else {
+				tx_pkt->mem.phys_base = desc[i].dma_address;
+				tx_pkt->no_unmap_dma = true;
+			}
 		}
 
 		if (!tx_pkt->mem.phys_base) {
@@ -511,6 +550,17 @@ int ipa_send(struct ipa_sys_context *sys, u32 num_desc, struct ipa_desc *desc,
 		}
 	}
 
+	if (sys->policy == IPA_POLICY_NOINTR_MODE) {
+		do {
+			ret = sps_get_iovec(sys->ep->ep_hdl, &iov);
+			if (ret) {
+				IPADBG("sps_get_iovec failed %d\n", ret);
+				break;
+			}
+			if ((iov.addr == 0x0) && (iov.size == 0x0))
+				break;
+		} while (1);
+	}
 	result = sps_transfer(sys->ep->ep_hdl, &transfer);
 	if (result) {
 		IPAERR("sps_transfer failed rc=%d\n", result);
@@ -525,9 +575,15 @@ failure:
 	for (j = 0; j < i; j++) {
 		next_pkt = list_next_entry(tx_pkt, link);
 		list_del(&tx_pkt->link);
-		dma_unmap_single(ipa_ctx->pdev, tx_pkt->mem.phys_base,
+		if (desc[i].type != IPA_DATA_DESC_SKB_PAGED) {
+			dma_unmap_single(ipa_ctx->pdev, tx_pkt->mem.phys_base,
 				tx_pkt->mem.size,
 				DMA_TO_DEVICE);
+		} else {
+			dma_unmap_page(ipa_ctx->pdev, tx_pkt->mem.phys_base,
+				tx_pkt->mem.size,
+				DMA_TO_DEVICE);
+		}
 		kmem_cache_free(ipa_ctx->tx_pkt_wrapper_cache, tx_pkt);
 		tx_pkt = next_pkt;
 	}
@@ -598,7 +654,7 @@ int ipa_send_cmd(u16 num_desc, struct ipa_desc *descr)
 	}
 	sys = ipa_ctx->ep[ep_idx].sys;
 
-	ipa_inc_client_enable_clks();
+	IPA2_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	if (num_desc == 1) {
 		init_completion(&descr->xfer_done);
@@ -632,7 +688,7 @@ int ipa_send_cmd(u16 num_desc, struct ipa_desc *descr)
 	}
 
 bail:
-	ipa_dec_client_disable_clks();
+	IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 	return result;
 }
 
@@ -670,6 +726,7 @@ static void ipa_sps_irq_tx_notify(struct sps_event_notify *notify)
 				IPAERR("sps_set_config() failed %d\n", ret);
 				break;
 			}
+			ipa_inc_acquire_wakelock();
 			atomic_set(&sys->curr_polling_state, 1);
 			queue_work(sys->wq, &sys->work);
 		}
@@ -785,6 +842,7 @@ static void ipa_rx_switch_to_intr_mode(struct ipa_sys_context *sys)
 	}
 	atomic_set(&sys->curr_polling_state, 0);
 	ipa_handle_rx_core(sys, true, false);
+	ipa_dec_release_wakelock();
 	return;
 
 fail:
@@ -902,7 +960,9 @@ static void ipa_sps_irq_rx_notify(struct sps_event_notify *notify)
 				IPAERR("sps_set_config() failed %d\n", ret);
 				break;
 			}
+			ipa_inc_acquire_wakelock();
 			atomic_set(&sys->curr_polling_state, 1);
+			trace_intr_to_poll(sys->ep->client);
 			queue_work(sys->wq, &sys->work);
 		}
 		break;
@@ -934,14 +994,15 @@ static void ipa_handle_rx(struct ipa_sys_context *sys)
 	int inactive_cycles = 0;
 	int cnt;
 
-	ipa_inc_client_enable_clks();
-	pm_stay_awake(ipa_ctx->pdev);
+	IPA2_ACTIVE_CLIENTS_INC_SIMPLE();
 	do {
 		cnt = ipa_handle_rx_core(sys, true, true);
 		if (cnt == 0) {
 			inactive_cycles++;
+			trace_idle_sleep_enter(sys->ep->client);
 			usleep_range(POLLING_MIN_SLEEP_RX,
 					POLLING_MAX_SLEEP_RX);
+			trace_idle_sleep_exit(sys->ep->client);
 		} else {
 			inactive_cycles = 0;
 		}
@@ -955,9 +1016,9 @@ static void ipa_handle_rx(struct ipa_sys_context *sys)
 
 	} while (inactive_cycles <= POLLING_INACTIVITY_RX);
 
+	trace_poll_to_intr(sys->ep->client);
 	ipa_rx_switch_to_intr_mode(sys);
-	pm_relax(ipa_ctx->pdev);
-	ipa_dec_client_disable_clks();
+	IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 }
 
 static void switch_to_intr_rx_work_func(struct work_struct *work)
@@ -1049,7 +1110,7 @@ int ipa2_setup_sys_pipe(struct ipa_sys_connect_params *sys_in, u32 *clnt_hdl)
 
 	ep = &ipa_ctx->ep[ipa_ep_idx];
 
-	ipa_inc_client_enable_clks();
+	IPA2_ACTIVE_CLIENTS_INC_EP(sys_in->client);
 
 	if (ep->valid == 1) {
 		if (sys_in->client != IPA_CLIENT_APPS_LAN_WAN_PROD) {
@@ -1074,7 +1135,7 @@ int ipa2_setup_sys_pipe(struct ipa_sys_connect_params *sys_in, u32 *clnt_hdl)
 			ep->priv = sys_in->priv;
 			*clnt_hdl = ipa_ep_idx;
 			if (!ep->keep_ipa_awake)
-				ipa_dec_client_disable_clks();
+				IPA2_ACTIVE_CLIENTS_DEC_EP(sys_in->client);
 
 			return 0;
 		}
@@ -1288,7 +1349,7 @@ int ipa2_setup_sys_pipe(struct ipa_sys_connect_params *sys_in, u32 *clnt_hdl)
 	}
 
 	if (!ep->keep_ipa_awake)
-		ipa_dec_client_disable_clks();
+		IPA2_ACTIVE_CLIENTS_DEC_EP(sys_in->client);
 
 	IPADBG("client %d (ep: %d) connected sys=%p\n", sys_in->client,
 			ipa_ep_idx, ep->sys);
@@ -1311,7 +1372,7 @@ fail_wq:
 	kfree(ep->sys);
 	memset(&ipa_ctx->ep[ipa_ep_idx], 0, sizeof(struct ipa_ep_context));
 fail_and_disable_clocks:
-	ipa_dec_client_disable_clks();
+	IPA2_ACTIVE_CLIENTS_DEC_EP(sys_in->client);
 fail_gen:
 	return result;
 }
@@ -1341,7 +1402,7 @@ int ipa2_teardown_sys_pipe(u32 clnt_hdl)
 	ep = &ipa_ctx->ep[clnt_hdl];
 
 	if (!ep->keep_ipa_awake)
-		ipa_inc_client_enable_clks();
+		IPA2_ACTIVE_CLIENTS_INC_EP(ipa2_get_client_mapping(clnt_hdl));
 
 	ipa_disable_data_path(clnt_hdl);
 	ep->valid = 0;
@@ -1385,7 +1446,7 @@ int ipa2_teardown_sys_pipe(u32 clnt_hdl)
 	if (!atomic_read(&ipa_ctx->wc_memb.active_clnt_cnt))
 		ipa_cleanup_wlan_rx_common_cache();
 
-	ipa_dec_client_disable_clks();
+	IPA2_ACTIVE_CLIENTS_DEC_EP(ipa2_get_client_mapping(clnt_hdl));
 
 	IPADBG("client (ep: %d) disconnected\n", clnt_hdl);
 
@@ -1453,22 +1514,38 @@ static void ipa_tx_cmd_comp(void *user1, int user2)
 int ipa2_tx_dp(enum ipa_client_type dst, struct sk_buff *skb,
 		struct ipa_tx_meta *meta)
 {
-	struct ipa_desc desc[2];
+	struct ipa_desc *desc;
+	struct ipa_desc _desc[2];
 	int dst_ep_idx;
 	struct ipa_ip_packet_init *cmd;
 	struct ipa_sys_context *sys;
 	int src_ep_idx;
+	int num_frags, f;
 
 	if (unlikely(!ipa_ctx)) {
 		IPAERR("IPA driver was not initialized\n");
 		return -EINVAL;
 	}
 
-	memset(desc, 0, 2 * sizeof(struct ipa_desc));
-
 	if (skb->len == 0) {
 		IPAERR("packet size is 0\n");
 		return -EINVAL;
+	}
+
+	num_frags = skb_shinfo(skb)->nr_frags;
+	if (num_frags) {
+		/* 1 desc is needed for the linear portion of skb;
+		 * 1 desc may be needed for the PACKET_INIT;
+		 * 1 desc for each frag
+		 */
+		desc = kzalloc(sizeof(*desc) * (num_frags + 2), GFP_ATOMIC);
+		if (!desc) {
+			IPAERR("failed to alloc desc array\n");
+			goto fail_mem;
+		}
+	} else {
+		memset(_desc, 0, 2 * sizeof(struct ipa_desc));
+		desc = &_desc[0];
 	}
 
 	/*
@@ -1523,7 +1600,7 @@ int ipa2_tx_dp(enum ipa_client_type dst, struct sk_buff *skb,
 		desc[0].callback = ipa_tx_cmd_comp;
 		desc[0].user1 = cmd;
 		desc[1].pyld = skb->data;
-		desc[1].len = skb->len;
+		desc[1].len = skb_headlen(skb);
 		desc[1].type = IPA_DATA_DESC_SKB;
 		desc[1].callback = ipa_tx_comp_usr_notify_release;
 		desc[1].user1 = skb;
@@ -1536,15 +1613,29 @@ int ipa2_tx_dp(enum ipa_client_type dst, struct sk_buff *skb,
 			desc[1].dma_address = meta->dma_address;
 		}
 
-		if (ipa_send(sys, 2, desc, true)) {
-			IPAERR("fail to send immediate command\n");
+		for (f = 0; f < num_frags; f++) {
+			desc[2+f].frag = &skb_shinfo(skb)->frags[f];
+			desc[2+f].type = IPA_DATA_DESC_SKB_PAGED;
+		}
+
+		/* don't free skb till frag mappings are released */
+		if (num_frags) {
+			desc[2+f-1].callback = desc[1].callback;
+			desc[2+f-1].user1 = desc[1].user1;
+			desc[2+f-1].user2 = desc[1].user2;
+			desc[1].callback = NULL;
+		}
+
+		if (ipa_send(sys, num_frags + 2, desc, true)) {
+			IPAERR("fail to send skb %p num_frags %u SWP\n",
+					skb, num_frags);
 			goto fail_send;
 		}
 		IPA_STATS_INC_CNT(ipa_ctx->stats.tx_sw_pkts);
 	} else {
 		/* HW data path */
 		desc[0].pyld = skb->data;
-		desc[0].len = skb->len;
+		desc[0].len = skb_headlen(skb);
 		desc[0].type = IPA_DATA_DESC_SKB;
 		desc[0].callback = ipa_tx_comp_usr_notify_release;
 		desc[0].user1 = skb;
@@ -1555,11 +1646,36 @@ int ipa2_tx_dp(enum ipa_client_type dst, struct sk_buff *skb,
 			desc[0].dma_address = meta->dma_address;
 		}
 
-		if (ipa_send_one(sys, &desc[0], true)) {
-			IPAERR("fail to send skb\n");
-			goto fail_gen;
+		if (num_frags == 0) {
+			if (ipa_send_one(sys, desc, true)) {
+				IPAERR("fail to send skb %p HWP\n", skb);
+				goto fail_gen;
+			}
+		} else {
+			for (f = 0; f < num_frags; f++) {
+				desc[1+f].frag = &skb_shinfo(skb)->frags[f];
+				desc[1+f].type = IPA_DATA_DESC_SKB_PAGED;
+			}
+
+			/* don't free skb till frag mappings are released */
+			desc[1+f-1].callback = desc[0].callback;
+			desc[1+f-1].user1 = desc[0].user1;
+			desc[1+f-1].user2 = desc[0].user2;
+			desc[0].callback = NULL;
+
+			if (ipa_send(sys, num_frags + 1, desc, true)) {
+				IPAERR("fail to send skb %p num_frags %u HWP\n",
+						skb, num_frags);
+				goto fail_gen;
+			}
 		}
+
 		IPA_STATS_INC_CNT(ipa_ctx->stats.tx_hw_pkts);
+	}
+
+	if (num_frags) {
+		kfree(desc);
+		IPA_STATS_INC_CNT(ipa_ctx->stats.tx_non_linear);
 	}
 
 	return 0;
@@ -1567,6 +1683,9 @@ int ipa2_tx_dp(enum ipa_client_type dst, struct sk_buff *skb,
 fail_send:
 	kfree(cmd);
 fail_gen:
+	if (num_frags)
+		kfree(desc);
+fail_mem:
 	return -EFAULT;
 }
 
@@ -1936,9 +2055,9 @@ static void replenish_rx_work_func(struct work_struct *work)
 
 	dwork = container_of(work, struct delayed_work, work);
 	sys = container_of(dwork, struct ipa_sys_context, replenish_rx_work);
-	ipa_inc_client_enable_clks();
+	IPA2_ACTIVE_CLIENTS_INC_SIMPLE();
 	sys->repl_hdlr(sys);
-	ipa_dec_client_disable_clks();
+	IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
 }
 
 /**
@@ -3154,7 +3273,7 @@ int ipa2_sys_setup(struct ipa_sys_connect_params *sys_in,
 
 	ep = &ipa_ctx->ep[ipa_ep_idx];
 
-	ipa_inc_client_enable_clks();
+	IPA2_ACTIVE_CLIENTS_INC_EP(sys_in->client);
 
 	if (ep->valid == 1) {
 		if (sys_in->client != IPA_CLIENT_APPS_LAN_WAN_PROD) {
@@ -3181,7 +3300,7 @@ int ipa2_sys_setup(struct ipa_sys_connect_params *sys_in,
 			ep->priv = sys_in->priv;
 			*clnt_hdl = ipa_ep_idx;
 			if (!ep->keep_ipa_awake)
-				ipa_dec_client_disable_clks();
+				IPA2_ACTIVE_CLIENTS_DEC_EP(sys_in->client);
 
 			return 0;
 		}
@@ -3222,7 +3341,7 @@ int ipa2_sys_setup(struct ipa_sys_connect_params *sys_in,
 	*ipa_bam_hdl = ipa_ctx->bam_handle;
 
 	if (!ep->keep_ipa_awake)
-		ipa_dec_client_disable_clks();
+		IPA2_ACTIVE_CLIENTS_DEC_EP(sys_in->client);
 
 	ipa_ctx->skip_ep_cfg_shadow[ipa_ep_idx] = ep->skip_ep_cfg;
 	IPADBG("client %d (ep: %d) connected sys=%p\n", sys_in->client,
@@ -3232,7 +3351,7 @@ int ipa2_sys_setup(struct ipa_sys_connect_params *sys_in,
 
 fail_gen2:
 fail_and_disable_clocks:
-	ipa_dec_client_disable_clks();
+	IPA2_ACTIVE_CLIENTS_DEC_EP(sys_in->client);
 fail_gen:
 	return result;
 }
@@ -3250,12 +3369,12 @@ int ipa2_sys_teardown(u32 clnt_hdl)
 	ep = &ipa_ctx->ep[clnt_hdl];
 
 	if (!ep->keep_ipa_awake)
-		ipa_inc_client_enable_clks();
+		IPA2_ACTIVE_CLIENTS_INC_EP(ipa2_get_client_mapping(clnt_hdl));
 
 	ipa_disable_data_path(clnt_hdl);
 	ep->valid = 0;
 
-	ipa_dec_client_disable_clks();
+	IPA2_ACTIVE_CLIENTS_DEC_EP(ipa2_get_client_mapping(clnt_hdl));
 
 	IPADBG("client (ep: %d) disconnected\n", clnt_hdl);
 

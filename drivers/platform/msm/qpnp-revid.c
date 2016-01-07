@@ -23,30 +23,33 @@
 #define REVID_TYPE	0x4
 #define REVID_SUBTYPE	0x5
 #define REVID_STATUS1	0x8
+#define REVID_SPARE_0	0x60
 
 #define QPNP_REVID_DEV_NAME "qcom,qpnp-revid"
 
 static const char *const pmic_names[] = {
-	"Unknown PMIC",
-	"PM8941",
-	"PM8841",
-	"PM8019",
-	"PM8226",
-	"PM8110",
-	"PMA8084",
-	"PMI8962",
-	"PMD9635",
-	"PM8994",
-	"PMI8994",
-	"PM8916",
-	"PM8004",
-	"PM8909",
-	"PM2433",
-	"PMD9655",
-	"PM8950",
-	"PMI8950",
-	"PMK8001",
-	"PMI8996",
+		"Unknown PMIC",
+		"PM8941",
+		"PM8841",
+		"PM8019",
+		"PM8226",
+		"PM8110",
+		"PMA8084",
+		"PMI8962",
+		"PMD9635",
+		"PM8994",
+		"PMI8994",
+		"PM8916",
+		"PM8004",
+		"PM8909",
+		"PM2433",
+		"PMD9655",
+		"PM8950",
+		"PMI8950",
+		"PMK8001",
+		"PMI8996",
+	[25] =	"PM8937",
+	[55] =	"PMI8937",
 };
 
 struct revid_chip {
@@ -108,6 +111,8 @@ EXPORT_SYMBOL(get_revid_data);
 #define PM8941_PERIPHERAL_SUBTYPE	0x01
 #define PM8226_PERIPHERAL_SUBTYPE	0x04
 #define PMD9655_PERIPHERAL_SUBTYPE	0x0F
+#define PMI8950_PERIPHERAL_SUBTYPE	0x11
+#define PMI8937_PERIPHERAL_SUBTYPE	0x37
 static size_t build_pmic_string(char *buf, size_t n, int sid,
 		u8 subtype, u8 rev1, u8 rev2, u8 rev3, u8 rev4)
 {
@@ -143,7 +148,7 @@ static size_t build_pmic_string(char *buf, size_t n, int sid,
 static int qpnp_revid_probe(struct spmi_device *spmi)
 {
 	u8 rev1, rev2, rev3, rev4, pmic_type, pmic_subtype, pmic_status;
-	u8 option1, option2, option3, option4;
+	u8 option1, option2, option3, option4, spare0;
 	struct resource *resource;
 	char pmic_string[PMIC_STRING_MAXLENGTH] = {'\0'};
 	struct revid_chip *revid_chip;
@@ -170,6 +175,14 @@ static int qpnp_revid_probe(struct spmi_device *spmi)
 					     resource->start + REVID_STATUS1);
 	else
 		pmic_status = 0;
+
+	/* special case for PMI8937 */
+	if (pmic_subtype == PMI8950_PERIPHERAL_SUBTYPE) {
+		/* read spare register */
+		spare0 = qpnp_read_byte(spmi, resource->start + REVID_SPARE_0);
+		if (spare0)
+			pmic_subtype = PMI8937_PERIPHERAL_SUBTYPE;
+	}
 
 	revid_chip = devm_kzalloc(&spmi->dev, sizeof(struct revid_chip),
 						GFP_KERNEL);

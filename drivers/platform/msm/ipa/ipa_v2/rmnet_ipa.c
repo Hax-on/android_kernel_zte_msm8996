@@ -34,6 +34,8 @@
 #include <linux/rmnet_ipa_fd_ioctl.h>
 #include <linux/ipa.h>
 
+#include "ipa_trace.h"
+
 #define WWAN_METADATA_SHFT 24
 #define WWAN_METADATA_MASK 0xFF000000
 #define WWAN_DATA_LEN 2000
@@ -88,6 +90,7 @@ enum wwan_device_status {
 struct ipa_rmnet_plat_drv_res {
 	bool ipa_rmnet_ssr;
 	bool ipa_loaduC;
+	bool ipa_advertise_sg_support;
 };
 
 /**
@@ -1147,10 +1150,13 @@ static void apps_ipa_packet_receive_notify(void *priv,
 	skb->dev = ipa_netdevs[0];
 	skb->protocol = htons(ETH_P_MAP);
 
-	if (dev->stats.rx_packets % IPA_WWAN_RX_SOFTIRQ_THRESH == 0)
+	if (dev->stats.rx_packets % IPA_WWAN_RX_SOFTIRQ_THRESH == 0) {
+		trace_rmnet_ipa_netifni(dev->stats.rx_packets);
 		result = netif_rx_ni(skb);
-	else
+	} else {
+		trace_rmnet_ipa_netifrx(dev->stats.rx_packets);
 		result = netif_rx(skb);
+	}
 
 	if (result)	{
 		pr_err_ratelimited(DEV_NAME " %s:%d fail on netif_rx\n",
@@ -1160,6 +1166,8 @@ static void apps_ipa_packet_receive_notify(void *priv,
 	dev->stats.rx_packets++;
 	dev->stats.rx_bytes += packet_len;
 }
+
+static struct ipa_rmnet_plat_drv_res ipa_rmnet_res = {0, };
 
 /**
  * ipa_wwan_ioctl() - I/O control for wwan network driver.
@@ -1284,6 +1292,15 @@ static int ipa_wwan_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		/*  Get MRU  */
 		case RMNET_IOCTL_GET_MRU:
 			extend_ioctl_data.u.data = mru;
+			if (copy_to_user((u8 *)ifr->ifr_ifru.ifru_data,
+				&extend_ioctl_data,
+				sizeof(struct rmnet_ioctl_extended_s)))
+				rc = -EFAULT;
+			break;
+		/* GET SG support */
+		case RMNET_IOCTL_GET_SG_SUPPORT:
+			extend_ioctl_data.u.data =
+				ipa_rmnet_res.ipa_advertise_sg_support;
 			if (copy_to_user((u8 *)ifr->ifr_ifru.ifru_data,
 				&extend_ioctl_data,
 				sizeof(struct rmnet_ioctl_extended_s)))
@@ -1823,8 +1840,6 @@ static struct notifier_block ssr_notifier = {
 	.notifier_call = ssr_notifier_cb,
 };
 
-static struct ipa_rmnet_plat_drv_res ipa_rmnet_res = {0, };
-
 static int get_ipa_rmnet_dts_configuration(struct platform_device *pdev,
 		struct ipa_rmnet_plat_drv_res *ipa_rmnet_drv_res)
 {
@@ -1838,6 +1853,12 @@ static int get_ipa_rmnet_dts_configuration(struct platform_device *pdev,
 			"qcom,ipa-loaduC");
 	pr_info("IPA ipa-loaduC = %s\n",
 		ipa_rmnet_drv_res->ipa_loaduC ? "True" : "False");
+
+	ipa_rmnet_drv_res->ipa_advertise_sg_support =
+			of_property_read_bool(pdev->dev.of_node,
+			"qcom,ipa-advertise-sg-support");
+	pr_info("IPA SG support = %s\n",
+		ipa_rmnet_drv_res->ipa_advertise_sg_support ? "True" : "False");
 	return 0;
 }
 
@@ -2179,7 +2200,7 @@ static int ssr_notifier_cb(struct notifier_block *this,
 		if (SUBSYS_BEFORE_SHUTDOWN == code) {
 			pr_info("IPA received MPSS BEFORE_SHUTDOWN\n");
 			atomic_set(&is_ssr, 1);
-			ipa_q6_cleanup();
+			ipa_q6_pre_shutdown_cleanup();
 			if (ipa_netdevs[0])
 				netif_stop_queue(ipa_netdevs[0]);
 			ipa_qmi_stop_workqueues();
@@ -2193,7 +2214,7 @@ static int ssr_notifier_cb(struct notifier_block *this,
 		if (SUBSYS_AFTER_SHUTDOWN == code) {
 			pr_info("IPA received MPSS AFTER_SHUTDOWN\n");
 			if (atomic_read(&is_ssr))
-				ipa_q6_pipe_reset();
+				ipa_q6_post_shutdown_cleanup();
 			pr_info("IPA AFTER_SHUTDOWN handling is complete\n");
 			return NOTIFY_DONE;
 		}
@@ -2689,6 +2710,9 @@ void ipa_q6_handshake_complete(bool ssr_bootup)
 		 * SSR recovery
 		 */
 		rmnet_ipa_get_network_stats_and_update();
+
+		/* Enable holb monitoring on Q6 pipes. */
+		ipa_q6_monitor_holb_mitigation(true);
 	}
 }
 

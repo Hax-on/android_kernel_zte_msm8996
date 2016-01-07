@@ -25,6 +25,7 @@
 #include <linux/workqueue.h>
 #include <linux/power_supply.h>
 #include <linux/qpnp/qpnp-adc.h>
+#include <linux/qpnp/qpnp-revid.h>
 #include "leds.h"
 #include <linux/debugfs.h>
 #include <linux/uaccess.h>
@@ -115,6 +116,8 @@
 #define	FLASH_LED_MODULE_CTRL_DEFAULT				0x60
 #define	FLASH_LED_CURRENT_READING_DELAY_MIN			5000
 #define	FLASH_LED_CURRENT_READING_DELAY_MAX			5001
+#define PMI8996_SUBTYPE						19
+#define	FLASH_LED_OPEN_FAULT_DETECTED				0xC
 
 #define FLASH_UNLOCK_SECURE					0xA5
 #define FLASH_LED_TORCH_ENABLE					0x00
@@ -230,6 +233,7 @@ struct qpnp_flash_led_buffer {
  * Flash LED data structure containing flash LED attributes
  */
 struct qpnp_flash_led {
+	struct pmic_revid_data		*revid_data;
 	struct spmi_device		*spmi_dev;
 	struct flash_led_platform_data	*pdata;
 	struct pinctrl			*pinctrl;
@@ -253,6 +257,7 @@ struct qpnp_flash_led {
 	bool				charging_enabled;
 	bool				strobe_debug;
 	bool				dbg_feature_en;
+	bool				open_fault;
 };
 
 static u8 qpnp_flash_led_ctrl_dbg_regs[] = {
@@ -569,6 +574,28 @@ static int64_t qpnp_flash_led_get_die_temp(struct qpnp_flash_led *led)
 	}
 
 	return die_temp_result.physical;
+}
+
+static int qpnp_get_pmic_revid(struct qpnp_flash_led *led)
+{
+	struct device_node *revid_dev_node;
+
+	revid_dev_node = of_parse_phandle(led->spmi_dev->dev.of_node,
+				"qcom,pmic-revid", 0);
+	if (!revid_dev_node) {
+		dev_err(&led->spmi_dev->dev,
+			"qcom,pmic-revid property missing\n");
+		return -EINVAL;
+	}
+
+	led->revid_data = get_revid_data(revid_dev_node);
+	if (IS_ERR(led->revid_data)) {
+		pr_err("Couldn't get revid data rc = %ld\n",
+				PTR_ERR(led->revid_data));
+		return PTR_ERR(led->revid_data);
+	}
+
+	return 0;
 }
 
 static int
@@ -938,6 +965,20 @@ static int qpnp_flash_led_module_disable(struct qpnp_flash_led *led,
 			}
 		}
 
+		if (led->battery_psy &&
+			led->revid_data->pmic_subtype == PMI8996_SUBTYPE &&
+						!led->revid_data->rev3) {
+			psy_prop.intval = false;
+			rc = led->battery_psy->set_property(led->battery_psy,
+					POWER_SUPPLY_PROP_FLASH_TRIGGER,
+							&psy_prop);
+			if (rc) {
+				dev_err(&led->spmi_dev->dev,
+				"Failed to enble charger i/p current limit\n");
+				return -EINVAL;
+			}
+		}
+
 		rc = qpnp_led_masked_write(led->spmi_dev,
 				FLASH_MODULE_ENABLE_CTRL(led->base),
 				FLASH_MODULE_ENABLE_MASK,
@@ -1148,6 +1189,12 @@ static void qpnp_flash_led_work(struct work_struct *work)
 
 	if (!brightness)
 		goto turn_off;
+
+	if (led->open_fault) {
+		dev_err(&led->spmi_dev->dev, "Open fault detected\n");
+		mutex_unlock(&led->flash_led_lock);
+		return;
+	}
 
 	if (!flash_node->flash_on && flash_node->num_regulators > 0) {
 		rc = flash_regulator_enable(led, flash_node, true);
@@ -1506,6 +1553,18 @@ static void qpnp_flash_led_work(struct work_struct *work)
 						FLASH_RAMP_UP_DELAY_US_MAX);
 		}
 
+		if (led->revid_data->pmic_subtype == PMI8996_SUBTYPE &&
+						!led->revid_data->rev3) {
+			rc = led->battery_psy->set_property(led->battery_psy,
+						POWER_SUPPLY_PROP_FLASH_TRIGGER,
+							&psy_prop);
+			if (rc) {
+				dev_err(&led->spmi_dev->dev,
+				"Failed to disable charger i/p curr limit\n");
+				goto exit_flash_led_work;
+			}
+		}
+
 		if (led->pdata->hdrm_sns_ch0_en ||
 					led->pdata->hdrm_sns_ch1_en) {
 			if (flash_node->id == FLASH_LED_SWITCH) {
@@ -1597,6 +1656,24 @@ static void qpnp_flash_led_work(struct work_struct *work)
 	return;
 
 turn_off:
+	if (flash_node->type == TORCH) {
+		/*
+		 * Checking LED fault status detects hardware open fault.
+		 * If fault occurs, all subsequent LED enablement requests
+		 * will be rejected to protect hardware.
+		 */
+		rc = spmi_ext_register_readl(led->spmi_dev->ctrl,
+			led->spmi_dev->sid,
+			FLASH_LED_FAULT_STATUS(led->base), &val, 1);
+		if (rc) {
+			dev_err(&led->spmi_dev->dev,
+				"Failed to read out fault status register\n");
+			goto exit_flash_led_work;
+		}
+
+		led->open_fault = (val & FLASH_LED_OPEN_FAULT_DETECTED);
+	}
+
 	rc = qpnp_led_masked_write(led->spmi_dev,
 			FLASH_LED_STROBE_CTRL(led->base),
 			(flash_node->id == FLASH_LED_SWITCH ? FLASH_STROBE_MASK
@@ -2356,6 +2433,10 @@ static int qpnp_flash_led_probe(struct spmi_device *spmi)
 		dev_err(&spmi->dev, "Failed to initialize flash LED\n");
 		return rc;
 	}
+
+	rc = qpnp_get_pmic_revid(led);
+	if (rc)
+		return rc;
 
 	temp = NULL;
 	while ((temp = of_get_next_child(node, temp)))

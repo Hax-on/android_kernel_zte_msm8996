@@ -1,7 +1,10 @@
+KASAN_SANITIZE_scm.o := n
+
 CFLAGS_scm.o :=$(call as-instr,.arch_extension sec,-DREQUIRES_SEC=1)
 
 ccflags-$(CONFIG_MSM_QBT1000) += -Idrivers/misc/
 
+obj-$(CONFIG_MSM_INRUSH_CURRENT_MITIGATION) += inrush-current-mitigation.o
 obj-$(CONFIG_MSM_GLADIATOR_ERP) += gladiator_erp.o
 obj-$(CONFIG_ARM64) += idle-v8.o cpu_ops.o
 obj-$(CONFIG_MSM_BOOT_STATS) += boot_stats.o
@@ -36,6 +39,7 @@ obj-$(CONFIG_MSM_GLINK) += glink.o glink_debugfs.o glink_ssr.o
 obj-$(CONFIG_MSM_GLINK_LOOPBACK_SERVER) += glink_loopback_server.o
 obj-$(CONFIG_MSM_GLINK_SMD_XPRT) += glink_smd_xprt.o
 obj-$(CONFIG_MSM_GLINK_SMEM_NATIVE_XPRT) += glink_smem_native_xprt.o
+obj-$(CONFIG_MSM_SPCOM) += spcom.o
 obj-$(CONFIG_MSM_SMEM_LOGGING) += smem_log.o
 obj-$(CONFIG_MSM_SMP2P) += smp2p.o smp2p_debug.o smp2p_sleepstate.o
 obj-$(CONFIG_MSM_SMP2P_TEST) += smp2p_loopback.o smp2p_test.o smp2p_spinlock_test.o
@@ -65,6 +69,7 @@ obj-$(CONFIG_MSM_PIL_SSR_GENERIC) += subsys-pil-tz.o
 obj-$(CONFIG_MSM_PIL_MSS_QDSP6V5) += pil-q6v5.o pil-msa.o pil-q6v5-mss.o
 obj-$(CONFIG_MSM_CORE_CTL_HELPER) += core_ctl_helper.o
 obj-$(CONFIG_MSM_SCM_ERRATA) += scm-errata.o
+obj-$(CONFIG_MSM_PFE_WA) += pfe-wa.o
 obj-$(CONFIG_MSM_PERFORMANCE) += msm_performance.o
 
 ifdef CONFIG_MSM_SUBSYSTEM_RESTART

@@ -27,8 +27,10 @@
 	};
 };
 
-&blsp1_uart2 {
+&blsp1_uart0 {
 	status = "ok";
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart_console_active>;
 };
 
 &sdhc_1 {
@@ -97,4 +99,12 @@
 
 &clock_gcc_gfx {
 	compatible = "qcom,dummycc";
+};
+
+&pmtitanium_vadc {
+	status = "disabled";
+};
+
+&pmtitanium_adc_tm {
+	status = "disabled";
 };

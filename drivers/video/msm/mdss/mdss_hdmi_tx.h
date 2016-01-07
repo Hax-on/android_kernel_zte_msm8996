@@ -15,6 +15,7 @@
 
 #include <linux/switch.h>
 #include "mdss_hdmi_util.h"
+#include "mdss_cec_core.h"
 
 enum hdmi_tx_io_type {
 	HDMI_TX_CORE_IO,
@@ -41,14 +42,7 @@ struct hdmi_tx_platform_data {
 	struct reg_bus_client *reg_bus_clt[HDMI_TX_MAX_PM];
 	/* bitfield representing each module's pin state */
 	u64 pin_states;
-};
-
-struct hdmi_audio {
-	int sample_rate;
-	int channel_num;
-	int spkr_alloc;
-	int level_shift;
-	int down_mix;
+	bool pluggable;
 };
 
 struct hdmi_tx_pinctrl {
@@ -134,7 +128,7 @@ struct hdmi_tx_ctrl {
 
 
 	struct hdmi_tx_pinctrl pin_res;
-	struct hdmi_audio audio_data;
+	struct msm_hdmi_audio_setup_params audio_data;
 
 	struct mutex mutex;
 	struct mutex lut_lock;
@@ -196,6 +190,10 @@ struct hdmi_tx_ctrl {
 
 	u8 *edid_buf;
 	u32 edid_buf_size;
+	u32 s3d_mode;
+
+	struct cec_ops hdmi_cec_ops;
+	struct cec_cbs hdmi_cec_cbs;
 };
 
 #endif /* __MDSS_HDMI_TX_H__ */
