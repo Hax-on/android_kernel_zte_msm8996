@@ -729,6 +729,11 @@ static int ak49xx_device_init(struct ak49xx *ak49xx)
 				break;
 				}
 			}
+		if (ak49xx_spi == NULL) {
+			printk(KERN_ERR "No SPI device");
+			ret = -ENODEV;
+			goto err;
+		}
 		ak49xx->read_dev = ak49xx_spi_read;		
 		ak49xx->write_dev = ak49xx_spi_write;
 		msleep(1);
