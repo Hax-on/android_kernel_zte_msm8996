@@ -260,10 +260,8 @@ CONFIG_ATH_PCIE_ACCESS_DEBUG := 0
 
 #Enable IPA offload
 ifeq ($(CONFIG_IPA), y)
-ifeq ($(CONFIG_ROME_IF),pci)
 CONFIG_IPA_OFFLOAD := 1
 CONFIG_IPA_UC_OFFLOAD := 1
-endif
 endif
 
 #Enable Signed firmware support for split binary format
@@ -964,11 +962,6 @@ CDEFINES +=     -DCONFIG_HL_SUPPORT \
 		-DDEBUG_HL_LOGGING
 endif
 
-ifeq ($(CONFIG_ARCH_MDMFERMIUM), y)
-CDEFINES += -DCONFIG_TUFELLO_DUAL_FW_SUPPORT
-endif
-
-
 ifeq ($(CONFIG_QCA_WIFI_SDIO), 1)
 CDEFINES += -DFEATURE_WLAN_FORCE_SAP_SCC
 ifneq ($(CONFIG_ARCH_MDMFERMIUM), y)
@@ -1358,9 +1351,7 @@ endif
 
 #Flag to enable/disable WLAN D0-WOW
 ifeq ($(CONFIG_PCI_MSM), y)
-ifeq ($(CONFIG_ROME_IF),pci)
 CDEFINES += -DFEATURE_WLAN_D0WOW
-endif
 endif
 
 # Flag to enable bus auto suspend
@@ -1433,14 +1424,8 @@ ifeq ($(CONFIG_WLAN_UDP_RESPONSE_OFFLOAD),y)
 CDEFINES += -DWLAN_FEATURE_UDP_RESPONSE_OFFLOAD
 endif
 
-
 ifeq ($(CONFIG_WLAN_FEATURE_RX_WAKELOCK), y)
 CDEFINES += -DWLAN_FEATURE_HOLD_RX_WAKELOCK
-endif
-
-
-ifeq ($(CONFIG_WLAN_WOW_PULSE), y)
-CDEFINES += -DWLAN_FEATURE_WOW_PULSE
 endif
 
 

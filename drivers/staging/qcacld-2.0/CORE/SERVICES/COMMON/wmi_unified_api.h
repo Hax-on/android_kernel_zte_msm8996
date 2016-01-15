@@ -142,6 +142,8 @@ wmi_get_pending_cmds(wmi_unified_t wmi_handle);
 void
 wmi_set_target_suspend(wmi_unified_t wmi_handle, A_BOOL val);
 
+void wmi_set_tgt_assert(wmi_unified_t wmi_handle, A_BOOL val);
+
 #ifdef FEATURE_RUNTIME_PM
 void
 wmi_set_runtime_pm_inprogress(wmi_unified_t wmi_handle, A_BOOL val);
@@ -178,4 +180,6 @@ wmi_get_d0wow_flag(wmi_unified_t wmi_handle);
 typedef void (*wma_wow_tx_complete_cbk)(void *scn_handle);
 
 uint16_t wmi_get_max_msg_len(wmi_unified_t wmi_handle);
+
+void wmi_tag_crash_inject(wmi_unified_t wmi_handle, A_BOOL flag);
 #endif /* _WMI_UNIFIED_API_H_ */

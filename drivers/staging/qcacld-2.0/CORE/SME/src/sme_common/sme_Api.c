@@ -6901,60 +6901,16 @@ eHalStatus sme_ScanGetBKIDCandidateList(tHalHandle hHal, tANI_U32 sessionId,
  *****************************************************************************/
 
 /* ---------------------------------------------------------------------------
-    \fn sme_getOemDataRsp
-    \brief a wrapper function to obtain the OEM DATA RSP
-    \param pOemDataRsp - A pointer to the response object
-    \param pContext - a pointer passed in for the callback
-    \return eHalStatus
-  ---------------------------------------------------------------------------*/
-eHalStatus sme_getOemDataRsp(tHalHandle hHal,
-        tOemDataRsp **pOemDataRsp)
-{
-    eHalStatus status = eHAL_STATUS_SUCCESS;
-    tpAniSirGlobal pMac = PMAC_STRUCT(hHal);
-
-    do
-    {
-        //acquire the lock for the sme object
-        status = sme_AcquireGlobalLock(&pMac->sme);
-
-        if(!HAL_STATUS_SUCCESS(status))
-        {
-            break;
-        }
-
-        if(pMac->oemData.pOemDataRsp != NULL)
-        {
-            *pOemDataRsp = pMac->oemData.pOemDataRsp;
-        }
-        else
-        {
-            status = eHAL_STATUS_FAILURE;
-        }
-
-        //release the lock for the sme object
-        sme_ReleaseGlobalLock( &pMac->sme );
-
-    } while(0);
-
-    return status;
-}
-
-/* ---------------------------------------------------------------------------
     \fn sme_OemDataReq
     \brief a wrapper function for OEM DATA REQ
     \param sessionId - session id to be used.
     \param pOemDataReqId - pointer to an object to get back the request ID
-    \param callback - a callback function that is called upon finish
-    \param pContext - a pointer passed in for the callback
     \return eHalStatus
   ---------------------------------------------------------------------------*/
 eHalStatus sme_OemDataReq(tHalHandle hHal,
         tANI_U8 sessionId,
         tOemDataReqConfig *pOemDataReqConfig,
-        tANI_U32 *pOemDataReqID,
-        oemData_OemDataReqCompleteCallback callback,
-        void *pContext)
+        tANI_U32 *pOemDataReqID)
 {
     eHalStatus status = eHAL_STATUS_SUCCESS;
     tpAniSirGlobal pMac = PMAC_STRUCT(hHal);
@@ -6977,7 +6933,7 @@ eHalStatus sme_OemDataReq(tHalHandle hHal,
                 return eHAL_STATUS_FAILURE;
             }
 
-            status = oemData_OemDataReq(hHal, sessionId, pOemDataReqConfig, pOemDataReqID, callback, pContext);
+            status = oemData_OemDataReq(hHal, sessionId, pOemDataReqConfig, pOemDataReqID);
 
             //release the lock for the sme object
             sme_ReleaseGlobalLock( &pMac->sme );
@@ -11027,6 +10983,12 @@ v_U32_t sme_getLimMlmState(tHalHandle hHal)
 v_BOOL_t sme_IsLimSessionValid(tHalHandle hHal, tANI_U8 sessionId)
 {
     tpAniSirGlobal pMac = PMAC_STRUCT(hHal);
+
+    if (sessionId > pMac->lim.maxBssId) {
+        smsLog(pMac, LOG1, FL("invalid sessionId:%d"), sessionId);
+        return FALSE;
+    }
+
     return pMac->lim.gpSession[sessionId].valid;
 }
 
@@ -17297,46 +17259,3 @@ eHalStatus sme_set_lost_link_info_cb(tHalHandle hal,
 	return status;
 }
 
-#ifdef WLAN_FEATURE_WOW_PULSE
-/**
- * sme_set_wow_pulse() - set wow pulse info
- * @wow_pulse_set_info: wow_pulse_mode structure pointer
- *
- * Return: HAL status
- */
-VOS_STATUS sme_set_wow_pulse(struct wow_pulse_mode *wow_pulse_set_info)
-{
-	vos_msg_t vos_message;
-	VOS_STATUS vos_status;
-	struct wow_pulse_mode *wow_pulse_set_cmd;
-
-	if (!wow_pulse_set_info) {
-		VOS_TRACE(VOS_MODULE_ID_SME, VOS_TRACE_LEVEL_ERROR,
-			"%s: invalid wow_pulse_set_info pointer", __func__);
-		return VOS_STATUS_E_FAILURE;
-	}
-
-	wow_pulse_set_cmd = vos_mem_malloc(sizeof(*wow_pulse_set_cmd));
-	if (NULL == wow_pulse_set_cmd) {
-		VOS_TRACE(VOS_MODULE_ID_SME, VOS_TRACE_LEVEL_ERROR,
-			"%s: fail to alloc wow_pulse_set_cmd", __func__);
-		return VOS_STATUS_E_NOMEM;
-	}
-
-	*wow_pulse_set_cmd = *wow_pulse_set_info;
-
-	vos_message.type = WDA_SET_WOW_PULSE_CMD;
-	vos_message.bodyptr = wow_pulse_set_cmd;
-	vos_status = vos_mq_post_message(VOS_MODULE_ID_WDA,
-					&vos_message);
-	if (!VOS_IS_STATUS_SUCCESS(vos_status)) {
-		VOS_TRACE(VOS_MODULE_ID_SME, VOS_TRACE_LEVEL_ERROR,
-			"%s: Not able to post msg to WDA!",
-			__func__);
-		vos_mem_free(wow_pulse_set_cmd);
-		vos_status = VOS_STATUS_E_FAILURE;
-	}
-
-	return vos_status;
-}
-#endif

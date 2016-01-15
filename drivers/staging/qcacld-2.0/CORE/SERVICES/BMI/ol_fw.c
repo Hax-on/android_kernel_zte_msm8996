@@ -115,14 +115,8 @@ static int ol_get_fw_files_for_target(struct ol_fw_files *pfw_files,
             break;
     case AR6320_REV3_VERSION:
     case AR6320_REV3_2_VERSION:
-            memcpy(pfw_files, &FW_FILES_QCA6174_FW_3_0, sizeof(*pfw_files));
-            break;
     case QCA9377_REV1_1_VERSION:
-#ifdef CONFIG_TUFELLO_DUAL_FW_SUPPORT
-            memcpy(pfw_files, &FW_FILES_DEFAULT, sizeof(*pfw_files));
-#else
             memcpy(pfw_files, &FW_FILES_QCA6174_FW_3_0, sizeof(*pfw_files));
-#endif
             break;
     default:
             memcpy(pfw_files, &FW_FILES_DEFAULT, sizeof(*pfw_files));
@@ -1275,21 +1269,6 @@ void ol_target_failure(void *instance, A_STATUS status)
 		pr_info("%s: LOGP is in progress, ignore!\n", __func__);
 		return;
 	}
-
-#if defined(HIF_PCI) && defined(DEBUG)
-	if (vos_is_load_in_progress(VOS_MODULE_ID_VOSS, NULL)) {
-		pr_err("XXX TARGET ASSERTED during driver loading XXX\n");
-
-		if (hif_pci_check_soc_status(scn->hif_sc)
-		    || dump_CE_register(scn)) {
-			return;
-		}
-
-		dump_CE_debug_register(scn->hif_sc);
-		ol_copy_ramdump(scn);
-		VOS_BUG(0);
-	}
-#endif
 
 	if (vos_is_load_unload_in_progress(VOS_MODULE_ID_VOSS, NULL)) {
 		printk("%s: Loading/Unloading is in progress, ignore!\n",

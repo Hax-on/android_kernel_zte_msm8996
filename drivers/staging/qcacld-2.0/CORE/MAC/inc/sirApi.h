@@ -3841,6 +3841,15 @@ typedef struct sSirRoamOffloadScanRsp
   tANI_U8  sessionId;
   tANI_U32 reason;
 } tSirRoamOffloadScanRsp, *tpSirRoamOffloadScanRsp;
+
+struct sir_sme_roam_restart_req
+{
+	tANI_U16 message_type;
+	tANI_U16 length;
+	tANI_U8  sme_session_id;
+	tANI_U8  command;
+	tANI_U8  reason;
+};
 #endif //WLAN_FEATURE_ROAM_SCAN_OFFLOAD
 
 #define SIR_NOCHANGE_POWER_VALUE  0xFFFFFFFF
@@ -6474,24 +6483,6 @@ struct udp_resp_offload {
 	char       udp_payload_filter[MAX_LEN_UDP_RESP_OFFLOAD];
 	char       udp_response_payload[MAX_LEN_UDP_RESP_OFFLOAD];
 
-};
-
-/*
- * struct wow_pulse_mode - WoW Pulse set cmd struct
- *
- * @wow_pulse_enable: enable or disable this feature
- * @wow_pulse_pin: GPIO PIN for Pulse
- * @wow_pulse_interval_low: Pulse interval low
- * @wow_pulse_interval_high: Pulse interval high
- *
- * SME uses this structure to configure wow pulse info
- * and send it to WMA
- */
-struct wow_pulse_mode {
-	bool                       wow_pulse_enable;
-	uint8_t                    wow_pulse_pin;
-	uint16_t                   wow_pulse_interval_high;
-	uint16_t                   wow_pulse_interval_low;
 };
 
 #endif /* __SIR_API_H */

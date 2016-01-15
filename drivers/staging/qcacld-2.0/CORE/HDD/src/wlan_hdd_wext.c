@@ -110,10 +110,6 @@
 #include "wlan_hdd_ocb.h"
 #include "wlan_hdd_tsf.h"
 
-#ifdef FEATURE_OEM_DATA_SUPPORT
-#define MAX_OEM_DATA_RSP_LEN            2047
-#endif
-
 #define HDD_FINISH_ULA_TIME_OUT         800
 #define HDD_SET_MCBC_FILTERS_TO_FW      1
 #define HDD_DELETE_MCBC_FILTERS_FROM_FW 0
@@ -191,7 +187,7 @@ static const hdd_freq_chan_map_t freq_chan_map[] = { {2412, 1}, {2417, 2},
 #define WE_TXRX_FWSTATS_RESET           41
 #define WE_SET_MAX_TX_POWER_2_4   42
 #define WE_SET_MAX_TX_POWER_5_0   43
-#define WE_SET_POWER_GATING       44
+/* 44 is unused */
 /* Private ioctl for packet power save */
 #define  WE_PPS_PAID_MATCH              45
 #define  WE_PPS_GID_MATCH               46
@@ -278,7 +274,7 @@ static const hdd_freq_chan_map_t freq_chan_map[] = { {2412, 1}, {2417, 2},
 #define WE_GET_AMSDU         28
 #define WE_GET_TXPOW_2G      29
 #define WE_GET_TXPOW_5G      30
-#define WE_GET_POWER_GATING  31
+/* 31 is unused */
 #define WE_GET_PPS_PAID_MATCH           32
 #define WE_GET_PPS_GID_MATCH            33
 #define WE_GET_PPS_EARLY_TIM_CLEAR      34
@@ -413,11 +409,8 @@ static const hdd_freq_chan_map_t freq_chan_map[] = { {2412, 1}, {2417, 2},
 #define WLAN_PRIV_SET_NONE_GET_THREE_INT   (SIOCIWFIRSTPRIV + 15)
 #define WE_GET_TSF      1
 
-#ifdef FEATURE_OEM_DATA_SUPPORT
-/* Private ioctls for setting the measurement configuration */
-#define WLAN_PRIV_SET_OEM_DATA_REQ (SIOCIWFIRSTPRIV + 17)
-#define WLAN_PRIV_GET_OEM_DATA_RSP (SIOCIWFIRSTPRIV + 19)
-#endif
+/* (SIOCIWFIRSTPRIV + 17) is currently unused */
+/* (SIOCIWFIRSTPRIV + 19) is currently unused */
 
 #ifdef WLAN_FEATURE_VOWIFI_11R
 #define WLAN_PRIV_SET_FTIES             (SIOCIWFIRSTPRIV + 20)
@@ -6698,16 +6691,6 @@ static int __iw_setint_getnone(struct net_device *dev,
              break;
          }
 
-         case WE_SET_POWER_GATING:
-         {
-              hddLog(LOG1, "WMI_PDEV_PARAM_POWER_GATING_SLEEP val %d",
-                     set_value);
-              ret = process_wma_set_command((int)pAdapter->sessionId,
-                                        (int)WMI_PDEV_PARAM_POWER_GATING_SLEEP,
-                                        (set_value)? true:false, PDEV_CMD);
-              break;
-         }
-
          /* Firmware debug log */
          case WE_DBGLOG_LOG_LEVEL:
          {
@@ -7769,16 +7752,6 @@ static int __iw_setnone_getint(struct net_device *dev,
             break;
         }
 
-        case WE_GET_POWER_GATING:
-        {
-            hddLog(LOG1, "GET WMI_PDEV_PARAM_POWER_GATING_SLEEP");
-            *value = wma_cli_get_command(wmapvosContext,
-                                         (int)pAdapter->sessionId,
-                                        (int)WMI_PDEV_PARAM_POWER_GATING_SLEEP,
-                                        PDEV_CMD);
-            break;
-        }
-
     case WE_GET_PPS_PAID_MATCH:
         {
             hddLog(LOG1, "GET WMI_VDEV_PPS_PAID_MATCH");
@@ -8751,6 +8724,14 @@ static int __iw_set_var_ints_getnone(struct net_device *dev,
         case WE_P2P_NOA_CMD:
             {
                 p2p_app_setP2pPs_t p2pNoA;
+
+                if (pAdapter->device_mode != WLAN_HDD_P2P_GO) {
+                    hddLog(LOGE,
+                        FL("Setting NoA is not allowed in Device mode %s(%d)"),
+                        hdd_device_mode_to_string(pAdapter->device_mode),
+                        pAdapter->device_mode);
+                    return -EINVAL;
+                }
 
                 p2pNoA.opp_ps = apps_args[0];
                 p2pNoA.ctWindow = apps_args[1];
@@ -11073,6 +11054,10 @@ static int __iw_set_two_ints_getnone(struct net_device *dev,
         hddLog(LOGE, "WE_SET_FW_CRASH_INJECT: %d %d", value[1], value[2]);
         pr_err("SSR is triggered by iwpriv CRASH_INJECT: %d %d\n",
                                                 value[1], value[2]);
+        if (!hdd_ctx->cfg_ini->crash_inject_enabled) {
+            hddLog(LOGE, "Crash Inject ini disabled, Ignore Crash Inject");
+            return 0;
+        }
         ret = process_wma_set_command_twoargs((int) pAdapter->sessionId,
                                               (int) GEN_PARAM_CRASH_INJECT,
                                               value[1], value[2], GEN_CMD);
@@ -11174,10 +11159,6 @@ static const iw_handler we_private[] = {
    [WLAN_PRIV_ADD_TSPEC             - SIOCIWFIRSTPRIV]   = iw_add_tspec,
    [WLAN_PRIV_DEL_TSPEC             - SIOCIWFIRSTPRIV]   = iw_del_tspec,
    [WLAN_PRIV_GET_TSPEC             - SIOCIWFIRSTPRIV]   = iw_get_tspec,
-#ifdef FEATURE_OEM_DATA_SUPPORT
-   [WLAN_PRIV_SET_OEM_DATA_REQ - SIOCIWFIRSTPRIV] = iw_set_oem_data_req, //oem data req Specifc
-   [WLAN_PRIV_GET_OEM_DATA_RSP - SIOCIWFIRSTPRIV] = iw_get_oem_data_rsp, //oem data req Specifc
-#endif
 
 #ifdef WLAN_FEATURE_VOWIFI_11R
    [WLAN_PRIV_SET_FTIES                 - SIOCIWFIRSTPRIV]   = iw_set_fties,
@@ -11453,11 +11434,6 @@ static const struct iw_priv_args we_private_args[] = {
         IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,
         0,
         "txpow5g" },
-
-    {   WE_SET_POWER_GATING,
-        IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,
-        0,
-        "pwrgating" },
 
     /* Sub-cmds DBGLOG specific commands */
     {   WE_DBGLOG_LOG_LEVEL ,
@@ -11823,11 +11799,6 @@ static const struct iw_priv_args we_private_args[] = {
         IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,
         "get_txpow5g" },
 
-    {   WE_GET_POWER_GATING,
-        0,
-        IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,
-        "get_pwrgating" },
-
     {   WE_GET_PPS_PAID_MATCH,
     0,
     IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,
@@ -12191,22 +12162,6 @@ static const struct iw_priv_args we_private_args[] = {
         IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,
         IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,
         "getTspec" },
-
-#ifdef FEATURE_OEM_DATA_SUPPORT
-    /* handlers for main ioctl - OEM DATA */
-    {
-        WLAN_PRIV_SET_OEM_DATA_REQ,
-        IW_PRIV_TYPE_BYTE | sizeof(struct iw_oem_data_req) | IW_PRIV_SIZE_FIXED,
-        0,
-        "set_oem_data_req" },
-
-    /* handlers for main ioctl - OEM DATA */
-    {
-        WLAN_PRIV_GET_OEM_DATA_RSP,
-        0,
-        IW_PRIV_TYPE_BYTE | MAX_OEM_DATA_RSP_LEN,
-        "get_oem_data_rsp" },
-#endif
 
     /* handlers for main ioctl - host offload */
     {

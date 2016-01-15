@@ -1921,25 +1921,12 @@ eHalStatus sme_ScanGetBKIDCandidateList(tHalHandle hHal, tANI_U32 sessionId,
     \fn sme_OemDataReq
     \param sessionId - session id of session to be used for oem data req.
     \param pOemDataReqID - pointer to an object to get back the request ID
-    \param callback - a callback function that is called upon finish
-    \param pContext - a pointer passed in for the callback
     \return eHalStatus
   ---------------------------------------------------------------------------*/
 eHalStatus sme_OemDataReq(tHalHandle hHal,
                                        tANI_U8 sessionId,
                                        tOemDataReqConfig *,
-                                       tANI_U32 *pOemDataReqID,
-                                       oemData_OemDataReqCompleteCallback callback,
-                                       void *pContext);
-
-/* ---------------------------------------------------------------------------
-    \fn sme_getOemDataRsp
-    \param pOemDataRsp - A pointer to the response object
-    \param pOemDataReqID - pointer to an object to get back the request ID
-    \return eHalStatus
-  ---------------------------------------------------------------------------*/
-eHalStatus sme_getOemDataRsp(tHalHandle hHal,
-                                         tOemDataRsp **pOemDataRsp);
+                                       tANI_U32 *pOemDataReqID);
 
 #endif /*FEATURE_OEM_DATA_SUPPORT*/
 
@@ -4402,10 +4389,6 @@ static inline VOS_STATUS sme_set_udp_resp_offload(struct udp_resp_offload
 eHalStatus sme_set_lost_link_info_cb(tHalHandle hal,
                                      void (*cb)(void *,
                                                 struct sir_lost_link_info *));
-
-#ifdef WLAN_FEATURE_WOW_PULSE
-VOS_STATUS sme_set_wow_pulse(struct wow_pulse_mode *wow_pulse_set_info);
-#endif
 
 eHalStatus sme_roam_set_default_key_index(tHalHandle hal, uint8_t session_id,
 					uint8_t default_idx);

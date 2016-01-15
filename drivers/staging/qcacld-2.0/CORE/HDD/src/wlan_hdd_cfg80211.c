@@ -1463,8 +1463,7 @@ __wlan_hdd_cfg80211_get_supported_features(struct wiphy *wiphy,
     fset |= WIFI_FEATURE_HOTSPOT;
 
 #ifdef FEATURE_WLAN_EXTSCAN
-    if (pHddCtx->cfg_ini->extscan_enabled &&
-        sme_IsFeatureSupportedByFW(EXTENDED_SCAN)) {
+    if (sme_IsFeatureSupportedByFW(EXTENDED_SCAN)) {
         hddLog(LOG1, FL("EXTScan is supported by firmware"));
         fset |= WIFI_FEATURE_EXTSCAN | WIFI_FEATURE_HAL_EPNO;
     }
@@ -2406,10 +2405,6 @@ static int __wlan_hdd_cfg80211_extscan_get_capabilities(struct wiphy *wiphy,
     if (0 != ret)
         return -EINVAL;
 
-    if (!pHddCtx->cfg_ini->extscan_enabled) {
-        hddLog(LOGE, FL("extscan not supported"));
-        return -ENOTSUPP;
-    }
     if (nla_parse(tb, QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_MAX,
                     data, data_len,
                     wlan_hdd_extscan_config_policy)) {
@@ -2549,10 +2544,6 @@ static int __wlan_hdd_cfg80211_extscan_get_cached_results(struct wiphy *wiphy,
 	if (0 != status)
 		return -EINVAL;
 
-	if (!pHddCtx->cfg_ini->extscan_enabled) {
-		hddLog(LOGE, FL("extscan not supported"));
-		return -ENOTSUPP;
-	}
 	if (nla_parse(tb, PARAM_MAX, data, data_len,
 			wlan_hdd_extscan_config_policy)) {
 		hddLog(LOGE, FL("Invalid ATTR"));
@@ -3303,10 +3294,6 @@ static int __wlan_hdd_cfg80211_extscan_get_valid_channels(struct wiphy *wiphy,
     if (0 != retval)
        return -EINVAL;
 
-    if (!pHddCtx->cfg_ini->extscan_enabled) {
-        hddLog(LOGE, FL("extscan not supported"));
-        return -ENOTSUPP;
-    }
     if (nla_parse(tb, QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_MAX,
                   data, data_len,
                   wlan_hdd_extscan_config_policy)) {
@@ -3985,11 +3972,6 @@ static int __wlan_hdd_cfg80211_extscan_start(struct wiphy *wiphy,
 	if (0 != retval)
 		return -EINVAL;
 
-	if (!pHddCtx->cfg_ini->extscan_enabled) {
-		hddLog(LOGE, FL("extscan not supported"));
-		return -ENOTSUPP;
-	}
-
 	if (nla_parse(tb, PARAM_MAX, data, data_len,
 		wlan_hdd_extscan_config_policy)) {
 		hddLog(LOGE, FL("Invalid ATTR"));
@@ -4200,10 +4182,6 @@ static int __wlan_hdd_cfg80211_extscan_stop(struct wiphy *wiphy,
 	if (0 != retval)
 		return -EINVAL;
 
-	if (!pHddCtx->cfg_ini->extscan_enabled) {
-		hddLog(LOGE, FL("extscan not supported"));
-		return -ENOTSUPP;
-	}
 	if (nla_parse(tb, PARAM_MAX, data, data_len,
 			wlan_hdd_extscan_config_policy)) {
 		hddLog(LOGE, FL("Invalid ATTR"));
@@ -4319,10 +4297,6 @@ static int __wlan_hdd_cfg80211_extscan_reset_bssid_hotlist(struct wiphy *wiphy,
     if (0 != retval)
         return -EINVAL;
 
-    if (!pHddCtx->cfg_ini->extscan_enabled) {
-        hddLog(LOGE, FL("extscan not supported"));
-        return -ENOTSUPP;
-    }
     if (nla_parse(tb, QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_MAX,
                     data, data_len,
                     wlan_hdd_extscan_config_policy)) {
@@ -4453,10 +4427,7 @@ __wlan_hdd_cfg80211_extscan_reset_ssid_hotlist(struct wiphy *wiphy,
 		hddLog(LOGE, FL("HDD context is not valid"));
 		return -EINVAL;
 	}
-	if (!hdd_ctx->cfg_ini->extscan_enabled) {
-		hddLog(LOGE, FL("extscan not supported"));
-		return -ENOTSUPP;
-	}
+
 	if (nla_parse(tb, PARAM_MAX,
 		      data, data_len,
 		      wlan_hdd_extscan_config_policy)) {
@@ -4581,10 +4552,6 @@ static int __wlan_hdd_cfg80211_extscan_reset_significant_change(
     if (0 != retval)
          return -EINVAL;
 
-    if (!pHddCtx->cfg_ini->extscan_enabled) {
-        hddLog(LOGE, FL("extscan not supported"));
-        return -ENOTSUPP;
-    }
     if (nla_parse(tb, QCA_WLAN_VENDOR_ATTR_EXTSCAN_SUBCMD_CONFIG_PARAM_MAX,
                     data, data_len,
                     wlan_hdd_extscan_config_policy)) {
@@ -18264,8 +18231,9 @@ static int __wlan_hdd_cfg80211_get_station(struct wiphy *wiphy,
             pAdapter->hdd_stats.ClassA_stat.mcs_index = 0;
         }
     }
-#ifdef LINKSPEED_DEBUG_ENABLED
-    pr_info("RSSI %d, RLMS %u, rate %d, rssi high %d, rssi mid %d, rssi low %d, rate_flags 0x%x, MCS %d\n",
+
+    hddLog(LOG1,
+           FL("RSSI %d, RLMS %u, rate %d, rssi high %d, rssi mid %d, rssi low %d, rate_flags 0x%x, MCS %d"),
             sinfo->signal,
             pCfg->reportMaxLinkSpeed,
             myRate,
@@ -18274,7 +18242,6 @@ static int __wlan_hdd_cfg80211_get_station(struct wiphy *wiphy,
             (int) pCfg->linkSpeedRssiLow,
             (int) rate_flags,
             (int) pAdapter->hdd_stats.ClassA_stat.mcs_index);
-#endif //LINKSPEED_DEBUG_ENABLED
 
     if (eHDD_LINK_SPEED_REPORT_ACTUAL != pCfg->reportMaxLinkSpeed)
     {
@@ -18625,6 +18592,13 @@ static int __wlan_hdd_cfg80211_get_station(struct wiphy *wiphy,
 #endif //LINKSPEED_DEBUG_ENABLED
         }
     }
+
+    if (rate_flags & eHAL_TX_RATE_LEGACY)
+        hddLog(LOG1, FL("Reporting legacy rate %d"), sinfo->txrate.legacy);
+    else
+        hddLog(LOG1, FL("Reporting MCS rate %d flags 0x%x"),
+               sinfo->txrate.mcs, sinfo->txrate.flags);
+
     sinfo->filled |= STATION_INFO_TX_BITRATE;
 
     sinfo->tx_bytes = pAdapter->stats.tx_bytes;
@@ -19910,9 +19884,9 @@ static int __wlan_hdd_cfg80211_tdls_mgmt(struct wiphy *wiphy,
 #endif
 #endif
 {
+
     hdd_adapter_t *pAdapter = WLAN_HDD_GET_PRIV_PTR(dev);
     hdd_context_t *pHddCtx = wiphy_priv(wiphy);
-    hdd_station_ctx_t *pHddStaCtx = NULL;
     VOS_STATUS status;
     int max_sta_failed = 0;
     int responder;
@@ -19947,26 +19921,6 @@ static int __wlan_hdd_cfg80211_tdls_mgmt(struct wiphy *wiphy,
                     __func__, MAC_ADDR_ARRAY(peer), action_code);
         return -ENOTSUPP;
     }
-
-    pHddStaCtx = WLAN_HDD_GET_STATION_CTX_PTR(pAdapter);
-
-    if (NULL == pHddStaCtx) {
-       VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,
-               "%s: HDD station context NULL ",__func__);
-       return -EINVAL;
-    }
-
-    /* STA should be connected and authenticated before sending any TDLS frames
-     */
-    if ((eConnectionState_Associated != pHddStaCtx->conn_info.connState) ||
-        (FALSE == pHddStaCtx->conn_info.uIsAuthenticated)) {
-        VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,
-                "STA is not connected or unauthenticated. connState %u, uIsAuthenticated %u",
-                pHddStaCtx->conn_info.connState,
-                pHddStaCtx->conn_info.uIsAuthenticated);
-        return -EAGAIN;
-    }
-
     /* If any concurrency is detected */
     if (((1 << VOS_STA_MODE) != pHddCtx->concurrency_mode) ||
         (pHddCtx->no_of_active_sessions[VOS_STA_MODE] > 1)) {
@@ -20124,20 +20078,6 @@ static int __wlan_hdd_cfg80211_tdls_mgmt(struct wiphy *wiphy,
         return -EINVAL;
     }
 
-    if ((SIR_MAC_TDLS_DIS_REQ == action_code) ||
-        (SIR_MAC_TDLS_DIS_RSP == action_code)) {
-        /* for DIS_REQ/DIS_RSP, supplicant don't consider the return status.
-         * So we no need to wait for tdls_mgmt_comp for sending ack status.
-         */
-        VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_INFO,
-                "%s: tx done for frm %u", __func__, action_code);
-        return 0;
-    }
-
-    VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_INFO,
-            "%s: Wait for tdls_mgmt_comp. Timeout %u ms", __func__,
-            WAIT_TIME_TDLS_MGMT);
-
     rc = wait_for_completion_timeout(&pAdapter->tdls_mgmt_comp,
                                        msecs_to_jiffies(WAIT_TIME_TDLS_MGMT));
 
@@ -20163,10 +20103,6 @@ static int __wlan_hdd_cfg80211_tdls_mgmt(struct wiphy *wiphy,
         pAdapter->mgmtTxCompletionStatus = FALSE;
         wlan_hdd_tdls_check_bmps(pAdapter);
         return -EINVAL;
-    } else {
-        VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_INFO,
-                "%s: Mgmt Tx Completion status %ld TxCompletion %u",
-                __func__, rc, pAdapter->mgmtTxCompletionStatus);
     }
 
     if (max_sta_failed)

@@ -717,8 +717,6 @@ typedef struct
  * Function Declarations and Documentation
  * -------------------------------------------------------------------------*/
 
-void *tlshim_peer_validity(void *vos_ctx, uint8_t sta_id);
-
 /*==========================================================================
 
   FUNCTION    WLANTL_Open
@@ -1183,8 +1181,7 @@ WLANTL_STAPktPending
 
     pvosGCtx:    pointer to the global vos context; a handle to TL's
                  control block can be extracted from its context
-    vdev:        pointer to the vdev_handle corresponding to the packet
-                 list given by upper layers
+    ucSTAId:     identifier for the STA that is pending transmission
     buf:         packet given by uppler layer for tx
 
   RETURN VALUE
@@ -1194,7 +1191,7 @@ WLANTL_STAPktPending
     up the buffer.
 
 ============================================================================*/
-adf_nbuf_t WLANTL_SendSTA_DataFrame(v_PVOID_t pvosGCtx, v_PVOID_t vdev,
+adf_nbuf_t WLANTL_SendSTA_DataFrame(v_PVOID_t pvosGCtx, v_U8_t ucSTAId,
                                     adf_nbuf_t buf
 #ifdef QCA_PKT_PROTO_TRACE
                                   , v_U8_t proto_type

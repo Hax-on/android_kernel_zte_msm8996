@@ -589,6 +589,13 @@ REG_TABLE_ENTRY g_registry_table[] =
                  CFG_MAX_RX_AMPDU_FACTOR_MIN,
                  CFG_MAX_RX_AMPDU_FACTOR_MAX),
 
+   REG_VARIABLE(CFG_HT_MPDU_DENSITY_NAME, WLAN_PARAM_Integer,
+                hdd_config_t, ht_mpdu_density,
+                VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK ,
+                CFG_HT_MPDU_DENSITY_DEFAULT,
+                CFG_HT_MPDU_DENSITY_MIN,
+                CFG_HT_MPDU_DENSITY_MAX),
+
    REG_VARIABLE( CFG_FIXED_RATE_NAME, WLAN_PARAM_Integer,
                  hdd_config_t, TxRate,
                  VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK,
@@ -3546,6 +3553,13 @@ REG_TABLE_ENTRY g_registry_table[] =
                  CFG_ENABLE_GREEN_AP_FEATURE_MAX ),
 #endif
 
+   REG_VARIABLE(CFG_ENABLE_CRASH_INJECT, WLAN_PARAM_Integer,
+                 hdd_config_t, crash_inject_enabled,
+                 VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
+                 CFG_ENABLE_CRASH_INJECT_DEFAULT,
+                 CFG_ENABLE_CRASH_INJECT_MIN,
+                 CFG_ENABLE_CRASH_INJECT_MAX),
+
    REG_VARIABLE(CFG_IGNORE_CAC_NAME, WLAN_PARAM_Integer,
                 hdd_config_t, ignoreCAC,
                 VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
@@ -4085,13 +4099,6 @@ REG_TABLE_ENTRY g_registry_table[] =
                 CFG_SELF_GEN_FRM_PWR_MAX),
 
 #ifdef FEATURE_WLAN_EXTSCAN
-   REG_VARIABLE(CFG_EXTSCAN_ALLOWED_NAME, WLAN_PARAM_Integer,
-                 hdd_config_t, extscan_enabled,
-                 VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
-                 CFG_EXTSCAN_ALLOWED_DEF,
-                 CFG_EXTSCAN_ALLOWED_MIN,
-                 CFG_EXTSCAN_ALLOWED_MAX ),
-
    REG_VARIABLE(CFG_EXTSCAN_PASSIVE_MAX_CHANNEL_TIME_NAME, WLAN_PARAM_Integer,
                  hdd_config_t, extscan_passive_max_chn_time,
                  VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
@@ -4149,36 +4156,6 @@ REG_TABLE_ENTRY g_registry_table[] =
                 VAR_FLAGS_OPTIONAL,
                 (void *)CFG_UDP_RESP_OFFLOAD_RESPONSE_PAYLOAD_DEFAULT),
 
-#endif
-
-#ifdef WLAN_FEATURE_WOW_PULSE
-   REG_VARIABLE(CFG_WOW_PULSE_SUPPORT_NAME, WLAN_PARAM_Integer,
-                hdd_config_t, wow_pulse_support,
-                VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
-                CFG_WOW_PULSE_SUPPORT_DEFAULT,
-                CFG_WOW_PULSE_SUPPORT_MIN,
-                CFG_WOW_PULSE_SUPPORT_MAX),
-
-   REG_VARIABLE(CFG_WOW_PULSE_PIN_NAME, WLAN_PARAM_Integer,
-                hdd_config_t, wow_pulse_pin,
-                VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
-                CFG_WOW_PULSE_PIN_DEFAULT,
-                CFG_WOW_PULSE_PIN_MIN,
-                CFG_WOW_PULSE_PIN_MAX),
-
-   REG_VARIABLE(CFG_WOW_PULSE_INTERVAL_LOW_NAME, WLAN_PARAM_Integer,
-                hdd_config_t, wow_pulse_interval_low,
-                VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
-                CFG_WOW_PULSE_INTERVAL_LOW_DEFAULT,
-                CFG_WOW_PULSE_INTERVAL_LOW_MIN,
-                CFG_WOW_PULSE_INTERVAL_LOW_MAX),
-
-   REG_VARIABLE(CFG_WOW_PULSE_INTERVAL_HIGH_NAME, WLAN_PARAM_Integer,
-                hdd_config_t, wow_pulse_interval_high,
-                VAR_FLAGS_OPTIONAL | VAR_FLAGS_RANGE_CHECK_ASSUME_DEFAULT,
-                CFG_WOW_PULSE_INTERVAL_HIGH_DEFAULT,
-                CFG_WOW_PULSE_INTERVAL_HIGH_MIN,
-                CFG_WOW_PULSE_INTERVAL_HIGH_MAX),
 #endif
 
 
@@ -4873,6 +4850,9 @@ void print_hdd_cfg(hdd_context_t *pHddCtx)
   hddLog(LOG2, "Name = [%s] Value = [%d]",
                  CFG_FIRST_SCAN_BUCKET_THRESHOLD_NAME,
                  pHddCtx->cfg_ini->first_scan_bucket_threshold);
+  hddLog(LOG2, "Name = [ght_mpdu_density] Value = [%u]",
+                   pHddCtx->cfg_ini->ht_mpdu_density);
+
 }
 
 #define CFG_VALUE_MAX_LEN 256
@@ -5817,6 +5797,13 @@ v_BOOL_t hdd_update_config_dat( hdd_context_t *pHddCtx )
    {
       fStatus = FALSE;
       hddLog(LOGE,"Could not pass on WNI_CFG_HT_AMPDU_PARAMS_MAX_RX_AMPDU_FACTOR to CCM");
+   }
+
+   if (ccmCfgSetInt(pHddCtx->hHal, WNI_CFG_MPDU_DENSITY,
+       pConfig->ht_mpdu_density, NULL, eANI_BOOLEAN_FALSE) ==
+                                              eHAL_STATUS_FAILURE) {
+      fStatus = FALSE;
+      hddLog(LOGE, FL("Could not pass on WNI_CFG_MPDU_DENSITY to CCM"));
    }
 
    if (ccmCfgSetInt(pHddCtx->hHal, WNI_CFG_SHORT_PREAMBLE, pConfig->fIsShortPreamble,

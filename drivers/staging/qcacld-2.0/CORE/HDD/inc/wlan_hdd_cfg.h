@@ -208,6 +208,21 @@
 #define CFG_MAX_RX_AMPDU_FACTOR_MAX            WNI_CFG_MAX_RX_AMPDU_FACTOR_STAMAX
 #define CFG_MAX_RX_AMPDU_FACTOR_DEFAULT        WNI_CFG_MAX_RX_AMPDU_FACTOR_STADEF
 
+/* Configuration option for HT MPDU density (Table 8-125 802.11-2012)
+ * 0 for no restriction
+ * 1 for 1/4 micro sec
+ * 2 for 1/2 micro sec
+ * 3 for 1 micro sec
+ * 4 for 2 micro sec
+ * 5 for 4 micro sec
+ * 6 for 8 micro sec
+ * 7 for 16 micro sec
+ */
+#define CFG_HT_MPDU_DENSITY_NAME               "ght_mpdu_density"
+#define CFG_HT_MPDU_DENSITY_MIN                WNI_CFG_MPDU_DENSITY_STAMIN
+#define CFG_HT_MPDU_DENSITY_MAX                WNI_CFG_MPDU_DENSITY_STAMAX
+#define CFG_HT_MPDU_DENSITY_DEFAULT            WNI_CFG_MPDU_DENSITY_STADEF
+
 //Configuration added to enable/disable CTS2SELF in
 //Adaptive RX drain feature
 #define CFG_ENABLE_ADAPT_RX_DRAIN_NAME     "gEnableAdaptRxDrain"
@@ -1502,6 +1517,15 @@ typedef enum
 #define CFG_ENABLE_GREEN_AP_FEATURE_DEFAULT ( 1 )
 #endif
 
+/*
+ * This INI item is used to control subsystem restart(SSR) test framework
+ * Set its value to 1 to enable APPS trigerred SSR testing
+ */
+#define CFG_ENABLE_CRASH_INJECT         "gEnableForceTargetAssert"
+#define CFG_ENABLE_CRASH_INJECT_MIN     (0)
+#define CFG_ENABLE_CRASH_INJECT_MAX     (1)
+#define CFG_ENABLE_CRASH_INJECT_DEFAULT (0)
+
 #ifdef FEATURE_WLAN_FORCE_SAP_SCC
 #define CFG_SAP_SCC_CHAN_AVOIDANCE         "gSapSccChanAvoidance"
 #define CFG_SAP_SCC_CHAN_AVOIDANCE_MIN     ( 0 )
@@ -1991,12 +2015,12 @@ typedef enum
 #define CFG_TDLS_IDLE_TIMEOUT                       "gTDLSIdleTimeout"
 #define CFG_TDLS_IDLE_TIMEOUT_MIN                   (500)
 #define CFG_TDLS_IDLE_TIMEOUT_MAX                   ( 40000 )
-#define CFG_TDLS_IDLE_TIMEOUT_DEFAULT               (2000)
+#define CFG_TDLS_IDLE_TIMEOUT_DEFAULT               (5000)
 
 #define CFG_TDLS_IDLE_PACKET_THRESHOLD              "gTDLSIdlePacketThreshold"
 #define CFG_TDLS_IDLE_PACKET_THRESHOLD_MIN          ( 0 )
 #define CFG_TDLS_IDLE_PACKET_THRESHOLD_MAX          ( 40000 )
-#define CFG_TDLS_IDLE_PACKET_THRESHOLD_DEFAULT      (1)
+#define CFG_TDLS_IDLE_PACKET_THRESHOLD_DEFAULT      (3)
 
 #define CFG_TDLS_RSSI_HYSTERESIS                    "gTDLSRssiHysteresis"
 #define CFG_TDLS_RSSI_HYSTERESIS_MIN                ( 0 )
@@ -3233,16 +3257,6 @@ enum dot11p_mode {
 #define CFG_FINE_TIME_MEAS_CAPABILITY_DEFAULT      (0x000D)
 
 #ifdef FEATURE_WLAN_EXTSCAN
-/*
- * This ini is added to control the enabling of extscan feature outside of code
- * To enable , gExtScanEnable=1 need to be declared in ini file.
- * Otherwise, Extscan feature will remain disabled.
- */
-#define CFG_EXTSCAN_ALLOWED_NAME                   "gExtScanEnable"
-#define CFG_EXTSCAN_ALLOWED_MIN                    (0)
-#define CFG_EXTSCAN_ALLOWED_MAX                    (1)
-#define CFG_EXTSCAN_ALLOWED_DEF                    (0)
-
 #define CFG_EXTSCAN_PASSIVE_MAX_CHANNEL_TIME_NAME      "gExtScanPassiveMaxChannelTime"
 #define CFG_EXTSCAN_PASSIVE_MAX_CHANNEL_TIME_MIN       (0)
 #define CFG_EXTSCAN_PASSIVE_MAX_CHANNEL_TIME_MAX       (500)
@@ -3337,49 +3351,6 @@ enum dot11p_mode {
 #define CFG_FIRST_SCAN_BUCKET_THRESHOLD_MIN       (-50)
 #define CFG_FIRST_SCAN_BUCKET_THRESHOLD_MAX       (-30)
 #define CFG_FIRST_SCAN_BUCKET_THRESHOLD_DEFAULT   (-30)
-
-
-#ifdef WLAN_FEATURE_WOW_PULSE
-/*
- * Enable/Disable  WOW PULSE feature
- * Set the wakeup pulse which FW use to wake up HOST
- * Default : Disable
- */
-#define CFG_WOW_PULSE_SUPPORT_NAME     "gwow_pulse_support"
-#define CFG_WOW_PULSE_SUPPORT_MIN      (0)
-#define CFG_WOW_PULSE_SUPPORT_MAX      (1)
-#define CFG_WOW_PULSE_SUPPORT_DEFAULT  (CFG_WOW_PULSE_SUPPORT_MIN)
-
-/*
- * GPIO PIN for Pulse
- * Which PIN to send the Pulse
- */
-#define CFG_WOW_PULSE_PIN_NAME         "gwow_pulse_pin"
-#define CFG_WOW_PULSE_PIN_MIN          (CFG_SET_TSF_GPIO_PIN_MIN)
-#define CFG_WOW_PULSE_PIN_MAX          (CFG_SET_TSF_GPIO_PIN_MAX)
-#define CFG_WOW_PULSE_PIN_DEFAULT      (35)
-
-/*
- * Pulse interval low
- * The interval of low level in the pulse
- * The value which defined by customer should between 160 and 480
- */
-#define CFG_WOW_PULSE_INTERVAL_LOW_NAME     "gwow_pulse_interval_low"
-#define CFG_WOW_PULSE_INTERVAL_LOW_MIN      (160)
-#define CFG_WOW_PULSE_INTERVAL_LOW_MAX      (480)
-#define CFG_WOW_PULSE_INTERVAL_LOW_DEFAULT  (180)
-
-/*
- * Pulse interval high
- * The interval of high level in the pulse
- * The value which defined by customer should between 20 and 40
- */
-#define CFG_WOW_PULSE_INTERVAL_HIGH_NAME    "gwow_pulse_interval_high"
-#define CFG_WOW_PULSE_INTERVAL_HIGH_MIN     (20)
-#define CFG_WOW_PULSE_INTERVAL_HIGH_MAX     (40)
-#define CFG_WOW_PULSE_INTERVAL_HIGH_DEFAULT (20)
-#endif
-
 
 /*---------------------------------------------------------------------------
   Type declarations
@@ -3935,6 +3906,7 @@ typedef struct
    v_BOOL_t                    enableGreenAP;
 #endif
 
+   bool                        crash_inject_enabled;
    v_S31_t                     dfsRadarPriMultiplier;
    v_U8_t                      reorderOffloadSupport;
 
@@ -4051,7 +4023,6 @@ typedef struct
    uint16_t                    self_gen_frm_pwr;
 
 #ifdef FEATURE_WLAN_EXTSCAN
-   bool                        extscan_enabled;
    uint32_t                    extscan_passive_max_chn_time;
    uint32_t                    extscan_passive_min_chn_time;
    uint32_t                    extscan_active_max_chn_time;
@@ -4066,12 +4037,7 @@ typedef struct
 #endif
    uint16_t                    max_mgmt_tx_fail_count;
    int8_t                      first_scan_bucket_threshold;
-#ifdef WLAN_FEATURE_WOW_PULSE
-   bool                        wow_pulse_support;
-   uint8_t                     wow_pulse_pin;
-   uint16_t                    wow_pulse_interval_high;
-   uint16_t                    wow_pulse_interval_low;
-#endif
+   uint8_t                     ht_mpdu_density;
 } hdd_config_t;
 
 #ifdef WLAN_FEATURE_MBSSID

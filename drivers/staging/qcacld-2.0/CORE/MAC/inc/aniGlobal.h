@@ -158,9 +158,9 @@ typedef struct sAniSirGlobal *tpAniSirGlobal;
 #define CFG_SAP_NSS(_x)     ((((_x) >> 2) & 0x3) ? (((_x) >> 2) & 0x3) : 1)
 #define CFG_P2P_GO_NSS(_x)  ((((_x) >> 4) & 0x3) ? (((_x) >> 4) & 0x3) : 1)
 #define CFG_P2P_CLI_NSS(_x) ((((_x) >> 6) & 0x3) ? (((_x) >> 6) & 0x3) : 1)
-#define CFG_P2P_DEV_NSS(_x) ((((_x) >> 8) & 0x3) ? (((_x) >> 8) & 0x3) : 1)
-#define CFG_IBSS_NSS(_x)    ((((_x) >> 10) & 0x3) ? (((_x) >> 10) & 0x3) : 1)
-#define CFG_TDLS_NSS(_x)    ((((_x) >> 12) & 0x3) ? (((_x) >> 12) & 0x3) : 1)
+#define CFG_IBSS_NSS(_x)    ((((_x) >> 8) & 0x3) ? (((_x) >> 8) & 0x3) : 1)
+#define CFG_TDLS_NSS(_x)    ((((_x) >> 10) & 0x3) ? (((_x) >> 10) & 0x3) : 1)
+#define CFG_P2P_DEV_NSS(_x) ((((_x) >> 12) & 0x3) ? (((_x) >> 12) & 0x3) : 1)
 #define CFG_OCB_NSS(_x)     ((((_x) >> 14) & 0x3) ? (((_x) >> 14) & 0x3) : 1)
 
 /**
@@ -1118,6 +1118,7 @@ typedef struct sMacOpenParameters
     bool is_nan_enabled;
 #endif
     uint16_t  max_mgmt_tx_fail_count;
+    bool force_target_assert_enabled;
 } tMacOpenParameters;
 
 typedef struct sHalMacStartParameters

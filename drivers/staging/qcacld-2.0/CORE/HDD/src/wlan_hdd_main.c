@@ -9500,6 +9500,7 @@ VOS_STATUS hdd_stop_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter,
    switch(pAdapter->device_mode)
    {
       case WLAN_HDD_INFRA_STATION:
+      case WLAN_HDD_IBSS:
       case WLAN_HDD_P2P_CLIENT:
       case WLAN_HDD_P2P_DEVICE:
          if (hdd_connIsConnected(WLAN_HDD_GET_STATION_CTX_PTR(pAdapter)) ||
@@ -9540,7 +9541,8 @@ VOS_STATUS hdd_stop_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter,
             hdd_abort_mac_scan(pHddCtx, pAdapter->sessionId,
                                eCSR_SCAN_ABORT_DEFAULT);
          }
-         if (pAdapter->device_mode != WLAN_HDD_INFRA_STATION) {
+         if ((pAdapter->device_mode == WLAN_HDD_P2P_CLIENT) ||
+              (pAdapter->device_mode == WLAN_HDD_P2P_DEVICE)) {
              wlan_hdd_cleanup_remain_on_channel_ctx(pAdapter);
          }
 
@@ -11924,63 +11926,6 @@ static void hdd_init_offloaded_packets_ctx(hdd_context_t *hdd_ctx)
 }
 #endif
 
-#ifdef WLAN_FEATURE_WOW_PULSE
-/**
-* wlan_hdd_set_wow_pulse() - call SME to send wmi cmd of wow pulse
-* @phddctx: hdd_context_t structure pointer
-* @enable: enable or disable this behaviour
-*
-* Return: int
-*/
-static int wlan_hdd_set_wow_pulse(hdd_context_t *phddctx, bool enable)
-{
-	hdd_config_t *pcfg_ini = phddctx->cfg_ini;
-	struct wow_pulse_mode wow_pulse_set_info;
-	VOS_STATUS status;
-
-	hddLog(LOG1, FL("wow pulse enable flag is %d"), enable);
-
-	if (false == phddctx->cfg_ini->wow_pulse_support)
-		return 0;
-
-	/* prepare the request to send to SME */
-	if (enable == true) {
-		wow_pulse_set_info.wow_pulse_enable = true;
-		wow_pulse_set_info.wow_pulse_pin =
-				pcfg_ini->wow_pulse_pin;
-		wow_pulse_set_info.wow_pulse_interval_low =
-				pcfg_ini->wow_pulse_interval_low;
-		wow_pulse_set_info.wow_pulse_interval_high=
-				pcfg_ini->wow_pulse_interval_high;
-	} else {
-		wow_pulse_set_info.wow_pulse_enable = false;
-		wow_pulse_set_info.wow_pulse_pin = 0;
-		wow_pulse_set_info.wow_pulse_interval_low = 0;
-		wow_pulse_set_info.wow_pulse_interval_high= 0;
-	}
-	hddLog(LOG1,"%s: enable %d pin %d low %d high %d",
-		__func__, wow_pulse_set_info.wow_pulse_enable,
-		wow_pulse_set_info.wow_pulse_pin,
-		wow_pulse_set_info.wow_pulse_interval_low,
-		wow_pulse_set_info.wow_pulse_interval_high);
-
-	status = sme_set_wow_pulse(&wow_pulse_set_info);
-	if (VOS_STATUS_E_FAILURE == status) {
-		hddLog(LOGE,
-			"%s: sme_set_wow_pulse failure!", __func__);
-		return -EIO;
-	}
-	hddLog(LOG2,
-		"%s: sme_set_wow_pulse success!", __func__);
-	return 0;
-}
-#else
-static int inline wlan_hdd_set_wow_pulse(hdd_context_t *phddctx, bool enable)
-{
-	return 0;
-}
-#endif
-
 /**---------------------------------------------------------------------------
 
   \brief hdd_wlan_startup() - HDD init function
@@ -12052,7 +11997,6 @@ int hdd_wlan_startup(struct device *dev, v_VOID_t *hif_sc)
    vos_set_wakelock_logging(false);
 
    vos_set_load_unload_in_progress(VOS_MODULE_ID_VOSS, TRUE);
-   vos_set_load_in_progress(VOS_MODULE_ID_VOSS, TRUE);
 
    /*Get vos context here bcoz vos_open requires it*/
    pVosContext = vos_get_global_context(VOS_MODULE_ID_SYS, NULL);
@@ -12294,12 +12238,6 @@ int hdd_wlan_startup(struct device *dev, v_VOID_t *hif_sc)
       goto err_vosclose;
    }
 
-   if (0 != wlan_hdd_set_wow_pulse(pHddCtx, true)) {
-      hddLog(VOS_TRACE_LEVEL_ERROR,
-             "%s: Failed to set wow pulse", __func__);
-   }
-
-
    /* Set 802.11p config
     * TODO-OCB: This has been temporarily added here to ensure this paramter
     * is set in CSR when we init the channel list. This should be removed
@@ -12457,7 +12395,6 @@ int hdd_wlan_startup(struct device *dev, v_VOID_t *hif_sc)
       }
 
       vos_set_load_unload_in_progress(VOS_MODULE_ID_VOSS, FALSE);
-      vos_set_load_in_progress(VOS_MODULE_ID_VOSS, FALSE);
       pHddCtx->isLoadInProgress = FALSE;
 
       hddLog(LOGE, FL("FTM driver loaded"));
@@ -12895,7 +12832,6 @@ int hdd_wlan_startup(struct device *dev, v_VOID_t *hif_sc)
    hdd_runtime_suspend_init(pHddCtx);
    pHddCtx->isLoadInProgress = FALSE;
    vos_set_load_unload_in_progress(VOS_MODULE_ID_VOSS, FALSE);
-   vos_set_load_in_progress(VOS_MODULE_ID_VOSS, FALSE);
    complete(&wlan_start_comp);
    goto success;
 
@@ -13048,6 +12984,9 @@ static int hdd_driver_init( void)
    v_CONTEXT_t pVosContext = NULL;
    int ret_status = 0;
    unsigned long rc;
+   u_int64_t start;
+
+   start = adf_get_boottime();
 
 #ifdef WLAN_LOGGING_SOCK_SVC_ENABLE
    wlan_logging_sock_init_svc();
@@ -13152,8 +13091,9 @@ static int hdd_driver_init( void)
        ret_status = -ENODEV;
        break;
    } else {
-       pr_info("%s: driver loaded\n", WLAN_MODULE_NAME);
        memdump_init();
+       pr_info("%s: driver loaded in %lld\n", WLAN_MODULE_NAME,
+                                              adf_get_boottime() - start);
        return 0;
    }
 
@@ -13168,21 +13108,12 @@ static int hdd_driver_init( void)
 #ifdef MEMORY_DEBUG
       vos_mem_exit();
 #endif
-
       vos_wake_lock_destroy(&wlan_wake_lock);
 
 #ifdef WLAN_LOGGING_SOCK_SVC_ENABLE
       wlan_logging_sock_deinit_svc();
 #endif
-      memdump_deinit();
       pr_err("%s: driver load failure\n", WLAN_MODULE_NAME);
-   }
-   else
-   {
-      //Send WLAN UP indication to Nlink Service
-      send_btc_nlink_msg(WLAN_MODULE_UP_IND, 0);
-
-      pr_info("%s: driver loaded\n", WLAN_MODULE_NAME);
    }
 
    EXIT();
