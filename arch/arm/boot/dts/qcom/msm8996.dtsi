@@ -533,7 +533,7 @@
 		compatible = "qcom,msm-hsuart-v14";
 		reg = <0x075B0000 0x1000>,
 		    <0x7584000 0x2b000>;
-		status = "ok";
+		status = "disabled";
 		reg-names = "core_mem", "bam_mem";
 		interrupt-names = "core_irq", "bam_irq", "wakeup_irq";
 		#address-cells = <0>;
@@ -1073,6 +1073,7 @@
 			akm,cdc-slim-ifd-elemental-addr = [00 00 61 49 DD 01];
 		};
 
+#if 0
         es804_codec {
             compatible = "es804-codec-gen0";
             elemental-addr = [00 01 83 20 BE 02];
@@ -1088,6 +1089,7 @@
             es804,cdc-ldo-gpio = <&tlmm 16 0>;
             adnc,enable_hs_uart_intf = <1>;
         };
+#endif
 
 #if 0
 		tomtom_codec {

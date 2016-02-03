@@ -23,12 +23,14 @@
 #include <linux/gpio.h>
 #include <linux/of_gpio.h>
 
+// ZTE_chenjun
+// #define MSM8996_I2S_MASTER
+
 struct ak8157_priv {
 	struct i2c_client *i2c;
 	int rstn;
 	int rstn_tmp;
 };
-#if 1
 struct ak8157_priv ak8157_i2c;
 unsigned int ak8157_i2c_read(struct i2c_client *i2c, unsigned int reg)
 {
@@ -48,33 +50,33 @@ static int ak8157_i2c_write(struct i2c_client *i2c, unsigned int reg,
 	unsigned int value)
 {
     int ret;
-	pr_info("%s (addr,data)=(%x, %x)\n", __func__, reg, value);
 
     ret = i2c_smbus_write_byte_data(i2c, (u8)(reg & 0xFF), (u8)(value & 0xFF));
 	if(ret < 0) {
-		pr_err("%s ret=%d\n",__func__, ret);
+		pr_err("[LHS]%s ret=%d\n",__func__, ret);
 		return EIO;
 	}
 	
 	return 0;
 }
-#endif
+
 
 void ak8157_rate_set(int rate)
 {
-    pr_err("%s rate=%d\n", __func__, rate);
+
+    pr_err("[LHS]%s rate=%d\n", __func__, rate);
 
     switch (rate) {
-		case 3: // 192K 
+		case 192000: // 192K 
 			ak8157_i2c_write(ak8157_i2c.i2c, 0x01, 0x22);
 			break;
-		case 2: // 96K
+		case 96000: // 96K
 			ak8157_i2c_write(ak8157_i2c.i2c, 0x01, 0x12);
 			break;
-		case 1: // 48K
+		case 48000: // 48K
 			ak8157_i2c_write(ak8157_i2c.i2c, 0x01, 0x02);
 			break;
-		case 0: // 44.1K
+		case 44100: // 44.1K
 			ak8157_i2c_write(ak8157_i2c.i2c, 0x01, 0x01);
 			break;
 		default:
@@ -90,22 +92,12 @@ static int ak8157_config_init(struct i2c_client *client)
 
 	int ret = 0,ret1=0,ret2=0;
 	ret = ak8157_i2c_write(client,0x00,0xe7);
-	//ret = ak8157_i2c_write(client,0x00,0xe7);
-/*	if(ret < 0 )
-		{
-		pr_err("[ak8157] %s 0x00\n",__FUNCTION__);
-		return EIO;
-		}*/
+
 	ret1 = ak8157_i2c_read(client,0x00);
+	ret = ak8157_i2c_write(client,0x01,0x00);
 	
-	ret = ak8157_i2c_write(client,0x01,0x02);
-/*	if(ret < 0 ) {
-		pr_err("[ak8157] %s 0x01\n",__FUNCTION__);
-		return EIO;
-	}
-	*/
 	ret2= ak8157_i2c_read(client,0x01);
-	pr_err("[LHS]%s ret1 = %0x,ret2 = %0x\n",__FUNCTION__,ret1,ret2);
+	pr_err("[LHS]%s ret1 = %0x,ret2 = %0x\n",__func__,ret1,ret2);
 	return 0;
 
 }
@@ -175,22 +167,22 @@ static int ak8157_i2c_probe(struct i2c_client *i2c,
 }
 
 
-void ak8157_power_on(void)
+void ak8157_clock_open(void)
 {
 	int ret;
-	pr_err("[LHS] %s \n",__func__);
-	//usleep_range(1000, 1005);
-	//gpio_direction_output(ak8157_i2c.rstn,1);
-	//ak8157_config_init(ak8157_i2c.i2c);
-	ret=ak8157_i2c_write(ak8157_i2c.i2c,0x00,0xc0);
+	pr_err("[LHS]%s() !\n",__func__);
+#if defined(MSM8996_I2S_MASTER)
+	ret=ak8157_i2c_write(ak8157_i2c.i2c,0x00,0x27); // ONLY MCLK to AK4490
+#else
+	ret=ak8157_i2c_write(ak8157_i2c.i2c,0x00,0x00); // ALL I2S CLK and MCLK to AK4490
+#endif
 }
 
-void ak8157_power_down(void)
+void ak8157_clock_close(void)
 {
 	int ret;
-	pr_err("[LHS] %s \n",__func__);
+	pr_err("[lhs]%s() !\n",__func__);
 	ret = ak8157_i2c_write(ak8157_i2c.i2c,0x00,0xe7);
-	//gpio_direction_output(ak8157_i2c.rstn,0);
 }
 
 

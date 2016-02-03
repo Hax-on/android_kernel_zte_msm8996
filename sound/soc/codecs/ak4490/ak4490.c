@@ -62,17 +62,16 @@ struct ak4490_priv {
 	int fs1;         // Sampling Frequency
 	int nBickFreq;   //  0: 48fs for 24bit,  1: 64fs or more for 32bit
 	int nDSDSel;
-	int pdn_gpio;
-	int ldoen_gpio;
-	int isl_sw_pwr_gpio;
-	int isl_ldo_pwr_gpio;
-	int isl_mute_gpio;
-	int isl_sel_gpio;
+	int pdn_gpio;                                  //AK4490_PDN/<&pmi8994_gpios 1 0>
+	int ldoen_gpio;                               //HIFI_LDO_EN/<&tlmm 93 0>
+	int isl54405_sw_pwr_gpio;                     //<&pmi8994_gpios 10 0> Hifi swtch power
+	int isl98608_ldo_pwr_gpio; 
+	int isl54405_mute_gpio;// 0 disable mute , 1 enable mute
+	int isl54405_sel_gpio;  // 0 select 4490, 1 select 4961
 	int isl_dir_gpio;
 	int isl_dc_gpio;
 	bool akm_hifi_switch;
 	bool akm_hifi_switch_mute;
-	bool akm_hifi_mute;
 	bool akm_pw_switch;
 };
 static struct ak4490_priv *g_ak4490_priv = NULL;
@@ -176,10 +175,17 @@ static int ak4490_i2c_write(struct snd_soc_codec *codec, unsigned int reg,unsign
 #endif
 extern void isl98608_power_down(void);
 extern void isl98608_power_up(void);
-extern void ak8157_power_on(void);
-extern void ak8157_power_down(void);
+extern void ak8157_clock_open(void);
+extern void ak8157_clock_close(void);
+
+extern void ak8157_rate_set(int rate);
+
 
 static int ak4490_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt);
+static int ak4490_power_up(struct ak4490_priv *ak4490);
+static int ak4490_power_down(struct ak4490_priv *ak4490);
+
+
 
 
 static inline u32 ak4490_read_reg_cache(struct snd_soc_codec *, u16);
@@ -303,6 +309,15 @@ static const struct soc_enum hifi_switch_enum =
                 SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(hifi_switch_text), hifi_switch_text);
 
 
+static const char *hifi_switch_ctl_text[] = {
+        "ak4490", "ak4961"
+};
+ 
+static const struct soc_enum hifi_switch_ctl_enum =
+                SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(hifi_switch_ctl_text), hifi_switch_ctl_text);
+
+
+
 static int akm_get_hifi_switch(struct snd_kcontrol *kcontrol,
         struct snd_ctl_elem_value *ucontrol)
 {
@@ -320,27 +335,31 @@ static int akm_set_hifi_switch(struct snd_kcontrol *kcontrol,
         struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
         struct ak4490_priv *ak4490 = snd_soc_codec_get_drvdata(codec);
 	 u8      status = ucontrol->value.integer.value[0];
-	 int ret;
+//	 int ret;
 
-	 pr_err("[LHS]%s status=%d\n",__func__,status);
+/*	 pr_err("[LHS]%s ## status=%d\n",__func__,status);
 	 if(status==1)
 	 	{
-	 		ret = gpio_direction_output(ak4490->isl_sel_gpio, 1);
+	 		ret = gpio_direction_output(ak4490->isl54405_sel_gpio, 1);
 			if (ret < 0) {
-				pr_err("%s(): ak4490_isl_sel_gpio direction failed %d\n",
+				pr_err("%s(): ak4490_isl54405_sel_gpio direction failed %d\n",
+				__func__, ret);
+				return ret;
+				}
+	 	}
+	 else if(status == 0)
+	 	{
+	 		 ret = gpio_direction_output(ak4490->isl54405_sel_gpio, 0); //4490
+			if (ret < 0) {
+				pr_err("%s(): ak4490_isl54405_sel_gpio direction failed %d\n",
 				__func__, ret);
 				return ret;
 				}
 	 	}
 	 else
 	 	{
-	 		 ret = gpio_direction_output(ak4490->isl_sel_gpio, 0);
-			if (ret < 0) {
-				pr_err("%s(): ak4490_isl_sel_gpio direction failed %d\n",
-				__func__, ret);
-				return ret;
-				}
-	 	}
+	 	
+	 	}*/
 	 ak4490->akm_hifi_switch=status;
 	 return 0;
 }
@@ -363,70 +382,37 @@ static int akm_set_hifi_switch_mute(struct snd_kcontrol *kcontrol,
         struct ak4490_priv *ak4490 = snd_soc_codec_get_drvdata(codec);
 	 u8      status = ucontrol->value.integer.value[0];
 	 int ret;
+	 pr_err("[LHS]%s \n",__func__);
 
-	 pr_err("[LHS]%s status=%d\n",__func__,status);
-	 if(status==1)
+	 if(status==0)
 	 	{
-	 		ret = gpio_direction_output(ak4490->isl_mute_gpio, 1);
+	 		ret = gpio_direction_output(ak4490->isl54405_mute_gpio, 1); //mute
 			if (ret < 0) {
-				pr_err("%s(): ak4490_isl_mute_gpio direction failed %d\n",
+				pr_err("%s(): ak4490_isl54405_mute_gpio direction failed %d\n",
 				__func__, ret);
 				return ret;
 				}
+			msleep(50);
+		pr_err("[LHS]%s ak4490->isl54405_mute_gpio is 1,status=%d\n",__func__,status);
+	 	}
+	  else if(status == 1)
+	 	{
+	 		msleep(50);
+	 		 ret = gpio_direction_output(ak4490->isl54405_mute_gpio, 0);
+			if (ret < 0) {
+				pr_err("%s(): ak4490_isl54405_mute_gpio direction failed %d\n",
+				__func__, ret);
+				return ret;
+				}
+		pr_err("[LHS]%s ak4490->isl54405_mute_gpio is 0,status=%d\n",__func__,status);
 	 	}
 	 else
 	 	{
-	 		 ret = gpio_direction_output(ak4490->isl_mute_gpio, 0);
-			if (ret < 0) {
-				pr_err("%s(): ak4490_isl_mute_gpio direction failed %d\n",
-				__func__, ret);
-				return ret;
-				}
 	 	}
 	 ak4490->akm_hifi_switch_mute=status;
 	 return 0;
 }
 
-
-
-static int akm_get_hifi_mute(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
-{
-        struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-        struct ak4490_priv *ak4490 = snd_soc_codec_get_drvdata(codec);
- 
-        ucontrol->value.enumerated.item[0] = ak4490->akm_hifi_mute;
- 
-        return 0;
-}
- 
-static int akm_set_hifi_mute(struct snd_kcontrol *kcontrol,
-        struct snd_ctl_elem_value *ucontrol)
-{
-        struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-        struct ak4490_priv *ak4490 = snd_soc_codec_get_drvdata(codec);
-	 u8      status = ucontrol->value.integer.value[0];
-	 int nfs, ndt;
-
-	 pr_err("[LHS]%s status=%d\n",__func__,status);
-		
-	nfs = ak4490->fs1;
-	  
-	 if(status==1)
-	 	{//SMUTE: 1 , MUTE
-		 snd_soc_update_bits(codec, AK4490_01_CONTROL2, 0x01, 0x01); 
-		 ndt = 7424000 / nfs;
-		 mdelay(ndt);
-	 	}
-	 else
-	 	{
-		 // SMUTE: 0 ,NORMAL operation
-		snd_soc_update_bits(codec, AK4490_01_CONTROL2, 0x01, 0x00);
-
-	 	}
-	 ak4490->akm_hifi_mute=status;
-	 return 0;
-}
 
 
 
@@ -449,34 +435,29 @@ static int akm_set_hifi_pw_switch(struct snd_kcontrol *kcontrol,
 	 u8      status = ucontrol->value.integer.value[0];
 	 int ret;
 
-	 pr_err("[LHS]%s status=%d\n",__func__,status);
-	 if(status==1)
+	 if(status==0)
 	 	{
-	 		isl98608_power_up();
+	 		ak8157_clock_open();                                                                                            
 			msleep(10);
-	 		ret = gpio_direction_output(ak4490->pdn_gpio, 1);
+			ret = ak4490_power_up(ak4490);
 			if (ret < 0) {
-				pr_err("%s(): ak4490_pdn_gpio direction failed %d\n",
-				__func__, ret);
+				pr_err("%s(): ak4490_power_up failed %d\n",__func__, ret);
 				return ret;
 				}
-				
+	 	}
+	  else if(status == 1)
+	 	{
+			ak8157_clock_close();                                                                                       
 			msleep(10);
-			ak8157_power_on();						
+			ret = ak4490_power_down(ak4490);
+			if (ret < 0) {
+				pr_err("%s(): ak4490_power_down failed %d\n",__func__, ret);
+				return ret;
+			}
 	 	}
 	 else
 	 	{
 			
-	 		 ret = gpio_direction_output(ak4490->pdn_gpio, 0);
-			if (ret < 0) {
-				pr_err("%s(): ak4490_pdn_gpio direction failed %d\n",
-				__func__, ret);
-				return ret;
-				}
-			msleep(10);
-			ak8157_power_down();
-			msleep(10);
-			isl98608_power_down();
 	 	}
 	 ak4490->akm_pw_switch=status;
 	 return 0;
@@ -504,14 +485,11 @@ static const struct snd_kcontrol_new ak4490_snd_controls[] = {
 	SOC_ENUM_EXT("AK4490 DSD Data Stream", ak4490_dac_enum2[0], ak4490_get_dsdsel, ak4490_set_dsdsel),
 	SOC_ENUM_EXT("AK4490 BICK Frequency Select", ak4490_dac_enum2[1], ak4490_get_bickfs, ak4490_set_bickfs),
 
-	SOC_ENUM_EXT("AKM HIFI Switch", hifi_switch_enum,
+	SOC_ENUM_EXT("AKM HIFI Switch Sel", hifi_switch_ctl_enum,
 					akm_get_hifi_switch, akm_set_hifi_switch),
 
 	SOC_ENUM_EXT("AKM HIFI Switch Mute", hifi_switch_enum,
 					akm_get_hifi_switch_mute, akm_set_hifi_switch_mute),
-
-	SOC_ENUM_EXT("AKM HIFI Mute", hifi_switch_enum,
-					akm_get_hifi_mute, akm_set_hifi_mute),
 
 	SOC_ENUM_EXT("AKM HIFI PW", hifi_switch_enum,
 					akm_get_hifi_pw_switch, akm_set_hifi_pw_switch),
@@ -569,20 +547,22 @@ static int ak4490_hw_params(struct snd_pcm_substream *substream,
 	u8  dfs2;
 	int nfs1;
 	unsigned int fmt;
+	unsigned int format;
 
-	pr_err("[LHS]%s: Entry!\n",__func__);
+	pr_err("[LHS]%s: sgEntry!\n",__func__);
 	nfs1 = params_rate(params);
+	 ak8157_rate_set(nfs1);
 	fmt = params_format(params);
 	ak4490->fs1 = nfs1;
 	ak4490->fmt = fmt;
-	pr_err("[LHS]%s: nfs1=%d , fmt=%x!\n",__func__,nfs1,fmt);
+//	pr_err("[LHS]%s: nfs1=%d , fmt=%x!\n",__func__,nfs1,fmt);
 
 	dfs = snd_soc_read(codec, AK4490_01_CONTROL2);
 	dfs &= ~AK4490_DFS;
 	
 	dfs2 = snd_soc_read(codec, AK4490_05_CONTROL4);
 	dfs2 &= ~AK4490_DFS2;
-	pr_err("[LHS]%s: dfs=%x , dfss=%x!\n",__func__,dfs,dfs2);
+//	pr_err("[LHS]%s: dfs=%x , dfss=%x!\n",__func__,dfs,dfs2);
 
 	switch (nfs1) {
 		case 32000:
@@ -615,20 +595,42 @@ static int ak4490_hw_params(struct snd_pcm_substream *substream,
 
 
 	
-	//snd_soc_write(codec, 0x01, 0x23);
-	snd_soc_write(codec, 0x00, 0x0f);
-	snd_soc_write(codec, 0x02, 0x01);
-	//snd_soc_write(codec, AK4490_01_CONTROL2, dfs);
-	snd_soc_write(codec, 0x01, 0x22);
-	//snd_soc_write(codec, 0x03, 0xd0);
-	//snd_soc_write(codec, 0x04, 0xd0);
-	snd_soc_write(codec, 0x06, 0x00);
-	snd_soc_write(codec, 0x07, 0x00);
-        snd_soc_write(codec, 0x08, 0x01);
-	snd_soc_write(codec, 0x09, 0x00);
-	//snd_soc_write(codec, AK4490_05_CONTROL4, dfs2);
-	//snd_soc_write(codec, 0x05, 0x00);
-	pr_err("[LHS]%s: 111 dfs=%x , dfss=%x!\n",__func__,dfs,dfs2);
+
+	snd_soc_write(codec, AK4490_00_CONTROL1, 0x0f);
+	snd_soc_write(codec, AK4490_02_CONTROL3, 0x01);
+	snd_soc_write(codec, AK4490_01_CONTROL2, dfs);
+
+	snd_soc_write(codec, AK4490_06_CONTROL5, 0x00);
+	snd_soc_write(codec, AK4490_07_CONTROL6, 0x00);
+        snd_soc_write(codec, AK4490_08_CONTROL7, 0x01);
+	snd_soc_write(codec, AK4490_09_CONTROL8, 0x00);
+	snd_soc_write(codec, AK4490_05_CONTROL4, dfs2);
+
+	//pr_err("[LHS]%s: 111 dfs=%x , dfss=%x!\n",__func__,dfs,dfs2);
+
+	format = snd_soc_read(codec, AK4490_00_CONTROL1);
+	format &= ~AK4490_DIF;
+
+	switch (params_format(params)) {
+	case SNDRV_PCM_FORMAT_S16_LE:
+	        pr_err("%s: SNDRV_PCM_FORMAT_S16_LE %u\n", __func__,params_format(params));
+		 format |=0x0e; 
+		break;
+	case SNDRV_PCM_FORMAT_S24_LE:
+		pr_err("%s: SNDRV_PCM_FORMAT_S24_LE %u\n", __func__,params_format(params));
+		format |=0x0e;
+		break;
+	case SNDRV_PCM_FORMAT_S32_LE:
+		pr_err("%s: SNDRV_PCM_FORMAT_S32_LE %u\n", __func__,params_format(params));
+		format |=0x0e;
+		break;
+	default:
+		pr_err("%s: Invalid RX format %u\n", __func__,
+				params_format(params));
+		return -EINVAL;
+	}
+	snd_soc_write(codec, AK4490_00_CONTROL1, format);
+	//pr_err("[LHS]%s: 111 AK4490_00_CONTROL1=%x!\n",__func__,format);
 
 	//snd_soc_write(codec, AK4490_01_CONTROL2, dfs);
 	//snd_soc_write(codec, AK4490_05_CONTROL4, dfs2);
@@ -638,6 +640,16 @@ static int ak4490_hw_params(struct snd_pcm_substream *substream,
 
 	return 0;
 }
+
+
+static int ak4490_hw_free(struct snd_pcm_substream *substream,
+		struct snd_soc_dai *dai)
+{
+	//pr_err("[LHS]%s: Entry!\n",__func__);
+
+	return 0;
+}
+
 
 static int ak4490_set_dai_sysclk(struct snd_soc_dai *dai, int clk_id,
 		unsigned int freq, int dir)
@@ -696,8 +708,7 @@ static int ak4490_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	}
 
 	/* set format */
-	pr_err("[LHS] %s 111 format=%x format2=%x \n",__func__,format,format2);
-	format=0x0e;//lhs debug
+
 	snd_soc_write(codec, AK4490_00_CONTROL1, format);
 	snd_soc_write(codec, AK4490_02_CONTROL3, format2);
 	return 0;
@@ -833,23 +844,23 @@ static int ak4490_trigger(struct snd_pcm_substream *substream, int cmd, struct s
     struct snd_soc_codec *codec = codec_dai->codec;
     struct ak4490_priv *ak4490 = snd_soc_codec_get_drvdata(codec);
 
-	pr_err("[LHS]%s: Entry! cmd =%x \n",__func__,cmd);
+	//pr_err("[LHS]%s: Entry!  sgcmd =%x \n",__func__,cmd);
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
-	 ret = gpio_direction_output(ak4490->isl_mute_gpio, 0);
+	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
+		msleep(50);
+		/* change the switch to ak4490 after the music start*/
+		ret = gpio_direction_output(ak4490->isl54405_sel_gpio, 0);
 			if (ret < 0) {
-				pr_err("%s(): ak4490_isl_mute_gpio direction failed %d\n",
+				pr_err("%s(): isl54405_sel_gpio direction failed %d\n",
 				__func__, ret);
 				return ret;
 				}
+		ak4490->akm_hifi_switch = 0;
+		pr_err("[LHS]%s: isl54405_sel_gpio is 0 ,set to ak4490!\n",__func__);
 		break;
+	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 	case SNDRV_PCM_TRIGGER_STOP:
-	 ret = gpio_direction_output(ak4490->isl_mute_gpio, 1);
-			if (ret < 0) {
-				pr_err("%s(): ak4490_isl_mute_gpio direction failed %d\n",
-				__func__, ret);
-				return ret;
-				}
 			break;
 	default:
 		break;
@@ -882,16 +893,20 @@ static int ak4490_set_dai_mute(struct snd_soc_dai *dai, int mute)
 {
     struct snd_soc_codec *codec = dai->codec;
 	struct ak4490_priv *ak4490 = snd_soc_codec_get_drvdata(codec);
-	int nfs, ndt;
-	
-	nfs = ak4490->fs1;
+	int ret;
 
-	pr_err("[LHS]%s: mute[%s]\n",__func__,mute ? "ON":"OFF");
+	//pr_err("[LHS]%s: mute[%s]\n",__func__,mute ? "ON":"OFF");
 		
 	if (mute) {	//SMUTE: 1 , MUTE
-		snd_soc_update_bits(codec, AK4490_01_CONTROL2, 0x01, 0x01); 
-		ndt = 7424000 / nfs;
-		mdelay(ndt);
+		/* change the switch to ak4961 after the music stop*/
+		ret = gpio_direction_output(ak4490->isl54405_sel_gpio, 1);
+			if (ret < 0) {
+				pr_err("%s(): isl54405_sel_gpio direction failed %d\n",
+				__func__, ret);
+				return ret;
+				}
+		ak4490->akm_hifi_switch = 1;
+		pr_err("[LHS]%s: isl54405_sel_gpio is 1 , set to ak4961!\n",__func__);
 	}
 	else {		// SMUTE: 0 ,NORMAL operation
 		snd_soc_update_bits(codec, AK4490_01_CONTROL2, 0x01, 0x00);
@@ -912,6 +927,7 @@ static int ak4490_set_dai_mute(struct snd_soc_dai *dai, int mute)
 
 static struct snd_soc_dai_ops ak4490_dai_ops = {
 	.hw_params	= ak4490_hw_params,
+	.hw_free = ak4490_hw_free,
 	.set_sysclk	= ak4490_set_dai_sysclk,
 	.set_fmt	= ak4490_set_dai_fmt,
 	.trigger = ak4490_trigger,
@@ -964,31 +980,31 @@ static int ak4490_populate_dt_pdata(struct device *dev,
 		return -EINVAL;
 	}
 
-	ak4490->isl_sw_pwr_gpio = of_get_named_gpio(dev->of_node,
+	ak4490->isl54405_sw_pwr_gpio = of_get_named_gpio(dev->of_node,
 					      "qcom,isl-sw-pwr-gpio", 0);
-	if (!gpio_is_valid(ak4490->isl_sw_pwr_gpio)){
-		dev_err(dev, "%s error isl_sw_pwr_gpio pmi gpios 10\n", __func__);
+	if (!gpio_is_valid(ak4490->isl54405_sw_pwr_gpio)){
+		dev_err(dev, "%s error isl54405_sw_pwr_gpio pmi gpios 10\n", __func__);
 		return -EINVAL;
 	}
 
-	ak4490->isl_ldo_pwr_gpio = of_get_named_gpio(dev->of_node,
+	ak4490->isl98608_ldo_pwr_gpio = of_get_named_gpio(dev->of_node,
 					      "ak4490,isl-ldo-pwr-gpio", 0);
-	if (!gpio_is_valid(ak4490->isl_ldo_pwr_gpio)){
-		dev_err(dev, "%s error isl_ldo_pwr_gpio pmi mpp 4\n", __func__);
+	if (!gpio_is_valid(ak4490->isl98608_ldo_pwr_gpio)){
+		dev_err(dev, "%s error isl98608_ldo_pwr_gpio pmi mpp 4\n", __func__);
 		return -EINVAL;
 	}
 
-	ak4490->isl_sel_gpio = of_get_named_gpio(dev->of_node,
+	ak4490->isl54405_sel_gpio = of_get_named_gpio(dev->of_node,
 					      "ak4490,hifi_sel_gpio", 0);
-	if (!gpio_is_valid(ak4490->isl_sel_gpio)){
-		dev_err(dev, "%s error isl_sel_gpio pm mpp 2\n", __func__);
+	if (!gpio_is_valid(ak4490->isl54405_sel_gpio)){
+		dev_err(dev, "%s error isl54405_sel_gpio pm mpp 2\n", __func__);
 		return -EINVAL;
 	}
 	
-	ak4490->isl_mute_gpio = of_get_named_gpio(dev->of_node,
+	ak4490->isl54405_mute_gpio = of_get_named_gpio(dev->of_node,
 					      "ak4490,hifi_mute_gpio", 0);
-	if (!gpio_is_valid(ak4490->isl_mute_gpio)){
-		dev_err(dev, "%s error isl_mute_gpio pm mpp 4\n", __func__);
+	if (!gpio_is_valid(ak4490->isl54405_mute_gpio)){
+		dev_err(dev, "%s error isl54405_mute_gpio pm mpp 4\n", __func__);
 		return -EINVAL;
 	}
 
@@ -996,43 +1012,106 @@ static int ak4490_populate_dt_pdata(struct device *dev,
     return 0;
 }
 
+static int ak4490_power_up(struct ak4490_priv *ak4490)
+{
+	int ret = 0;
+	pr_err("[LHS]%s in : power up flow : ak4490_ldo , isl98608 pwr and regs, ak4490_pdn .\n",__func__);
+	//AKM-sungang:1,PDN pin = L 												 
+	ret = gpio_direction_output(ak4490->pdn_gpio, 0);                  				
+	if (ret < 0) {
+		pr_err("%s(): ak4490_pdn_gpio direction failed %d\n",
+				__func__, ret);
+		return ret;
+	}
+	//AKM-sungang:2,TVDD/AVDD/DVDD power up
+	ret = gpio_direction_output(ak4490->ldoen_gpio, 1);                                        
+	if (ret < 0) {
+		pr_err("%s(): ak4490_ldoen_gpio direction failed %d\n",
+				__func__, ret);
+		return ret;
+	}
+	//AKM-sungang:3,isl98608_en(VREFHL/R VDDL/R) power up
+	ret = gpio_direction_output(ak4490->isl98608_ldo_pwr_gpio, 1);                            
+	if (ret < 0) {
+		pr_err("%s(): isl98608_ldo_pwr_gpio direction failed %d\n",
+				__func__, ret);
+		return ret;
+	}
+	msleep(10);
+	isl98608_power_up();
+	msleep(10);
+	//AKM-sungang:4,PDN pin = H 												 
+	ret = gpio_direction_output(ak4490->pdn_gpio, 1);                  				
+	if (ret < 0) {
+		pr_err("%s(): ak4490_pdn_gpio direction failed %d\n",
+				__func__, ret);
+		return ret;
+	}
+	pr_err("[LHS]%s out!\n",__func__);
+
+	return 0;
+	
+}
+static int ak4490_power_down(struct ak4490_priv *ak4490)
+{
+	int ret = 0;
+	pr_err("[LHS]%s in : power off flow: ak4490_pdn , ak4490_ldo , isl98608 \n",__func__);
+	//AKM-sungang:1,PDN pin = L 												 
+	ret = gpio_direction_output(ak4490->pdn_gpio, 0);						
+	if (ret < 0) {
+		pr_err("%s(): ak4490_pdn_gpio direction failed %d\n",
+				__func__, ret);
+		return ret;
+	}
+	//AKM-sungang:2,TVDD/AVDD/DVDD power down
+	ret = gpio_direction_output(ak4490->ldoen_gpio, 0); 					
+	if (ret < 0) {
+		pr_err("%s(): ak4490_ldoen_gpio direction failed %d\n",
+				__func__, ret);
+		return ret;
+	}
+	msleep(10);
+	//power down the isl98608
+	ret = gpio_direction_output(ak4490->isl98608_ldo_pwr_gpio, 0);				
+	if (ret < 0) {
+		pr_err("%s(): isl98608_ldo_pwr_gpio direction failed %d\n",
+				__func__, ret);
+		return ret;
+	}
+	pr_err("[LHS]%s out! \n",__func__);
+	return 0;
+
+}
+
 static int ak4490_initial_gpio(struct ak4490_priv *ak4490)
 {
 	int ret = 0;
-
-	ret = gpio_request(ak4490->isl_sw_pwr_gpio, "isl_sw_pwr_gpio");
+// AKM-sungang:1,PDN pin = L
+	ret = gpio_request(ak4490->pdn_gpio, "ak4490_pdn_gpio");
 	if (ret < 0) {
-		pr_err("%s(): isl_sw_pwr_gpio request failed %d\n",
+		pr_err("%s(): ak4490_pdn_gpio request failed %d\n",
 				__func__, ret);
 		return ret;
 	}
-	ret = gpio_direction_output(ak4490->isl_sw_pwr_gpio, 1);
+// power down the ak4490 pdn during the system up
+	ret = gpio_direction_output(ak4490->pdn_gpio, 0);
 	if (ret < 0) {
-		pr_err("%s(): isl_sw_pwr_gpio direction failed %d\n",
+		pr_err("%s(): ak4490_pdn_gpio direction failed %d\n",
 				__func__, ret);
 		return ret;
 	}
-
-	ret = gpio_request(ak4490->isl_ldo_pwr_gpio, "isl_ldo_pwr_gpio");
-	if (ret < 0) {
-		pr_err("%s(): isl_ldo_pwr_gpio request failed %d\n",
-				__func__, ret);
-		return ret;
-	}
-	ret = gpio_direction_output(ak4490->isl_ldo_pwr_gpio, 1);
-	if (ret < 0) {
-		pr_err("%s(): isl_ldo_pwr_gpio direction failed %d\n",
-				__func__, ret);
-		return ret;
-	}
-
+//AKM-sungang:2,TVDD/AVDD/DVDD power up
 	ret = gpio_request(ak4490->ldoen_gpio, "ak4490_ldo_gpio");
+
+
+
 	if (ret < 0) {
 		pr_err("%s(): ak4490_ldoen_gpio request failed %d\n",
 				__func__, ret);
 		return ret;
 	}
-	ret = gpio_direction_output(ak4490->ldoen_gpio, 1);
+// power down the ak4490 ldo during the system up
+	ret = gpio_direction_output(ak4490->ldoen_gpio, 0);
 	if (ret < 0) {
 		pr_err("%s(): ak4490_ldoen_gpio direction failed %d\n",
 				__func__, ret);
@@ -1042,46 +1121,65 @@ static int ak4490_initial_gpio(struct ak4490_priv *ak4490)
 	pr_err("[LHS] %s ldo -- enable !\n",__func__);
 	msleep(100);
 	
-	ret = gpio_request(ak4490->pdn_gpio, "ak4490_pdn_gpio");
+	//AKM-sungang:3,isl98608_en(VREFHL/R VDDL/R) power up
+	ret = gpio_request(ak4490->isl98608_ldo_pwr_gpio, "isl98608_ldo_pwr_gpio");                
 	if (ret < 0) {
-		pr_err("%s(): ak4490_pdn_gpio request failed %d\n",
+		pr_err("%s(): isl98608_ldo_pwr_gpio request failed %d\n",
 				__func__, ret);
 		return ret;
 	}
-	ret = gpio_direction_output(ak4490->pdn_gpio, 0);
+	// power down the isl98608 during the system up 
+	ret = gpio_direction_output(ak4490->isl98608_ldo_pwr_gpio, 0); 
 	if (ret < 0) {
-		pr_err("%s(): ak4490_pdn_gpio direction failed %d\n",
+		pr_err("%s(): isl98608_ldo_pwr_gpio direction failed %d\n",
 				__func__, ret);
 		return ret;
 	}
-	
-	ret = gpio_request(ak4490->isl_sel_gpio, "ak4490_isl_sel_gpio");
+	  //AKM-sungang:4,HP-CHIP power up
+	ret = gpio_request(ak4490->isl54405_sw_pwr_gpio, "isl54405_sw_pwr_gpio");            
 	if (ret < 0) {
-		pr_err("%s(): ak4490_isl_sel_gpio request failed %d\n",
+		pr_err("%s(): isl54405_sw_pwr_gpio request failed %d\n",
 				__func__, ret);
 		return ret;
 	}
-	ret = gpio_direction_output(ak4490->isl_sel_gpio, 0);
+	// power up the isl54405 switch during the system up 
+	ret = gpio_direction_output(ak4490->isl54405_sw_pwr_gpio, 1);   
 	if (ret < 0) {
-		pr_err("%s(): ak4490_isl_sel_gpio direction failed %d\n",
+		pr_err("%s(): isl54405_sw_pwr_gpio direction failed %d\n",
 				__func__, ret);
 		return ret;
-	}
+}
 
-	ret = gpio_request(ak4490->isl_mute_gpio, "ak4490_isl_mute_gpio");
+	ret = gpio_request(ak4490->isl54405_sel_gpio, "ak4490_isl54405_sel_gpio");
 	if (ret < 0) {
-		pr_err("%s(): ak4490_isl_mute_gpio request failed %d\n",
+		pr_err("%s(): ak4490_isl54405_sel_gpio request failed %d\n",
+				__func__, ret);
+		return ret;
+        }
+	// switch select the ak4961 at the system start 
+	ret = gpio_direction_output(ak4490->isl54405_sel_gpio, 1);  
+	if (ret < 0) {
+		pr_err("%s(): ak4490_isl54405_sel_gpio direction failed %d\n",
+				__func__, ret);
+		return ret;
+		}
+
+	ret = gpio_request(ak4490->isl54405_mute_gpio, "ak4490_isl54405_mute_gpio");
+	if (ret < 0) {
+		pr_err("%s(): ak4490_isl54405_mute_gpio request failed %d\n",
 				__func__, ret);
 		return ret;
 	}
-	ret = gpio_direction_output(ak4490->isl_mute_gpio, 0);
+	// switch mute off(play will be ok) during the system start 
+	ret = gpio_direction_output(ak4490->isl54405_mute_gpio, 1); 
 	if (ret < 0) {
-		pr_err("%s(): ak4490_isl_mute_gpio direction failed %d\n",
+		pr_err("%s(): ak4490_isl54405_mute_gpio direction failed %d\n",
 				__func__, ret);
-		return ret;
-	}
+	return ret;
+}
 
 
+    	pr_err("[LHS]%s system up ,ak4490 initial_gpio success!default setting : hifi swith power on , switch mute on , select ak4961, all others off \n",__func__);
 	return 0;
 }
 
@@ -1147,13 +1245,7 @@ static int ak4490_probe(struct snd_soc_codec *codec)
 #ifdef CONFIG_DEBUG_FS_CODEC_AK4490
 	int ret = 0;
 #endif
-	pr_err("%s: Entry!\n",__func__);
-
-/*	ret = snd_soc_codec_set_cache_io(codec, 8, 8, SND_SOC_I2C);
-	if (ret != 0) {
-		dev_err(codec->dev, "Failed to set cache I/O: %d\n", ret);
-		return ret;
-	}*/
+	pr_err("[LHS]%s: Entry!\n",__func__);
 
 #ifdef AK4490_CONTIF_DEBUG
 	codec->write = ak4490_i2c_write;
@@ -1167,46 +1259,19 @@ static int ak4490_probe(struct snd_soc_codec *codec)
 		}
 	ak4490_codec=codec;
 #endif
-#if 0
-       ret = ak4490_populate_dt_pdata(codec);
-	if (ret){
-		dev_err(codec->dev, "%s fail to get gpio%d\n", __func__, ret);
-       }
 
-       ret = ak4490_initial_gpio(codec);
-	if (ret){
-		dev_err(codec->dev, "%s fail to set gpio%d\n", __func__, ret);
-	}
-
-	ak4490_initial_mclk(codec);
-#endif
 
 //	ak4490_codec = codec;
 
 	ak4490_init_reg(codec);
 
-	pr_err("%s: init reg finish!\n",__func__);
-	//I2C test code
-#if 0
-       {
-	   	ak4490_i2c_write(codec, 0x01, 0xaa);
-		ak4490_i2c_write(codec, 0x04, 0xbb);
-		msleep(10);
-		ret = ak4490_i2c_read(codec, 0x01);
-		pr_info("%s 0x01=%x", __func__, ret);
-		msleep(10);
-		ret = ak4490_i2c_read(codec, 0x04);
-		pr_info("%s 0x04=%x", __func__, ret);
-	}
-#endif
 	ak4490->fs1 = 48000;
 	ak4490->nBickFreq = 0;		
 	ak4490->nDSDSel = 0;
 	ak4490->akm_hifi_switch_mute=0;
 	ak4490->akm_hifi_switch=0;
 	ak4490->akm_pw_switch=0;
-	ak4490->akm_hifi_mute=0;
-	printk("ak4490 probe success----sungang\n");
+
 	return 0;
 }
 
@@ -1220,8 +1285,6 @@ static int ak4490_remove(struct snd_soc_codec *codec)
 #endif
 
 	ak4490_set_bias_level(codec, SND_SOC_BIAS_OFF);
-
-
 	return 0;
 }
 
@@ -1304,6 +1367,7 @@ static int ak4490_i2c_probe(struct i2c_client *i2c,
 		pr_info("%s fail to set gpio%d\n", __func__, ret);
 	}
 
+
 	ak4490->regmap = devm_regmap_init_i2c(i2c, &ak4490_regmap_config);
 	if (IS_ERR(ak4490->regmap))
 		{
@@ -1317,13 +1381,10 @@ static int ak4490_i2c_probe(struct i2c_client *i2c,
        g_ak4490_priv = ak4490;
 
 
-	//if (i2c->dev.of_node)
 	dev_set_name(&i2c->dev, "%s", "ak4490");
 
 	pr_err("[LHS]%s dev name--------sungang %s\n", __func__, dev_name(&i2c->dev));
 
-	//ak4490_initial_mclk(i2c);
-	
 	ret = snd_soc_register_codec(&i2c->dev,
 			&soc_codec_dev_ak4490, &ak4490_dai[0], ARRAY_SIZE(ak4490_dai));
 	if (ret < 0){
@@ -1336,6 +1397,7 @@ static int ak4490_i2c_probe(struct i2c_client *i2c,
 
 static int ak4490_i2c_remove(struct i2c_client *client)
 {
+
 	snd_soc_unregister_codec(&client->dev);
 	kfree(i2c_get_clientdata(client));
 	return 0;
