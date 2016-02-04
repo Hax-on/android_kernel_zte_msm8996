@@ -6118,6 +6118,11 @@ static const struct ak4961_reg_mask_val ak4961_codec_reg_init_val[] = {
 	{MSYNC2_BDV, 0xFF, 0x27},
 	{MSYNC2_SDV, 0xFF, 0x3F},
 
+	// ZTE_chenjun
+        /* analog input start-up time */
+	{MODE_CONTROL, 0x03, 0x02},
+	//
+
 	/* set Sync Domain 3 source: PLLCLK1 */
 	{MSYNC3_MSN_CKS, 0x1F, 0x01},
 

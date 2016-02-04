@@ -80,8 +80,12 @@ static int hdmi_rx_sample_rate = SAMPLING_RATE_48KHZ;
 static int msm_tert_mi2s_tx_ch = 2;
 static int msm_quat_mi2s_rx_ch = 2;
 // ZTE_chenjun
+// #define MSM8996_I2S_MASTER
 static int mi2s_rx_bit_format = SNDRV_PCM_FORMAT_S16_LE;
 static int mi2s_rx_sample_rate = SAMPLING_RATE_48KHZ;
+
+static int codec_mclk_control = 0;
+static int rcv_sw_control = 0;
 //
 
 static bool codec_reg_done;
@@ -123,6 +127,7 @@ static struct afe_clk_set mi2s_tx_clk = {
 	0,
 };
 
+#if defined(MSM8996_I2S_MASTER)
 static struct afe_clk_set mi2s_rx_clk = {
 	AFE_API_VERSION_I2S_CONFIG,
 	Q6AFE_LPASS_CLK_ID_QUAD_MI2S_IBIT,
@@ -131,11 +136,22 @@ static struct afe_clk_set mi2s_rx_clk = {
 	Q6AFE_LPASS_CLK_ROOT_DEFAULT,
 	0,
 };
+#else
+static struct afe_clk_set mi2s_rx_clk = {
+	AFE_API_VERSION_I2S_CONFIG,
+	Q6AFE_LPASS_CLK_ID_QUAD_MI2S_EBIT,
+	Q6AFE_LPASS_IBIT_CLK_DISABLE,
+	Q6AFE_LPASS_CLK_ATTRIBUTE_COUPLE_NO,
+	Q6AFE_LPASS_CLK_ROOT_DEFAULT,
+	0,
+};
+#endif
 
 struct msm8996_asoc_mach_data {
 	u32 mclk_freq;
 	int us_euro_gpio;
 	struct mutex cdc_mclk_mutex;
+	int rcv_sw_gpio; // ZTE_chenjun
 	int hph_en1_gpio;
 	int hph_en0_gpio;
 	struct snd_info_entry *codec_root;
@@ -329,7 +345,7 @@ static int msm8996_get_spk(struct snd_kcontrol *kcontrol,
 static int msm8996_set_spk(struct snd_kcontrol *kcontrol,
 			      struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
 
 	pr_debug("%s() ucontrol->value.integer.value[0] = %ld\n",
 		 __func__, ucontrol->value.integer.value[0]);
@@ -341,23 +357,21 @@ static int msm8996_set_spk(struct snd_kcontrol *kcontrol,
 	return 1;
 }
 
-// chenjun
+// ZTE_chenjun
 static int codec_mclk_get(struct snd_kcontrol *kcontrol,
 		       struct snd_ctl_elem_value *ucontrol)
 {
-#if 0
-	pr_err("%s: chenjun: codec_mclk_control(%d)\n",
+	pr_debug("%s: chenjun: codec_mclk_control(%d)\n",
 			 __func__, codec_mclk_control);
 	ucontrol->value.integer.value[0] = codec_mclk_control;
-#endif
+
 	return 0;
 }
 
 static int codec_mclk_put(struct snd_kcontrol *kcontrol,
 		       struct snd_ctl_elem_value *ucontrol)
 {
-#if 0
-	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
 
 	pr_err("%s: chenjun: codec_mclk_control(%d), put val(%ld)\n",
 			 __func__, codec_mclk_control, ucontrol->value.integer.value[0]);
@@ -368,9 +382,53 @@ static int codec_mclk_put(struct snd_kcontrol *kcontrol,
 	codec_mclk_control = ucontrol->value.integer.value[0];
 
 	msm_snd_enable_codec_ext_clk(codec, codec_mclk_control, true);
-#endif
 
 	return 1;
+}
+
+static int rcv_sw_control_get(struct snd_kcontrol *kcontrol,
+        struct snd_ctl_elem_value *ucontrol)
+{
+	pr_debug("%s: rcv_sw_control = %d\n",
+			 __func__, rcv_sw_control);
+ 
+        ucontrol->value.enumerated.item[0] = rcv_sw_control;
+ 
+        return 0;
+}
+ 
+static int rcv_sw_control_put(struct snd_kcontrol *kcontrol,
+        struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+	struct snd_soc_card *card = codec->component.card;
+	struct msm8996_asoc_mach_data *pdata =
+				snd_soc_card_get_drvdata(card);
+	 int status = ucontrol->value.integer.value[0];
+	 int ret;
+
+	 pr_err("%s(): status=%d\n", __func__, status);
+
+	 if(status)
+	 {
+	     ret = gpio_direction_output(pdata->rcv_sw_gpio, 1);
+	     if (ret < 0) {
+	         pr_err("%s(): rcv_sw_gpio direction failed %d\n",
+				__func__, ret);
+	         return ret;
+	     }
+	 }
+	 else
+	 {
+	     ret = gpio_direction_output(pdata->rcv_sw_gpio, 0);
+	     if (ret < 0) {
+	         pr_err("%s(): rcv_sw_gpio direction failed %d\n",
+				__func__, ret);
+	         return ret;
+	     }
+	 }
+	 rcv_sw_control = status;
+	 return 0;
 }
 //
 
@@ -492,7 +550,7 @@ static int msm_snd_enable_codec_ext_clk(struct snd_soc_codec *codec,
 static int msm8996_mclk_event(struct snd_soc_dapm_widget *w,
 				 struct snd_kcontrol *kcontrol, int event)
 {
-	pr_debug("%s: chenjun:event = %d\n", __func__, event); // chenjun
+	pr_debug("%s: chenjun:event = %d\n", __func__, event); // ZTE_chenjun
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
@@ -1187,6 +1245,65 @@ static int mi2s_rx_bit_format_put(struct snd_kcontrol *kcontrol,
 
 	return 0;
 }
+
+static int mi2s_rx_sample_rate_get(struct snd_kcontrol *kcontrol,
+	struct snd_ctl_elem_value *ucontrol)
+{
+	int sample_rate_val = 0;
+
+	switch (mi2s_rx_sample_rate) {
+	case SAMPLING_RATE_44P1KHZ:
+		sample_rate_val = 3;
+		break;
+
+	case SAMPLING_RATE_192KHZ:
+		sample_rate_val = 2;
+		break;
+
+	case SAMPLING_RATE_96KHZ:
+		sample_rate_val = 1;
+		break;
+
+	case SAMPLING_RATE_48KHZ:
+	default:
+		sample_rate_val = 0;
+		break;
+	}
+
+	ucontrol->value.integer.value[0] = sample_rate_val;
+	pr_debug("%s: mi2s_rx_sample_rate = %d\n", __func__,
+		 mi2s_rx_sample_rate);
+
+	return 0;
+}
+
+static int mi2s_rx_sample_rate_put(struct snd_kcontrol *kcontrol,
+				    struct snd_ctl_elem_value *ucontrol)
+{
+	pr_debug("%s: ucontrol value = %ld\n", __func__,
+		 ucontrol->value.integer.value[0]);
+
+	switch (ucontrol->value.integer.value[0]) {
+	case 3:
+		mi2s_rx_sample_rate = SAMPLING_RATE_44P1KHZ;
+		break;
+	case 2:
+		mi2s_rx_sample_rate = SAMPLING_RATE_192KHZ;
+		break;
+	case 1:
+		mi2s_rx_sample_rate = SAMPLING_RATE_96KHZ;
+		break;
+	case 0:
+	default:
+		mi2s_rx_sample_rate = SAMPLING_RATE_48KHZ;
+	}
+
+	pr_err("%s: value = %ld, mi2s_rx rate = %d\n", __func__,
+		 ucontrol->value.integer.value[0], mi2s_rx_sample_rate);
+
+	return 0;
+}
+
 //
 
 static int msm_tx_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
@@ -1265,6 +1382,7 @@ static int msm_quat_mi2s_rx_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 	return 0;
 }
 
+#if defined(MSM8996_I2S_MASTER)
 static int msm8996_quat_mi2s_snd_startup(struct snd_pcm_substream *substream)
 {
 	int ret = 0;
@@ -1300,6 +1418,35 @@ pr_err("%s:rate(%d):bit_format(%d):clk(%d)\n", __func__,
 err:
 	return ret;
 }
+#else
+static int msm8996_quat_mi2s_snd_startup(struct snd_pcm_substream *substream)
+{
+	int ret = 0;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
+
+	pr_debug("%s: substream = %s  stream = %d\n", __func__,
+		 substream->name, substream->stream);
+
+	mi2s_rx_clk.enable = 1;
+
+pr_err("%s:rate(%d):bit_format(%d):clk(%d)\n", __func__, 
+           mi2s_rx_sample_rate, mi2s_rx_bit_format, mi2s_rx_clk.clk_freq_in_hz);
+
+	ret = afe_set_lpass_clock_v2(AFE_PORT_ID_QUATERNARY_MI2S_RX,
+				&mi2s_rx_clk);
+	if (ret < 0) {
+		pr_err("%s: afe lpass clock failed, err:%d\n", __func__, ret);
+		goto err;
+	}
+	ret = snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_CBM_CFM);
+	if (ret < 0)
+		pr_err("%s: set fmt cpu dai failed, err:%d\n", __func__, ret);
+
+err:
+	return ret;
+}
+#endif
 
 static void msm8996_quat_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 {
@@ -1492,6 +1639,10 @@ static const struct snd_kcontrol_new msm_snd_controls[] = {
 			codec_mclk_put),
 	SOC_ENUM_EXT("MI2S_RX Format", msm_snd_enum[9],
 			mi2s_rx_bit_format_get, mi2s_rx_bit_format_put),
+	SOC_ENUM_EXT("MI2S_RX SampleRate", msm_snd_enum[8],
+			mi2s_rx_sample_rate_get, mi2s_rx_sample_rate_put),
+	SOC_ENUM_EXT("Receiver Switch", msm_snd_enum[11], rcv_sw_control_get,
+			rcv_sw_control_put),
 //
 };
 
@@ -3680,6 +3831,23 @@ static int msm8996_asoc_machine_probe(struct platform_device *pdev)
 	if (ret)
 		goto err;
 
+// ZTE_chenjun
+	pdata->rcv_sw_gpio = of_get_named_gpio(pdev->dev.of_node,
+						"qcom,rcv-sw-gpio", 0);
+	if (pdata->rcv_sw_gpio < 0) {
+		dev_err(&pdev->dev, "%s: %s property not found %d\n",
+			__func__, "qcom,rcv-sw-gpio", pdata->rcv_sw_gpio);
+	} else {
+		ret = gpio_request(pdata->rcv_sw_gpio, "rcv_sw_gpio");
+		if (ret) {
+			dev_err(&pdev->dev,
+				"%s: rcv_sw_gpio request failed, ret:%d\n",
+				__func__, ret);
+		}
+		gpio_direction_output(pdata->rcv_sw_gpio, 0); // 0: default is speaker mode
+	}
+//
+
 	pdata->hph_en1_gpio = of_get_named_gpio(pdev->dev.of_node,
 						"qcom,hph-en1-gpio", 0);
 	if (pdata->hph_en1_gpio < 0) {
@@ -3740,6 +3908,14 @@ err:
 		gpio_free(pdata->us_euro_gpio);
 		pdata->us_euro_gpio = 0;
 	}
+// ZTE_chenjun
+	if (pdata->rcv_sw_gpio > 0) {
+		dev_dbg(&pdev->dev, "%s free rcv_sw_gpio %d\n",
+			__func__, pdata->rcv_sw_gpio);
+		gpio_free(pdata->rcv_sw_gpio);
+		pdata->rcv_sw_gpio = 0;
+	}
+//
 	if (pdata->hph_en1_gpio > 0) {
 		dev_dbg(&pdev->dev, "%s free hph_en1_gpio %d\n",
 			__func__, pdata->hph_en1_gpio);
@@ -3766,6 +3942,7 @@ static int msm8996_asoc_machine_remove(struct platform_device *pdev)
 		gpio_free(ext_us_amp_gpio);
 
 	gpio_free(pdata->us_euro_gpio);
+	gpio_free(pdata->rcv_sw_gpio); // ZTE_chenjun
 	gpio_free(pdata->hph_en1_gpio);
 	gpio_free(pdata->hph_en0_gpio);
 

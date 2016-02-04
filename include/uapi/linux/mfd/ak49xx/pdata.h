@@ -55,6 +55,8 @@ struct ak49xx_pdata {
 	int irq_base;
 	int num_irqs;
 	int reset_gpio;
+	int smartpa_rst1_gpio; // ZTE_chenjun
+	int smartpa_rst2_gpio; // ZTE_chenjun
 	int ldoen_gpio;
 	int cif1_gpio;
 	int cs_gpio;
