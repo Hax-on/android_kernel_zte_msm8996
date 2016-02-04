@@ -1079,7 +1079,7 @@ CSID_TG:
  * ZTE_CAM_LIJING_20151020
  */	
 #if 1
-    mount_pos = mount_pos | (has_flash << 15);
+    mount_pos = mount_pos | (has_flash << 31);
 #endif
 	s_ctrl->msm_sd.sd.entity.flags = mount_pos | MEDIA_ENT_FL_DEFAULT;
 
