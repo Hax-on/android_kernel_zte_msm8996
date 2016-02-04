@@ -652,6 +652,35 @@ static int ak49xx_reset(struct ak49xx *ak49xx)
 //
 #endif
 
+// ZTE_chenjun
+      if (ak49xx->smartpa_rst1_gpio)
+      {
+          ret = gpio_request(ak49xx->smartpa_rst1_gpio, "SPA_RST1");
+          if (ret) {
+              pr_err("%s: Failed to request gpio %d\n", __func__,
+				ak49xx->smartpa_rst1_gpio);
+          }
+          gpio_direction_output(ak49xx->smartpa_rst1_gpio, 0);
+
+          pr_err("%s():SPA_RST1(%d) value(%d)",
+                         __func__, ak49xx->smartpa_rst1_gpio, gpio_get_value_cansleep(ak49xx->smartpa_rst1_gpio));
+      }
+
+      if (ak49xx->smartpa_rst2_gpio)
+      {
+          ret = gpio_request(ak49xx->smartpa_rst2_gpio, "SPA_RST2");
+          if (ret) {
+              pr_err("%s: Failed to request gpio %d\n", __func__,
+				ak49xx->smartpa_rst2_gpio);
+          }
+          gpio_direction_output(ak49xx->smartpa_rst2_gpio, 0);
+
+          pr_err("%s():SPA_RST2(%d) value(%d)",
+                         __func__, ak49xx->smartpa_rst2_gpio, gpio_get_value_cansleep(ak49xx->smartpa_rst2_gpio));
+      }
+
+//
+
 	return 0;
 }
 
@@ -1192,6 +1221,26 @@ static struct ak49xx_pdata *ak49xx_populate_dt_pdata(struct device *dev)
 	}
 	dev_dbg(dev, "%s: reset gpio %d", __func__, pdata->reset_gpio);
 
+// ZTE_chenjun
+	pdata->smartpa_rst1_gpio = of_get_named_gpio(dev->of_node,
+				"nxp,smartpa-rst1-gpio", 0);
+	if (pdata->smartpa_rst1_gpio < 0) {
+		dev_err(dev, "Looking up %s property in node %s failed %d\n",
+			"nxp,smartpa-rst1-gpio", dev->of_node->full_name,
+			pdata->smartpa_rst1_gpio);
+	}
+	dev_err(dev, "%s: smartpa-rst1-gpio %d", __func__, pdata->smartpa_rst1_gpio);
+
+	pdata->smartpa_rst2_gpio = of_get_named_gpio(dev->of_node,
+				"nxp,smartpa-rst2-gpio", 0);
+	if (pdata->smartpa_rst2_gpio < 0) {
+		dev_err(dev, "Looking up %s property in node %s failed %d\n",
+			"nxp,smartpa-rst2-gpio", dev->of_node->full_name,
+			pdata->smartpa_rst2_gpio);
+	}
+	dev_err(dev, "%s: smartpa-rst2-gpio %d", __func__, pdata->smartpa_rst2_gpio);
+
+//
 	ret = of_property_read_u32(dev->of_node,
 				   "akm,cdc-mclk-clk-rate",
 				   &mclk_rate);
@@ -1290,6 +1339,8 @@ static int ak49xx_slim_probe(struct slim_device *slim)
 	ak49xx->gpio_state_active = pdata->gpio_state_active;
 	ak49xx->gpio_state_suspend = pdata->gpio_state_suspend;
 	ak49xx->smartpa_rst_normal = pdata->smartpa_rst_normal; // ZTE_chenjun
+	ak49xx->smartpa_rst1_gpio = pdata->smartpa_rst1_gpio; // ZTE_chenjun
+	ak49xx->smartpa_rst2_gpio = pdata->smartpa_rst2_gpio; // ZTE_chenjun
 //
 	ak49xx->dev = &slim->dev;
 	ak49xx->mclk_rate = pdata->mclk_rate;

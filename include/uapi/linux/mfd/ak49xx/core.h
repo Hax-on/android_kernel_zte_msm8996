@@ -64,6 +64,8 @@ struct ak49xx {
 	u8 version;
 
 	int reset_gpio;
+	int smartpa_rst1_gpio; // ZTE_chenjun
+	int smartpa_rst2_gpio; // ZTE_chenjun
        int ldoen_gpio;
 	int cif1_gpio;
 	int cs_gpio;
