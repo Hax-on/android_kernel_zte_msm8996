@@ -2771,6 +2771,7 @@
 
 	qcom,qbt1000 {
 		compatible = "qcom,qbt1000";
+		status = "disabled";
 		qcom,fingerprint-sensor-ssc-spi-conn {
 			qcom,spi-port-id = <2>;
 			qcom,spi-port-slave-index = <0>;
