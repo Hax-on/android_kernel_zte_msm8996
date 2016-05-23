@@ -4136,6 +4136,12 @@
 		qcom,save-reg;
 	};
 
+	qcom,msm-power {
+		compatible = "qcom,msm-power";
+		clock-names = "gpu_clk";
+		clocks = <&clock_gpu clk_gpu_gx_gfx3d_clk>;
+	};
+
         /*ZTE_BOOT 20150923*/
         qcom,ramoops@8fc00000{
                 compatible = "qcom,ramoops";
@@ -4147,7 +4153,6 @@
                       <0x0 0x100000>,/*ftrace size*/
                       <0x0 0x100000>;/*pmsg size*/
         };
-
 };
 
 &gdsc_venus {
