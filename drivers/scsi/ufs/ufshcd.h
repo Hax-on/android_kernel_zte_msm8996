@@ -3,7 +3,7 @@
  *
  * This code is based on drivers/scsi/ufs/ufshcd.h
  * Copyright (C) 2011-2013 Samsung India Software Operations
- * Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
  *
  * Authors:
  *	Santosh Yaraganavi <santosh.sy@samsung.com>
@@ -341,20 +341,14 @@ struct ufs_hba_variant_ops {
  * struct ufs_hba_crypto_variant_ops - variant specific crypto callbacks
  * @crypto_req_setup:	retreieve the necessary cryptographic arguments to setup
 			a requests's transfer descriptor.
- * @crypto_engine_cfg_start: start configuring cryptographic engine
- *							 according to tag
- *							 parameter
- * @crypto_engine_cfg_end: end configuring cryptographic engine
- *						   according to tag parameter
+ * @crypto_engine_cfg: configure cryptographic engine according to tag parameter
  * @crypto_engine_reset: perform reset to the cryptographic engine
  * @crypto_engine_get_status: get errors status of the cryptographic engine
  */
 struct ufs_hba_crypto_variant_ops {
 	int	(*crypto_req_setup)(struct ufs_hba *, struct ufshcd_lrb *lrbp,
 				    u8 *cc_index, bool *enable, u64 *dun);
-	int	(*crypto_engine_cfg_start)(struct ufs_hba *, unsigned int);
-	int	(*crypto_engine_cfg_end)(struct ufs_hba *, struct ufshcd_lrb *,
-			struct request *);
+	int	(*crypto_engine_cfg)(struct ufs_hba *, unsigned int);
 	int	(*crypto_engine_reset)(struct ufs_hba *);
 	int	(*crypto_engine_get_status)(struct ufs_hba *, u32 *);
 };
@@ -507,7 +501,7 @@ struct ufs_init_prefetch {
 	u32 icc_level;
 };
 
-#define UIC_ERR_REG_HIST_LENGTH 200
+#define UIC_ERR_REG_HIST_LENGTH 8
 /**
  * struct ufs_uic_err_reg_hist - keeps history of uic errors
  * @pos: index to indicate cyclic buffer position
@@ -838,21 +832,6 @@ struct ufs_hba {
 
 	struct ufs_clk_gating clk_gating;
 	struct ufs_hibern8_on_idle hibern8_on_idle;
-	ktime_t h8_enter_issue_time;
-	ktime_t h8_enter_cmpl_time;
-	ktime_t h8_exit_issue_time;
-	ktime_t h8_exit_cmpl_time;
-	ktime_t clk_gating_issue_time;
-	ktime_t clk_gating_cmpl_time;
-	ktime_t clk_ungating_issue_time;
-	ktime_t clk_ungating_cmpl_time;
-	ktime_t clk_scaling_issue_time;
-	ktime_t clk_scaling_cmpl_time;
-	ktime_t gear_scale_start_time;
-	ktime_t gear_scale_cmpl_time;
-	ktime_t link_startup_issue_time;
-	ktime_t link_startup_cmpl_time;
-	bool cmd_between_gear_scale_and_hibern8_enter;
 
 	/* Control to enable/disable host capabilities */
 	u32 caps;
@@ -1254,24 +1233,12 @@ static inline int ufshcd_vops_crypto_req_setup(struct ufs_hba *hba,
 	return 0;
 }
 
-static inline int ufshcd_vops_crypto_engine_cfg_start(struct ufs_hba *hba,
-						unsigned int task_tag)
+static inline int ufshcd_vops_crypto_engine_cfg(struct ufs_hba *hba,
+		unsigned int task_tag)
 {
 	if (hba->var && hba->var->crypto_vops &&
-	    hba->var->crypto_vops->crypto_engine_cfg_start)
-		return hba->var->crypto_vops->crypto_engine_cfg_start
-				(hba, task_tag);
-	return 0;
-}
-
-static inline int ufshcd_vops_crypto_engine_cfg_end(struct ufs_hba *hba,
-						struct ufshcd_lrb *lrbp,
-						struct request *req)
-{
-	if (hba->var && hba->var->crypto_vops &&
-	    hba->var->crypto_vops->crypto_engine_cfg_end)
-		return hba->var->crypto_vops->crypto_engine_cfg_end
-				(hba, lrbp, req);
+	    hba->var->crypto_vops->crypto_engine_cfg)
+		return hba->var->crypto_vops->crypto_engine_cfg(hba, task_tag);
 	return 0;
 }
 
