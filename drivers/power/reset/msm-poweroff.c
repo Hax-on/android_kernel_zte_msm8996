@@ -470,12 +470,16 @@ static void do_msm_restart(enum reboot_mode reboot_mode, const char *cmd)
 
 	mdelay(10000);
 }
-
+extern int smb_set_shipmode(void);
+extern int fg_get_battery_id_error;
 static void do_msm_poweroff(void)
 {
 	pr_notice("Powering off the SoC\n");
 
 	set_dload_mode(0);
+	if(fg_get_battery_id_error == 1){
+		smb_set_shipmode();
+	}
 	qpnp_pon_system_pwr_off(PON_POWER_OFF_SHUTDOWN);
 
 	halt_spmi_pmic_arbiter();

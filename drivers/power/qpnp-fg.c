@@ -2222,12 +2222,16 @@ static u8 bias_ua[] = {
 	[MED_BIAS] = 15,
 	[LOW_BIAS] = 5,
 };
+/*add by zte ssj ,when the battery id read error,set hte fg_get_battery_id_error to 1,
+then it will set ship mode while the phone is powered off*/
+int fg_get_battery_id_error = 0;
 
 static int64_t get_batt_id(unsigned int battery_id_uv, u8 bid_info)
 {
 	u64 battery_id_ohm;
 
 	if ((bid_info & 0x3) == 0) {
+		fg_get_battery_id_error = 1;
 		pr_err("can't determine battery id 0x%02x\n", bid_info);
 		return -EINVAL;
 	}
